@@ -60,4 +60,38 @@ describe('buildInvoice', () => {
     expect(invoice.number).toBe('FA-2026-001')
     expect(invoice.seller.name).toBe('AV Digital')
   })
+
+  it('merges lines sharing the same VAT category and rate into one breakdown entry', () => {
+    const invoice = buildInvoice({
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          id: '1',
+          name: 'Ligne A',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '100.00',
+          vatCategory: 'S',
+          vatRate: '20.00',
+        },
+        {
+          id: '2',
+          name: 'Ligne B',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '50.00',
+          vatCategory: 'S',
+          vatRate: '20.00',
+        },
+      ],
+    })
+    expect(invoice.vatBreakdown).toEqual([
+      {
+        category: 'S',
+        rate: '20.00',
+        taxableAmount: '150.00',
+        taxAmount: '30.00',
+      },
+    ])
+  })
 })

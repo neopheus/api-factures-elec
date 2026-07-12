@@ -40,4 +40,14 @@ describe('validateBusinessRules', () => {
     const rules = validateBusinessRules(tampered).map((v) => v.rule)
     expect(rules).toContain('BR-S-08')
   })
+
+  it('detects a tampered total tax amount (BR-CO-14)', () => {
+    const invoice = buildInvoice(simpleInvoiceInput)
+    const tampered = {
+      ...invoice,
+      totals: { ...invoice.totals, taxAmount: '150.00' },
+    }
+    const rules = validateBusinessRules(tampered).map((v) => v.rule)
+    expect(rules).toContain('BR-CO-14')
+  })
 })
