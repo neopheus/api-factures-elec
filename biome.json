@@ -1,9 +1,9 @@
 {
   "files": {
-    "includes": ["**", "!**/docs/**", "!**/dist/**", "!**/coverage/**"]
+    "includes": ["**", "!**/docs", "!**/dist", "!**/coverage"]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
-  "linter": { "enabled": true, "rules": { "preset": "none" } },
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
   "javascript": {
     "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" }
   }
