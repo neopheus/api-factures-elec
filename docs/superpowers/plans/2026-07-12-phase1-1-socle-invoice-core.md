@@ -1178,7 +1178,6 @@ norme sémantique EN 16931 et les spécifications externes DGFiP v3.2.
   règles EN 16931 (BR-CO-10/13/14/15/17/25, BR-S-08) ; tableau vide = conforme.
 - `generateUbl(invoice: Invoice): string` — document UBL 2.1 Invoice validé
   contre le XSD officiel F1 BASE (tests `tests/ubl/`).
-- `parseInvoice(data: unknown): Invoice` — valide une facture complète.
 
 ## Conventions
 
