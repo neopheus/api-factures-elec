@@ -54,4 +54,20 @@ describe('parseInvoiceInput', () => {
     }
     expect(() => parseInvoiceInput(bad)).toThrow()
   })
+
+  it('rejects impossible calendar dates', () => {
+    expect(() =>
+      parseInvoiceInput({ ...simpleInvoiceInput, issueDate: '2026-02-31' }),
+    ).toThrow()
+    expect(() =>
+      parseInvoiceInput({ ...simpleInvoiceInput, issueDate: '2026-02-29' }),
+    ).toThrow()
+  })
+
+  it('accepts a leap-day issue date', () => {
+    expect(
+      parseInvoiceInput({ ...simpleInvoiceInput, issueDate: '2028-02-29' })
+        .issueDate,
+    ).toBe('2028-02-29')
+  })
 })

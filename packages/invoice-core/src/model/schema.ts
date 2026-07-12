@@ -9,10 +9,22 @@ const amount2 = z
 const decimal4 = z
   .string()
   .regex(/^-?\d+(\.\d{1,4})?$/, 'decimal with up to 4 decimals')
+function isExistingCalendarDate(value: string): boolean {
+  const year = Number(value.slice(0, 4))
+  const month = Number(value.slice(5, 7))
+  const day = Number(value.slice(8, 10))
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .refine((s) => !Number.isNaN(Date.parse(s)), 'invalid calendar date')
+  .refine(isExistingCalendarDate, 'invalid calendar date')
 
 export const vatCategorySchema = z.enum([
   'S',
