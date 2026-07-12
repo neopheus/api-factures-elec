@@ -384,13 +384,11 @@ import { z } from 'zod'
 const amount2 = z.string().regex(/^-?\d+\.\d{2}$/, 'amount must have exactly 2 decimals')
 const decimal4 = z.string().regex(/^-?\d+(\.\d{1,4})?$/, 'decimal with up to 4 decimals')
 function isExistingCalendarDate(value: string): boolean {
-  const [year, month, day] = value.split('-').map(Number)
-  const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 0))
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === (month ?? 1) - 1 &&
-    date.getUTCDate() === day
-  )
+  const year = Number(value.slice(0, 4))
+  const month = Number(value.slice(5, 7))
+  const day = Number(value.slice(8, 10))
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 
 const isoDate = z
