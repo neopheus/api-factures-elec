@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "big.js": "^7.0.1",
+    "xmlbuilder2": "^4.0.3",
     "zod": "^4.4.3"
   }
 }
