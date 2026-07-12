@@ -1,0 +1,4115 @@
+{
+  "openapi" : "3.0.3",
+  "info" : {
+    "description" : "### Avertissements\n- La publication des swaggers permet d’exposer de manière précise les interactions qui seront possibles à l’aide des API du PPF.\n- Ces swaggers pourront être modifiés ultérieurement (méthodes, endpoints).\n- L’utilisation de ces swaggers sera possible dés lors qu’une application sera publiée sur PISTE, ce qui n’est pas le cas ce jour.\n---\n---\n# ppf-openapi-annuaire-api-public\n\nL’API __ppf-openapi-annuaire-api-public__ permet de :\n- Consulter et rechercher des entreprises (Siren)\n- Consulter et rechercher des établissements (Siret)\n- Créer, modifier, consulter et rechercher des codes routage\n- Créer, modifier, consulter, rechercher et supprimer des lignes d’annuaire\n\n**Authentification :** via piste.\n\n**Attention :** les résultats de votre recherche dépendront de vos habilitations. Par exemple, un utilisateur simple ne peut avoir accès aux données d’immatriculation des Plateformes de Dématérialisation Partenaires (PDP) sauf pour ce qui concerne les données de l’organisation à laquelle il appartient.\n\n---\n## Siren\n\nEntreprise par numéro de Siren\n\n- `POST /siren/recherche` => Rechercher les entreprises (unité légale) satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <critére de recherche au format JSON> }`\n    - filtres : la liste des filtres à appliquer sur la recherche. Un filtre est appliqué pour chaque paramètre renseigné. Seule l’absence du paramètre de la section filtre permet de ne pas déclencher de filtrage sur le paramètre en question (que ce soit pour un paramètre de type chaîne de caractères ou de type date).\n    - tris : les critères de tris par champ avec la valeur ascendant ou descendant.\n    - champs : la liste des champs attendus dans la réponse.\n    - limite : le nombre maximal de résultats à retourner.\n    - ignorer : un nombre désignant le décalage/offset à appliquer aux résultats retournés. Utile pour la pagination.\n  - Réponse : une liste paginée de ressources siren (unité légale).\n\n- `GET /siren/code-insee:{siren}` => Consulter un siren (unité légale) identifié par un siren passé en paramètre.\n  - Habilitations : _Selon habilitations_\n  - Paramètre obligatoire : un numéro de SIREN.\n  - Réponse : le détail d'une ressource siren (unité légale).\n\n- `GET /siren/id-instance:{id-instance}` => Consulter un siren (unité légale) identifié par un idInstance.\n  - Habilitations : _Selon habilitations_\n  - Paramètre obligatoire : un id-instance.\n  - Réponse : le détail d'une ressource siren (unité légale).\n\n### Cinématique\n\nExemple de cinématique :\n\n1. `POST /siren/recherche` => Rechercher les entreprises (unités legales) satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n\n2. Consulter en détail une entreprise avec l'une des méthodes :\n    - `GET /siren/code-insee:{siren}`\n\n    - `GET /siren/id-instance:{id-instance}`\n\n---\n## Siret\n\nÉtablissement par numéro de Siret\n\n- `POST /siret/recherche` =>  Rechercher les établissements satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <critére de recherche au format JSON> }`\n    - filtres : la liste des filtres à appliquer sur la recherche. Un filtre est appliqué pour chaque paramètre renseigné. Seule l’absence du paramètre de la section filtre permet de ne pas déclencher de filtrage sur le paramètre en question (que ce soit pour un paramètre de type chaîne de caractères ou de type date).\n    - tris : les critères de tris par champ avec la valeur ascendant ou descendant.\n    - champs : la liste des champs attendus dans la réponse.\n    - inclure : la liste des relations (siren) à intégrer dans les résultats retournés.\n    - limite : le nombre maximal de résultats à retourner.\n    - ignorer : un nombre désignant le décalage/offset à appliquer aux résultats retournés. Utile pour la pagination.\n  - Réponse : une liste paginée de ressources siret (établissement).\n\n- `GET /siret/code-insee:{siret}` => Consulter un siret (établissement) identifié par SIRET.\n  - Habilitations : _Selon habilitations_\n  - Paramètre obligatoire : un numéro de SIRET.\n  - Réponse : le détail d'une ressource siret (établissement).\n\n- `GET /siret/id-instance:{id-instance}` => Consulter un siret (établissement) identifié par idInstance.\n  - Habilitations : _Selon habilitations_\n  - Paramètre obligatoire : un numéro id-instance.\n  - Réponse : le détail d'une ressource siret (établissement).\n\n### Cinématique\n\nExemple de cinématique :\n\n1. `POST /siret/recherche` => Rechercher des établissements satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n\n2. Consulter en détail un établissement avec l'une des méthodes :\n    - `GET /siret/code-insee:{siret}`\n\n    - `GET /siret/id-instance:{id-instance}`\n\n---\n## Code routage\n\n- `POST /code-routage/recherche` => Rechercher les codes routage satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <critére de recherche au format JSON> }`\n    - filtres : la liste des filtres à appliquer sur la recherche. Un filtre est appliqué pour chaque paramètre renseigné. Seule l’absence du paramètre de la section filtre permet de ne pas déclencher de filtrage sur le paramètre en question (que ce soit pour un paramètre de type chaîne de caractères ou de type date).\n    - tris : les critères de tris par champ avec la valeur ascendant ou descendant.\n    - champs : la liste des champs attendus dans la réponse.\n    - limite : le nombre maximal de résultats à retourner\n    - ignorer : un nombre désignant le décalage/offset à appliquer aux résultats retournés. Utile pour la pagination.\n  - Réponse : une liste paginée de ressources code routage.\n\n- `GET /code-routage/siret:{siret}/code:{identifiant-routage}` => Consulter le code routage identifié par le SIRET et un identifiant de routage.\n  - Habilitations : _Selon habilitations_\n  - Paramètre obligatoire : le siret du code routage pour lequel on souhaite obtenir les détails. \n  - Paramètre obligatoire : l'identifiant de routage poue lequel on souhaite obtenir les détails.\n  - Réponse : le détail d'un code routage.\n\n- `POST /code-routage` => Créer un code routage dans l’annuaire.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <Données du code routage au format JSON> }`\n\n- `GET /code-routage/id-instance:{id-instance}` => Consulter le code routage identifié par un idInstance.\n  - Habilitations : _Selon habilitations_\n  - Paramètre obligatoire : un id-instance.\n  - Réponse : le détail d'un code routage tel que défini à une date d'observation donnée ou tel qu'il est défini à la date courante si la date d'observation n'est pas précisée.\n\n- `PATCH /code-routage/id-instance:{id-instance}` => Modifier partiellement le code routage par l'idInstance passé en paramètre.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <Données non exhaustive du code routage au format JSON> }`\n  - Réponse : un code HTTP indiquant le succès ou l'échec du traitement. \n\n- `PUT /code-routage/id-instance:{id-instance}` => Modifier un code routage privé identifié par l' idInstance passé en paramètre.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <Données exhaustive du code routage au format JSON> }`\n  - Réponse : un code HTTP indiquant le succès ou l'échec du traitement. \n\n### Cinématique\n\nExemple de cinématique :\n\n1. `POST /code-routage/recherche` => Rechercher les codes routage satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n\n2. Consulter le détail d'un code routage par SIRET et un identifiant de routage ou par l'id-instance avec l'une des méthodes :\n\n    - `GET /code-routage/siret:{siret}/code:{identifiant-routage}`\n\n    - `GET /code-routage/id-instance:{id-instance}`\n\n3. `POST /code-routage` => Créer un nouveau code routage.\n\n4. Modifier complètement ou partiellement le code routage par l'idInstance avec l'une des méthodes :\n\n    - `PATCH /code-routage/id-instance:{id-instance}`\n\n    - `PUT /code-routage/id-instance:{id-instance}`\n\n---\n## Ligne annuaire\n\nLa ligne annuaire est la maille à laquelle le destinataire souhaite recevoir ses factures (SIREN ou SIREN/SIRET ou SIREN/SIRET/IdentifiantRoutage). L'identifiant de routage peut être un code service, un code GLN 0224, un code ODETTE 0088 ou un code de gestion interne utilisé par le destinataire.\n\n- `POST /ligne-annuaire/recherche` => Rechercher les lignes d’annuaire satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <critére de recherche au format JSON> }`\n    - filtres : la liste des filtres à appliquer sur la recherche. Un filtre est appliqué pour chaque paramètre renseigné. Seule l’absence du paramètre de la section filtre permet de ne pas déclencher de filtrage sur le paramètre en question (que ce soit pour un paramètre de type chaîne de caractères ou de type date).\n    - tris : les critères de tris par champ avec la valeur ascendant ou descendant.\n    - champs : la liste des champs attendus dans la réponse.\n    - limite : le nombre maximal de résultats à retourner\n    - ignorer : un nombre désignant le décalage/offset à appliquer aux résultats retournés. Utile pour la pagination.\n  - Réponse : une liste paginée de ressources ligne-annuaire.\n\n- `GET /ligne-annuaire/code:{identifiant-adressage}` => Consulter une ligne de l’annuaire identifiée par un identifiant adressage.\n  - Habilitations : _Selon habilitations_\n  - Paramètre obligatoire : un identifiant adressage.\n  - Réponse : le détail d'une ligne annuaire.\n\n- `POST /ligne-annuaire` => Créer une ligne dans l’annuaire.\n  - Habilitations : _Selon habilitations_\n  - **Corps de requête** : `{ <Données de ligne d'annuaire au format JSON> }`\n  - Réponse : un code HTTP indiquant le succès ou l'échec du traitement.\n\n- `DELETE /ligne-annuaire/id-instance:{id-instance}` => Supprimer la ligne de l’annuaire identifié par l'idInstance passé en paramètre.\n  - Habilitations : _Selon habilitations_\n  - paramètre obligatoire : un numéro id-instance.\n  - Réponse : un code HTTP indiquant le succès ou l'échec du traitement.\n\n- `GET /ligne-annuaire/id-instance:{id-instance}` => Consulter une ligne de l’annuaire identifié par l'idInstance.\n  - Habilitations : _Selon habilitations_\n  - paramètre obligatoire : un numéro id-instance.\n  - Réponse : le détail d'une ligne annuaire.\n\n- `PATCH /ligne-annuaire/id-instance:{id-instance}` => Modifier partiellement la ligne d’annuaire identifiée par l'idInstance passé en paramètre.\n  - Habilitations : _Selon habilitations_\n  - paramètre obligatoire : un numéro id-instance.\n  - **Corps de requête** : `{ <Données non exhaustive du code routage au format JSON> }`\n  - Réponse : un code HTTP indiquant le succès ou l'échec du traitement.\n\n- `PUT /ligne-annuaire/id-instance:{id-instance}` => Modifier la ligne de l’annuaire identifié par l'idInstance passé en paramètre .\n  - Habilitations : _Selon habilitations_\n  - paramètre obligatoire : un numéro id-instance.\n  - **Corps de requête** : `{ <Données exhaustive du code routage au format JSON> }`\n  - Réponse : un code HTTP indiquant le succès ou l'échec du traitement.\n\n### Cinématique\n\nExemple de cinématique :\n\n  1. `POST /ligne-annuaire/recherche` => Rechercher les lignes d’annuaire satisfaisant à l'ensemble des critères passés en paramètre, potentiellement plusieurs résultats retournés.\n\n  2. `GET /ligne-annuaire/code:{identifiant-adressage}` => Consulter une ligne d’annuaire.\n\n  3. `POST /ligne-annuaire` => Créer une nouvelle ligne d’annuaire.\n\n  4. `GET /ligne-annuaire/id-instance:{id-instance}` => Consulter une ligne d’annuaire.\n\n  4. Modifier complètement ou partiellement une ligne d'annuaire avec l'une des méthodes :\n      - `PUT /ligne-annuaire/id-instance:{id-instance}`\n\n      - `PATCH /ligne-annuaire/id-instance:{id-instance}`\n\n  7. `DELETE /ligne-annuaire/id-instance:{id-instance}` => Supprimer la ligne d’annuaire.\n\n---\n## Superviseur\n\n- `GET /healthcheck` => Vérifier si l’API Annuaire est en ligne.\n  - Habilitations : _Selon habilitations_\n",
+    "title" : "PPF API publique annuaire",
+    "version" : "1.11.0",
+    "x-audience" : "external-public",
+    "x-api-id" : "3230c8a1-f7df-4fa1-8506-24ce034670ce"
+  },
+  "externalDocs" : {
+    "description" : "Spécifications externes du PPF v2.4",
+    "url" : "https://www.impots.gouv.fr/sites/default/files/media/1_metier/2_professionnel/EV/2_gestion/290_facturation_electronique/specification_externes_b2b/version_2-4_du_19_06_2024/specifications-externes-facturation-electronique-v2.4.zip"
+  },
+  "servers" : [ {
+    "description" : "Url d’accès au micro-service annuaire public",
+    "url" : "https://aife.economie.gouv.fr/ppf/annuaire-public/v1"
+  } ],
+  "security" : [ {
+    "bearer_auth" : [ ]
+  } ],
+  "tags" : [ {
+    "description" : "Entreprise par numéro de Siren",
+    "name" : "Siren"
+  }, {
+    "description" : "Établissement par numéro de Siret",
+    "name" : "Siret"
+  }, {
+    "description" : "Code routage",
+    "name" : "Code routage"
+  }, {
+    "description" : "Ligne annuaire",
+    "name" : "Ligne annuaire"
+  }, {
+    "description" : "Réservé au superviseur",
+    "name" : "Superviseur"
+  } ],
+  "paths" : {
+    "/siren/recherche" : {
+      "post" : {
+        "description" : "Recherche multi-critères d’entreprises.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/searchSiren"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_siren_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "Retourne une entreprise ou plusieurs.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "204" : {
+            "description" : "Requête traitée avec succès mais pas d'information à renvoyer."
+          },
+          "206" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_siren_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "Requête traitée sans erreur, mais dont le volume d’information renvoyée a été réduit.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Rechercher un siren (unité légale)",
+        "tags" : [ "Siren" ]
+      }
+    },
+    "/siren/code-insee:{siren}" : {
+      "get" : {
+        "description" : "Retourne le détail d’une entreprise (unité légale) identifiée par le SIREN passé en paramètre.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond au numéro SIREN d’une unité légale.",
+          "in" : "path",
+          "name" : "siren",
+          "required" : true,
+          "schema" : {
+            "$ref" : "#/components/schemas/siren"
+          }
+        }, {
+          "description" : "Lorsque la date d'observation est indiquée, ce sont les informations en vigueur à cette date qui sont retournées. Lorsque qu'elle ne l'est pas, ce sont les informations en vigueur à la date courante.",
+          "example" : "2024-01-01",
+          "in" : "query",
+          "name" : "dateObservation",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        }, {
+          "description" : "Champs de la ressource Siren.",
+          "example" : [ "siren", "raisonSociale", "typeEntite", "etatAdministratif", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champSiren"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/uniteLegalePayloadHisto"
+                }
+              }
+            },
+            "description" : "Retourne une entreprise.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter un siren (unité légale) par SIREN",
+        "tags" : [ "Siren" ]
+      }
+    },
+    "/siren/id-instance:{id-instance}" : {
+      "get" : {
+        "description" : "Retourne le détail d’une entreprise (unité légale) identifiée par l'id-instance passé en paramètre.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        }, {
+          "description" : "Champs de la ressource Siren.",
+          "example" : [ "siren", "raisonSociale", "typeEntite", "etatAdministratif", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champSiren"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/uniteLegalePayloadHisto"
+                }
+              }
+            },
+            "description" : "Retourne un code routage.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter un siren (unité légale) par id-instance",
+        "tags" : [ "Siren" ]
+      }
+    },
+    "/siret/recherche" : {
+      "post" : {
+        "description" : "Recherche multi-critères d’établissements.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/searchSiret"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_siret_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "Retourne un établissement tel que celui-ci est défini à une date d'observation donnée ou tel qu'il est défini à la date courante si la date la date d'observation n'est pas précisée.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "204" : {
+            "description" : "Requête traitée avec succès mais pas d'information à renvoyer."
+          },
+          "206" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_siret_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "Requête traitée sans erreur, mais dont le volume d’information renvoyée a été réduit.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Rechercher un siret (établissement)",
+        "tags" : [ "Siret" ]
+      }
+    },
+    "/siret/code-insee:{siret}" : {
+      "get" : {
+        "description" : "Retourne le détail d’un établissement selon un SIRET.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond au numéro SIRET d’un établissement.",
+          "in" : "path",
+          "name" : "siret",
+          "required" : true,
+          "schema" : {
+            "$ref" : "#/components/schemas/siret"
+          }
+        }, {
+          "description" : "Lorsque la date d'observation est indiquée, ce sont les informations en vigueur à cette date qui sont retournées. Lorsque qu'elle ne l'est pas, ce sont les informations en vigueur à la date courante.",
+          "example" : "2024-01-01",
+          "in" : "query",
+          "name" : "dateObservation",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        }, {
+          "description" : "Champs de la ressource Siret.",
+          "example" : [ "siret", "siren", "denomination", "typeEtablissement", "adresse", "diffusible", "etatAdministratif", "moa", "moaUniquement", "gestionStatutMiseEnPaiement", "gestionEngagementJuridique", "gestionEngagementJuridiqueOuService", "gestionCodeService", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champSiret"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Relations à inclure dans la réponse.",
+          "example" : [ "siren" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "inclure",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "enum" : [ "siren" ],
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/etablissementPayloadHistoUle"
+                }
+              }
+            },
+            "description" : "Retourne un établissement.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter un siret (établissement) par SIRET",
+        "tags" : [ "Siret" ]
+      }
+    },
+    "/siret/id-instance:{id-instance}" : {
+      "get" : {
+        "description" : "Retourne le détail d’une entreprise selon un id-instance.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        }, {
+          "description" : "Champs de la ressource Siret.",
+          "example" : [ "siret", "siren", "denomination", "typeEtablissement", "adresse", "diffusible", "etatAdministratif", "moa", "moaUniquement", "gestionStatutMiseEnPaiement", "gestionEngagementJuridique", "gestionEngagementJuridiqueOuService", "gestionCodeService", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champSiret"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/etablissementPayloadHisto"
+                }
+              }
+            },
+            "description" : "Retourne un code routage.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter un siret (établissement) par id-instance",
+        "tags" : [ "Siret" ]
+      }
+    },
+    "/code-routage" : {
+      "post" : {
+        "description" : "Création d'un code routage.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+          "example" : [ "130019771" ],
+          "in" : "header",
+          "name" : "PPF-Rattachements",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "maxLength" : 209,
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/createCodeRoutageBody"
+              }
+            }
+          },
+          "description" : "Données de création du code routage.",
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_code_routage_post_201_response"
+                }
+              }
+            },
+            "description" : "Une nouvelle ressource a été créée.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Créer un code routage",
+        "tags" : [ "Code routage" ]
+      }
+    },
+    "/code-routage/recherche" : {
+      "post" : {
+        "description" : "Rechercher les codes routage satisfaisant à l'ensemble des critères passés en paramètre et retourne les codes routage au format souhaité.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/searchCodeRoutage"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_code_routage_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "Retourne la ou les code(s) routage correspondant(s) aux critère de recherche.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "204" : {
+            "description" : "Requête traitée avec succès mais pas d'information à renvoyer."
+          },
+          "206" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_code_routage_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "Requête traitée sans erreur, mais dont le volume d’information renvoyée a été réduit.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Rechercher un code-routage",
+        "tags" : [ "Code routage" ]
+      }
+    },
+    "/code-routage/siret:{siret}/code:{identifiant-routage}" : {
+      "get" : {
+        "description" : "Récupérer les données du Code Routage correspondante à l’identifiant passé en paramètres.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond au numéro SIRET d’un établissement.",
+          "in" : "path",
+          "name" : "siret",
+          "required" : true,
+          "schema" : {
+            "$ref" : "#/components/schemas/siret"
+          }
+        }, {
+          "description" : "Correspond à l'identifiant routage d'un code routage.",
+          "example" : "702042755",
+          "in" : "path",
+          "name" : "identifiant-routage",
+          "required" : true,
+          "schema" : {
+            "maxLength" : 100,
+            "type" : "string"
+          }
+        }, {
+          "description" : "Lorsque la date d'observation est indiquée, ce sont les informations en vigueur à cette date qui sont retournées. Lorsque qu'elle ne l'est pas, ce sont les informations en vigueur à la date courante.",
+          "example" : "2024-01-01",
+          "in" : "query",
+          "name" : "dateObservation",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        }, {
+          "description" : "Relations à inclure dans la réponse.",
+          "example" : [ "siren", "siret" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "inclure",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "enum" : [ "siren", "siret" ],
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Champs de la ressource code-routage.",
+          "example" : [ "siret", "typeIdentifiantRoutage", "libelleCodeRoutage", "identifiantRoutage", "gestionEngagementJuridique", "etatAdministratif", "adresse", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champCodeRoutage"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/codeRoutagePayloadHistoUleEta"
+                }
+              }
+            },
+            "description" : "Retourne un code routage.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter un code-routage par SIRET et identifiant-routage",
+        "tags" : [ "Code routage" ]
+      }
+    },
+    "/code-routage/id-instance:{id-instance}" : {
+      "get" : {
+        "description" : "Récupérer les données du Code Routage correspondante à l’id Instance.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        }, {
+          "description" : "Champs de la ressource code-routage.",
+          "example" : [ "siret", "typeIdentifiantRoutage", "libelleCodeRoutage", "identifiantRoutage", "gestionEngagementJuridique", "etatAdministratif", "adresse", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champCodeRoutage"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/codeRoutagePayloadHisto"
+                }
+              }
+            },
+            "description" : "Retourne un code routage.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter un code routage par id-instance",
+        "tags" : [ "Code routage" ]
+      },
+      "patch" : {
+        "description" : "Modifier un code routage privée.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+          "example" : [ "130019771" ],
+          "in" : "header",
+          "name" : "PPF-Rattachements",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "maxLength" : 209,
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/updatePatchCodeRoutageBody"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_code_routage_post_201_response"
+                }
+              }
+            },
+            "description" : "Succès de la demande.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "206" : {
+            "description" : "Requête traitée sans erreur, mais dont le volume d’information renvoyée a été réduit."
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Modifier un code-routage pour une établissement",
+        "tags" : [ "Code routage" ]
+      },
+      "put" : {
+        "description" : "Modifier un code routage privée.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+          "example" : [ "130019771" ],
+          "in" : "header",
+          "name" : "PPF-Rattachements",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "maxLength" : 209,
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/updatePutCodeRoutageBody"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_code_routage_post_201_response"
+                }
+              }
+            },
+            "description" : "Succès de la demande.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "206" : {
+            "description" : "Requête traitée sans erreur, mais dont le volume d’information renvoyée a été réduit."
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Modifier un code-routage pour une établissement.",
+        "tags" : [ "Code routage" ]
+      }
+    },
+    "/ligne-annuaire/recherche" : {
+      "post" : {
+        "description" : "Rechercher des lignes d’annuaire satisfaisant à l'ensemble des critères passés en paramètre et retourne les résultats au format souhaité.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/searchLigneAnnuaire"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_ligne_annuaire_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "retourne La ou les ligne(s) d’annuaire correspondante(s) aux critère de recherche.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "204" : {
+            "description" : "Requête traitée avec succès mais pas d'information à renvoyer."
+          },
+          "206" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_ligne_annuaire_recherche_post_200_response"
+                }
+              }
+            },
+            "description" : "Requête traitée sans erreur, mais dont le volume d’information renvoyée a été réduit.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Rechercher une ligne-annuaire",
+        "tags" : [ "Ligne annuaire" ]
+      }
+    },
+    "/ligne-annuaire" : {
+      "post" : {
+        "description" : "Création d'une nouvelle ligne d’annuaire pour un SIREN, un SIRET ou un CODE ROUTAGE.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+          "example" : [ "130019771" ],
+          "in" : "header",
+          "name" : "PPF-Rattachements",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "maxLength" : 209,
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/createLigneAnnuaireBody"
+              }
+            }
+          },
+          "description" : "Données de création de la ligne d’annuaire.",
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_ligne_annuaire_post_201_response"
+                }
+              }
+            },
+            "description" : "Une nouvelle ressource a été créée.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Création d'une ligne-annuaire",
+        "tags" : [ "Ligne annuaire" ]
+      }
+    },
+    "/ligne-annuaire/code:{identifiant-adressage}" : {
+      "get" : {
+        "description" : "Récupérer les données de la ligne d’annuaire correspondante à l’identifiant passé en paramètres.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond à l'identifiant adressage de la ligne d'annuaire.",
+          "example" : "dcsc456sdcsdcs556",
+          "in" : "path",
+          "name" : "identifiant-adressage",
+          "required" : true,
+          "schema" : {
+            "maxLength" : 125,
+            "type" : "string"
+          }
+        }, {
+          "description" : "Lorsque la date d'observation est indiquée, ce sont les informations en vigueur à cette date qui sont retournées. Lorsque qu'elle ne l'est pas, ce sont les informations en vigueur à la date courante.",
+          "example" : "2024-01-01",
+          "in" : "query",
+          "name" : "dateObservation",
+          "required" : false,
+          "schema" : {
+            "format" : "date",
+            "type" : "string"
+          }
+        }, {
+          "description" : "Relations à inclure dans la réponse.",
+          "example" : [ "siren", "siret", "codeRoutage", "plateforme" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "inclure",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "enum" : [ "siren", "siret", "codeRoutage", "plateforme" ],
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Champs de la ressource ligne-annuaire.",
+          "example" : [ "identifiantAdressage", "siren", "siret", "identifiantRoutage", "suffixeAdressage", "matriculePlateforme", "dateFinEffet", "dateFinEffective", "dateDebutEffet", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champLigneAnnuaire"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "allOf" : [ {
+                    "$ref" : "#/components/schemas/ligneAnnuairePayloadHistoUleEtaRou"
+                  } ],
+                  "description" : "# Valorisation future de l'uniteLegale, l'etablissement, du codeRoutage et de la plateforme\n"
+                }
+              }
+            },
+            "description" : "Retourne une ligne d’annuaire.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter une ligne annuaire",
+        "tags" : [ "Ligne annuaire" ]
+      }
+    },
+    "/ligne-annuaire/id-instance:{id-instance}" : {
+      "delete" : {
+        "description" : "Supprimer une ligne d’annuaire.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+          "example" : [ "130019771" ],
+          "in" : "header",
+          "name" : "PPF-Rattachements",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "maxLength" : 209,
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        } ],
+        "responses" : {
+          "204" : {
+            "description" : "OK. La ressource a été supprimée."
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Supprimer une ligne annuaire",
+        "tags" : [ "Ligne annuaire" ]
+      },
+      "get" : {
+        "description" : "Récupérer les données de la ligne d’annuaire correspondante à l’identifiant passé en paramètres.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        }, {
+          "description" : "Champs de la ressource ligne-annuaire.",
+          "example" : [ "identifiantAdressage", "siren", "siret", "identifiantRoutage", "suffixeAdressage", "matriculePlateforme", "dateFinEffet", "dateFinEffective", "dateDebutEffet", "idInstance" ],
+          "explode" : false,
+          "in" : "query",
+          "name" : "champs",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "$ref" : "#/components/schemas/champLigneAnnuaire"
+            },
+            "type" : "array"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ligneAnnuairePayloadHisto"
+                }
+              }
+            },
+            "description" : "Retourne une ligne d’annuaire.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Consulter une ligne annuaire",
+        "tags" : [ "Ligne annuaire" ]
+      },
+      "patch" : {
+        "description" : "Modifier une ligne d’annuaire.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+          "example" : [ "130019771" ],
+          "in" : "header",
+          "name" : "PPF-Rattachements",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "maxLength" : 209,
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/updatePatchLigneAnnuaireBody"
+              }
+            }
+          },
+          "description" : "Données de mise à jour de la ligne d’annuaire.",
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_ligne_annuaire_post_201_response"
+                }
+              }
+            },
+            "description" : "Succès de la demande.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Modifier une ligne annuaire",
+        "tags" : [ "Ligne annuaire" ]
+      },
+      "put" : {
+        "description" : "Modifier une ligne d’annuaire.",
+        "parameters" : [ {
+          "description" : "Indique la langue dans laquelle la ressource est demandée.",
+          "in" : "header",
+          "name" : "Accept-Language",
+          "required" : false,
+          "schema" : {
+            "default" : "fr",
+            "enum" : [ "fr", "en" ],
+            "type" : "string"
+          }
+        }, {
+          "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+          "example" : [ "130019771" ],
+          "in" : "header",
+          "name" : "PPF-Rattachements",
+          "required" : false,
+          "schema" : {
+            "items" : {
+              "maxLength" : 209,
+              "type" : "string"
+            },
+            "type" : "array"
+          }
+        }, {
+          "description" : "Correspond a l'id instance d’une unité légale.",
+          "example" : "13123155",
+          "in" : "path",
+          "name" : "id-instance",
+          "required" : true,
+          "schema" : {
+            "type" : "integer"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/updatePutLigneAnnuaireBody"
+              }
+            }
+          },
+          "description" : "Données de mise à jour de la ligne d’annuaire.",
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/_ligne_annuaire_post_201_response"
+                }
+              }
+            },
+            "description" : "Succès de la demande.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          },
+          "400" : {
+            "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+          },
+          "401" : {
+            "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+          },
+          "403" : {
+            "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+          },
+          "404" : {
+            "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+          },
+          "408" : {
+            "description" : "Délai de la requête dépassé."
+          },
+          "422" : {
+            "description" : "Erreur de validation des données."
+          },
+          "429" : {
+            "description" : "Le client a émis trop d'appels dans un délai donné."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "501" : {
+            "description" : "Non implémenté."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          },
+          "default" : {
+            "content" : {
+              "application/problem+json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/erreur"
+                }
+              }
+            },
+            "description" : "Une erreur est survenue - Voir le code de statut et la réponse json pour plus d’information.",
+            "headers" : {
+              "Content-Language" : {
+                "$ref" : "#/components/headers/contentLanguage"
+              }
+            }
+          }
+        },
+        "summary" : "Modifier une ligne annuaire",
+        "tags" : [ "Ligne annuaire" ]
+      }
+    },
+    "/healthcheck" : {
+      "get" : {
+        "description" : "Vérifier si la connexion API est opérationnelle.",
+        "operationId" : "getHealth",
+        "responses" : {
+          "200" : {
+            "description" : "La connexion vers l’API est fonctionnelle."
+          },
+          "500" : {
+            "description" : "Erreur interne du serveur."
+          },
+          "503" : {
+            "description" : "Service indisponible."
+          }
+        },
+        "security" : [ {
+          "bearer_auth" : [ "health.read" ]
+        } ],
+        "summary" : "Vérifier si la connexion API est opérationnelle.",
+        "tags" : [ "Superviseur" ]
+      }
+    }
+  },
+  "components" : {
+    "headers" : {
+      "contentLanguage" : {
+        "description" : "Indique la langue dans laquelle la ressource est renvoyée.",
+        "required" : false,
+        "schema" : {
+          "default" : "fr",
+          "enum" : [ "fr", "en" ],
+          "type" : "string"
+        }
+      }
+    },
+    "parameters" : {
+      "acceptLanguage" : {
+        "description" : "Indique la langue dans laquelle la ressource est demandée.",
+        "in" : "header",
+        "name" : "Accept-Language",
+        "required" : false,
+        "schema" : {
+          "default" : "fr",
+          "enum" : [ "fr", "en" ],
+          "type" : "string"
+        }
+      },
+      "siren-path" : {
+        "description" : "Correspond au numéro SIREN d’une unité légale.",
+        "in" : "path",
+        "name" : "siren",
+        "required" : true,
+        "schema" : {
+          "$ref" : "#/components/schemas/siren"
+        }
+      },
+      "dateObservation" : {
+        "description" : "Lorsque la date d'observation est indiquée, ce sont les informations en vigueur à cette date qui sont retournées. Lorsque qu'elle ne l'est pas, ce sont les informations en vigueur à la date courante.",
+        "example" : "2024-01-01",
+        "in" : "query",
+        "name" : "dateObservation",
+        "required" : false,
+        "schema" : {
+          "format" : "date",
+          "type" : "string"
+        }
+      },
+      "champsSiren" : {
+        "description" : "Champs de la ressource Siren.",
+        "example" : [ "siren", "raisonSociale", "typeEntite", "etatAdministratif", "idInstance" ],
+        "explode" : false,
+        "in" : "query",
+        "name" : "champs",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "$ref" : "#/components/schemas/champSiren"
+          },
+          "type" : "array"
+        }
+      },
+      "id-instance-path" : {
+        "description" : "Correspond a l'id instance d’une unité légale.",
+        "example" : "13123155",
+        "in" : "path",
+        "name" : "id-instance",
+        "required" : true,
+        "schema" : {
+          "type" : "integer"
+        }
+      },
+      "siret-path" : {
+        "description" : "Correspond au numéro SIRET d’un établissement.",
+        "in" : "path",
+        "name" : "siret",
+        "required" : true,
+        "schema" : {
+          "$ref" : "#/components/schemas/siret"
+        }
+      },
+      "champsSiret" : {
+        "description" : "Champs de la ressource Siret.",
+        "example" : [ "siret", "siren", "denomination", "typeEtablissement", "adresse", "diffusible", "etatAdministratif", "moa", "moaUniquement", "gestionStatutMiseEnPaiement", "gestionEngagementJuridique", "gestionEngagementJuridiqueOuService", "gestionCodeService", "idInstance" ],
+        "explode" : false,
+        "in" : "query",
+        "name" : "champs",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "$ref" : "#/components/schemas/champSiret"
+          },
+          "type" : "array"
+        }
+      },
+      "inclure-siren" : {
+        "description" : "Relations à inclure dans la réponse.",
+        "example" : [ "siren" ],
+        "explode" : false,
+        "in" : "query",
+        "name" : "inclure",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "enum" : [ "siren" ],
+            "type" : "string"
+          },
+          "type" : "array"
+        }
+      },
+      "rattachement" : {
+        "description" : "Indique les rattachements actifs de l'utilisateur au format SIREN/SIRET/Service. Seul le SIREN est obligatoire.",
+        "example" : [ "130019771" ],
+        "in" : "header",
+        "name" : "PPF-Rattachements",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "maxLength" : 209,
+            "type" : "string"
+          },
+          "type" : "array"
+        }
+      },
+      "identifiant-routage" : {
+        "description" : "Correspond à l'identifiant routage d'un code routage.",
+        "example" : "702042755",
+        "in" : "path",
+        "name" : "identifiant-routage",
+        "required" : true,
+        "schema" : {
+          "maxLength" : 100,
+          "type" : "string"
+        }
+      },
+      "inclure-siren-siret" : {
+        "description" : "Relations à inclure dans la réponse.",
+        "example" : [ "siren", "siret" ],
+        "explode" : false,
+        "in" : "query",
+        "name" : "inclure",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "enum" : [ "siren", "siret" ],
+            "type" : "string"
+          },
+          "type" : "array"
+        }
+      },
+      "champsCodeRoutage" : {
+        "description" : "Champs de la ressource code-routage.",
+        "example" : [ "siret", "typeIdentifiantRoutage", "libelleCodeRoutage", "identifiantRoutage", "gestionEngagementJuridique", "etatAdministratif", "adresse", "idInstance" ],
+        "explode" : false,
+        "in" : "query",
+        "name" : "champs",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "$ref" : "#/components/schemas/champCodeRoutage"
+          },
+          "type" : "array"
+        }
+      },
+      "identifiant-adressage" : {
+        "description" : "Correspond à l'identifiant adressage de la ligne d'annuaire.",
+        "example" : "dcsc456sdcsdcs556",
+        "in" : "path",
+        "name" : "identifiant-adressage",
+        "required" : true,
+        "schema" : {
+          "maxLength" : 125,
+          "type" : "string"
+        }
+      },
+      "inclure-siren-siret-coderoutage-plateforme" : {
+        "description" : "Relations à inclure dans la réponse.",
+        "example" : [ "siren", "siret", "codeRoutage", "plateforme" ],
+        "explode" : false,
+        "in" : "query",
+        "name" : "inclure",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "enum" : [ "siren", "siret", "codeRoutage", "plateforme" ],
+            "type" : "string"
+          },
+          "type" : "array"
+        }
+      },
+      "champsLigneAnnuaire" : {
+        "description" : "Champs de la ressource ligne-annuaire.",
+        "example" : [ "identifiantAdressage", "siren", "siret", "identifiantRoutage", "suffixeAdressage", "matriculePlateforme", "dateFinEffet", "dateFinEffective", "dateDebutEffet", "idInstance" ],
+        "explode" : false,
+        "in" : "query",
+        "name" : "champs",
+        "required" : false,
+        "schema" : {
+          "items" : {
+            "$ref" : "#/components/schemas/champLigneAnnuaire"
+          },
+          "type" : "array"
+        }
+      }
+    },
+    "responses" : {
+      "no_content" : {
+        "description" : "Requête traitée avec succès mais pas d'information à renvoyer."
+      },
+      "bad_request" : {
+        "description" : "Mauvaise requête. La requête est invalide ou ne peut aboutir."
+      },
+      "unauthorized" : {
+        "description" : "Non autorisé. La requête nécessite l'authentification de l'utilisateur."
+      },
+      "forbidden" : {
+        "description" : "Non autorisé. Le serveur a compris la requête mais la refuse ou l'accès n'est pas autorisé."
+      },
+      "not_found" : {
+        "description" : "Non trouvée. Il n'y a pas de ressource à l'URI donnée."
+      },
+      "request_timeout" : {
+        "description" : "Délai de la requête dépassé."
+      },
+      "unprocessable_entity" : {
+        "description" : "Erreur de validation des données."
+      },
+      "too_many_requests" : {
+        "description" : "Le client a émis trop d'appels dans un délai donné."
+      },
+      "internal_server_error" : {
+        "description" : "Erreur interne du serveur."
+      },
+      "not_implemented" : {
+        "description" : "Non implémenté."
+      },
+      "service_unavailable" : {
+        "description" : "Service indisponible."
+      }
+    },
+    "schemas" : {
+      "searchSiren" : {
+        "properties" : {
+          "filtres" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres"
+          },
+          "tris" : {
+            "description" : "Critères de tri sur un champ et un ordre (ascendant ou descendant).",
+            "example" : [ {
+              "champ" : "siren",
+              "ordre" : "ascendant"
+            }, {
+              "champ" : "etatAdministratif",
+              "ordre" : "descendant"
+            } ],
+            "items" : {
+              "$ref" : "#/components/schemas/searchSiren_tris_inner"
+            },
+            "type" : "array"
+          },
+          "champs" : {
+            "description" : "Permet de filtrer les champs voulus dans la réponse.",
+            "example" : [ "siren", "raisonSociale", "typeEntite", "etatAdministratif", "creePar", "masque", "idInstance" ],
+            "items" : {
+              "$ref" : "#/components/schemas/champSiren"
+            },
+            "type" : "array"
+          },
+          "limite" : {
+            "$ref" : "#/components/schemas/limite"
+          },
+          "ignorer" : {
+            "$ref" : "#/components/schemas/ignorer"
+          }
+        },
+        "title" : "searchSiren",
+        "type" : "object"
+      },
+      "nombre_total_resultats" : {
+        "description" : "Le nombre total de résultats",
+        "example" : 1500,
+        "format" : "int32",
+        "type" : "integer"
+      },
+      "uniteLegalePayloadHisto" : {
+        "properties" : {
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "raisonSociale" : {
+            "$ref" : "#/components/schemas/raisonSocialeDestinataire"
+          },
+          "typeEntite" : {
+            "$ref" : "#/components/schemas/typeEntite"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifUniteLegale"
+          },
+          "diffusible" : {
+            "$ref" : "#/components/schemas/statutDiffusion"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/historisationRead"
+          }
+        },
+        "title" : "uniteLegalePayloadHisto",
+        "type" : "object"
+      },
+      "erreur" : {
+        "properties" : {
+          "type" : {
+            "default" : "about:blank",
+            "example" : "/chemin/url-de-reference",
+            "format" : "uri-reference",
+            "type" : "string"
+          },
+          "titre" : {
+            "example" : "Le titre de l’erreur",
+            "type" : "string"
+          },
+          "statut" : {
+            "description" : "The HTTP status code generated by the origin server for this occurrence of the problem.\n",
+            "exclusiveMaximum" : true,
+            "format" : "int32",
+            "maximum" : 600,
+            "minimum" : 100,
+            "type" : "integer"
+          },
+          "detail" : {
+            "example" : "La description de l’erreur",
+            "type" : "string"
+          },
+          "instance" : {
+            "example" : "/chemin/url-de-reference#instance-du-contexte",
+            "format" : "uri-reference",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "siren" : {
+        "description" : "Correspond au numéro SIREN.",
+        "example" : "702042755",
+        "maxLength" : 9,
+        "pattern" : "^\\d{9}$",
+        "type" : "string"
+      },
+      "champSiren" : {
+        "description" : "Champs de la ressource Siren.",
+        "enum" : [ "siren", "raisonSociale", "typeEntite", "diffusible", "etatAdministratif", "dateDefinition", "dateDebutEffet", "masque", "idInstance", "creePar" ],
+        "example" : "siren",
+        "type" : "string"
+      },
+      "searchSiret" : {
+        "properties" : {
+          "filtres" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres"
+          },
+          "tris" : {
+            "description" : "Critères de tri sur un champ et un ordre (ascendant ou descendant).",
+            "example" : [ {
+              "champ" : "siret",
+              "ordre" : "ascendant"
+            }, {
+              "champ" : "denomination",
+              "ordre" : "descendant"
+            } ],
+            "items" : {
+              "$ref" : "#/components/schemas/searchSiret_tris_inner"
+            },
+            "type" : "array"
+          },
+          "champs" : {
+            "description" : "Permet de filtrer les champs voulus dans la réponse.",
+            "example" : [ "siret", "siren", "denomination", "typeEtablissement", "adresse", "diffusible", "etatAdministratif", "moa", "moaUniquement", "gestionStatutMiseEnPaiement", "gestionEngagementJuridique", "gestionEngagementJuridiqueOuService", "gestionCodeService", "creePar", "masque", "idInstance" ],
+            "items" : {
+              "$ref" : "#/components/schemas/champSiret"
+            },
+            "type" : "array"
+          },
+          "inclure" : {
+            "description" : "# Implémentation future\n",
+            "example" : [ "siren" ],
+            "items" : {
+              "enum" : [ "siren" ],
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "limite" : {
+            "$ref" : "#/components/schemas/limite"
+          },
+          "ignorer" : {
+            "$ref" : "#/components/schemas/ignorer"
+          }
+        },
+        "title" : "searchSiret",
+        "type" : "object"
+      },
+      "etablissementPayloadHistoUle" : {
+        "properties" : {
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "denomination" : {
+            "$ref" : "#/components/schemas/denomination"
+          },
+          "typeEtablissement" : {
+            "$ref" : "#/components/schemas/typeEtablissement"
+          },
+          "diffusible" : {
+            "$ref" : "#/components/schemas/statutDiffusion"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifEtablissement"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseRead"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/historisationRead"
+          },
+          "donneesB2gComplementaires" : {
+            "$ref" : "#/components/schemas/etablissementPayloadHistoUle_donneesB2gComplementaires"
+          },
+          "uniteLegale" : {
+            "$ref" : "#/components/schemas/uniteLegalePayloadIncluded"
+          }
+        },
+        "title" : "etablissementPayloadHistoUle",
+        "type" : "object"
+      },
+      "siret" : {
+        "description" : "Correspond au numéro SIRET.",
+        "example" : "70204275500240",
+        "maxLength" : 14,
+        "pattern" : "^\\d{14}$",
+        "type" : "string"
+      },
+      "champSiret" : {
+        "description" : "Champs de la ressource Siret.",
+        "enum" : [ "siret", "siren", "denomination", "typeEtablissement", "adresse", "diffusible", "etatAdministratif", "moa", "moaUniquement", "gestionStatutMiseEnPaiement", "gestionEngagementJuridique", "gestionEngagementJuridiqueOuService", "gestionCodeService", "dateDefinition", "dateDebutEffet", "masque", "idInstance", "creePar" ],
+        "example" : "siret",
+        "type" : "string"
+      },
+      "etablissementPayloadHisto" : {
+        "properties" : {
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "denomination" : {
+            "$ref" : "#/components/schemas/denomination"
+          },
+          "typeEtablissement" : {
+            "$ref" : "#/components/schemas/typeEtablissement"
+          },
+          "diffusible" : {
+            "$ref" : "#/components/schemas/statutDiffusion"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifEtablissement"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseRead"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/historisationRead"
+          },
+          "donneesB2gComplementaires" : {
+            "$ref" : "#/components/schemas/etablissementPayloadHistoUle_donneesB2gComplementaires"
+          }
+        },
+        "title" : "etablissementPayloadHisto",
+        "type" : "object"
+      },
+      "createCodeRoutageBody" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "natureEtablissement" : {
+            "$ref" : "#/components/schemas/natureEtablissement"
+          },
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "typeIdentifiantRoutage" : {
+            "$ref" : "#/components/schemas/typeIdentifiantRoutage"
+          },
+          "libelleCodeRoutage" : {
+            "$ref" : "#/components/schemas/libelleCodeRoutage"
+          },
+          "gestionEngagementJuridique" : {
+            "$ref" : "#/components/schemas/gestionEngagementJuridique"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifCodeRoutage"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseWrite"
+          }
+        },
+        "required" : [ "etatAdministratif", "identifiantRoutage", "libelleCodeRoutage", "natureEtablissement", "siret" ],
+        "title" : "CreateCodeRoutageBody",
+        "type" : "object"
+      },
+      "idInstance" : {
+        "description" : "Correspond à l'identifiant de l'instance de la plateforme dans l'annuaire",
+        "example" : 120,
+        "type" : "integer"
+      },
+      "identifiantRoutage" : {
+        "description" : "Correspond à l'identifiant routage d'un code-routage.",
+        "example" : "dcsc456sdcsdcs556",
+        "maxLength" : 100,
+        "pattern" : "^(?!\\s+$)[-_/@a-zA-Z0-9]{1,100}$",
+        "type" : "string"
+      },
+      "searchCodeRoutage" : {
+        "properties" : {
+          "filtres" : {
+            "$ref" : "#/components/schemas/searchCodeRoutage_filtres"
+          },
+          "tris" : {
+            "description" : "Critères de tri sur un champ et un ordre (ascendant ou descendant).",
+            "example" : [ {
+              "champ" : "siret",
+              "ordre" : "ascendant"
+            }, {
+              "champ" : "identifiantRoutage",
+              "ordre" : "ascendant"
+            } ],
+            "items" : {
+              "$ref" : "#/components/schemas/searchCodeRoutage_tris_inner"
+            },
+            "type" : "array"
+          },
+          "champs" : {
+            "description" : "Permet de filtrer les champs voulus dans la réponse.",
+            "example" : [ "siret", "typeIdentifiantRoutage", "libelleCodeRoutage", "identifiantRoutage", "gestionEngagementJuridique", "etatAdministratif", "adresse", "creePar", "masque", "idInstance" ],
+            "items" : {
+              "$ref" : "#/components/schemas/champCodeRoutage"
+            },
+            "type" : "array"
+          },
+          "inclure" : {
+            "description" : "# Implémentation future\n",
+            "example" : [ "siren", "siret" ],
+            "items" : {
+              "enum" : [ "siren", "siret" ],
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "limite" : {
+            "$ref" : "#/components/schemas/limite"
+          },
+          "ignorer" : {
+            "$ref" : "#/components/schemas/ignorer"
+          }
+        },
+        "title" : "searchCodeRoutage",
+        "type" : "object"
+      },
+      "codeRoutagePayloadHistoUleEta" : {
+        "properties" : {
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "typeIdentifiantRoutage" : {
+            "$ref" : "#/components/schemas/typeIdentifiantRoutage"
+          },
+          "libelleCodeRoutage" : {
+            "$ref" : "#/components/schemas/libelleCodeRoutage"
+          },
+          "gestionEngagementJuridique" : {
+            "$ref" : "#/components/schemas/gestionEngagementJuridique"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifCodeRoutage"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseRead"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/historisationRead"
+          },
+          "uniteLegale" : {
+            "$ref" : "#/components/schemas/uniteLegalePayloadIncluded"
+          },
+          "etablissement" : {
+            "$ref" : "#/components/schemas/etablissementPayloadIncluded"
+          }
+        },
+        "title" : "codeRoutagePayloadHistoUleEta",
+        "type" : "object"
+      },
+      "champCodeRoutage" : {
+        "description" : "Champs de la ressource code-routage.",
+        "enum" : [ "siret", "typeIdentifiantRoutage", "libelleCodeRoutage", "identifiantRoutage", "gestionEngagementJuridique", "etatAdministratif", "adresse", "dateDefinition", "dateDebutEffet", "masque", "idInstance", "creePar" ],
+        "example" : "siret",
+        "type" : "string"
+      },
+      "codeRoutagePayloadHisto" : {
+        "properties" : {
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "typeIdentifiantRoutage" : {
+            "$ref" : "#/components/schemas/typeIdentifiantRoutage"
+          },
+          "libelleCodeRoutage" : {
+            "$ref" : "#/components/schemas/libelleCodeRoutage"
+          },
+          "gestionEngagementJuridique" : {
+            "$ref" : "#/components/schemas/gestionEngagementJuridique"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifCodeRoutage"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseRead"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/historisationRead"
+          }
+        },
+        "title" : "codeRoutagePayloadHisto",
+        "type" : "object"
+      },
+      "updatePutCodeRoutageBody" : {
+        "properties" : {
+          "typeIdentifiantRoutage" : {
+            "$ref" : "#/components/schemas/typeIdentifiantRoutage"
+          },
+          "libelleCodeRoutage" : {
+            "$ref" : "#/components/schemas/libelleCodeRoutage"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifCodeRoutage"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseWrite"
+          }
+        },
+        "required" : [ "etatAdministratif", "libelleCodeRoutage", "typeIdentifiantRoutage" ],
+        "title" : "updatePutCodeRoutageBody",
+        "type" : "object"
+      },
+      "updatePatchCodeRoutageBody" : {
+        "properties" : {
+          "typeIdentifiantRoutage" : {
+            "$ref" : "#/components/schemas/typeIdentifiantRoutage"
+          },
+          "libelleCodeRoutage" : {
+            "$ref" : "#/components/schemas/libelleCodeRoutage"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifCodeRoutage"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseWrite"
+          }
+        },
+        "title" : "updatePatchCodeRoutageBody",
+        "type" : "object"
+      },
+      "searchLigneAnnuaire" : {
+        "properties" : {
+          "filtres" : {
+            "$ref" : "#/components/schemas/searchLigneAnnuaire_filtres"
+          },
+          "tris" : {
+            "description" : "Critères de tri sur un champ et un ordre (ascendant ou descendant).",
+            "example" : [ {
+              "champ" : "identifiantAdressage",
+              "ordre" : "ascendant"
+            } ],
+            "items" : {
+              "$ref" : "#/components/schemas/searchLigneAnnuaire_tris_inner"
+            },
+            "type" : "array"
+          },
+          "champs" : {
+            "description" : "Permet de filtrer les champs voulus dans la réponse.",
+            "example" : [ "identifiantAdressage", "siren", "siret", "suffixeAdressage", "matriculePlateforme", "dateFinEffet", "dateFinEffective", "dateDebutEffet", "creePar", "masque", "idInstance" ],
+            "items" : {
+              "$ref" : "#/components/schemas/champLigneAnnuaire"
+            },
+            "type" : "array"
+          },
+          "limite" : {
+            "$ref" : "#/components/schemas/limite"
+          },
+          "ignorer" : {
+            "$ref" : "#/components/schemas/ignorer"
+          }
+        },
+        "title" : "searchLigneAnnuaire",
+        "type" : "object"
+      },
+      "ligneAnnuairePayloadHistoUleEtaRou" : {
+        "properties" : {
+          "matriculePlateforme" : {
+            "$ref" : "#/components/schemas/immatPlateforme"
+          },
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          },
+          "identifiantAdressage" : {
+            "$ref" : "#/components/schemas/identifiantAdressage"
+          },
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "suffixeAdressage" : {
+            "$ref" : "#/components/schemas/suffixeAdressage"
+          },
+          "dateFinEffet" : {
+            "$ref" : "#/components/schemas/dateFinEffet"
+          },
+          "dateFinEffective" : {
+            "$ref" : "#/components/schemas/dateFinEffective"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/historisationRead"
+          },
+          "codeRoutage" : {
+            "$ref" : "#/components/schemas/ligneAnnuairePayloadHistoUleEtaRou_codeRoutage"
+          },
+          "plateforme" : {
+            "$ref" : "#/components/schemas/ligneAnnuairePayloadHistoUleEtaRou_plateforme"
+          },
+          "uniteLegale" : {
+            "$ref" : "#/components/schemas/uniteLegalePayloadIncluded"
+          },
+          "etablissement" : {
+            "$ref" : "#/components/schemas/etablissementPayloadIncluded"
+          }
+        },
+        "title" : "ligneAnnuairePayloadHistoUleEtaRou",
+        "type" : "object"
+      },
+      "createLigneAnnuaireBody" : {
+        "properties" : {
+          "periodeEffet" : {
+            "$ref" : "#/components/schemas/createLigneAnnuaireBody_periodeEffet"
+          },
+          "informationAdressage" : {
+            "$ref" : "#/components/schemas/createLigneAnnuaireBody_informationAdressage"
+          }
+        },
+        "title" : "CreateLigneAnnuaireBody",
+        "type" : "object"
+      },
+      "identifiantAdressage" : {
+        "description" : "Correspond à l'identifiant adressage de la ligne d'annuaire.",
+        "example" : "dcsc456sdcsdcs556",
+        "maxLength" : 125,
+        "type" : "string"
+      },
+      "dateDebutEffet" : {
+        "description" : "Correspond à la date de début d'effet de la ligne d’annuaire.",
+        "example" : "2023-01-01",
+        "format" : "date",
+        "type" : "string"
+      },
+      "champLigneAnnuaire" : {
+        "description" : "Champs de la ressource ligne-annuaire.",
+        "enum" : [ "identifiantAdressage", "siren", "siret", "identifiantRoutage", "suffixeAdressage", "matriculePlateforme", "dateFinEffet", "dateFinEffective", "dateDefinition", "dateDebutEffet", "masque", "idInstance", "creePar" ],
+        "example" : "siren",
+        "type" : "string"
+      },
+      "ligneAnnuairePayloadHisto" : {
+        "properties" : {
+          "matriculePlateforme" : {
+            "$ref" : "#/components/schemas/immatPlateforme"
+          },
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          },
+          "identifiantAdressage" : {
+            "$ref" : "#/components/schemas/identifiantAdressage"
+          },
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "suffixeAdressage" : {
+            "$ref" : "#/components/schemas/suffixeAdressage"
+          },
+          "dateFinEffet" : {
+            "$ref" : "#/components/schemas/dateFinEffet"
+          },
+          "dateFinEffective" : {
+            "$ref" : "#/components/schemas/dateFinEffective"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/historisationRead"
+          }
+        },
+        "title" : "ligneAnnuairePayloadHisto",
+        "type" : "object"
+      },
+      "updatePutLigneAnnuaireBody" : {
+        "properties" : {
+          "dateFinEffet" : {
+            "$ref" : "#/components/schemas/dateFinEffet"
+          },
+          "matriculePlateforme" : {
+            "$ref" : "#/components/schemas/immatPlateforme"
+          }
+        },
+        "required" : [ "matriculePlateforme" ],
+        "title" : "updatePutLigneAnnuaireBody",
+        "type" : "object"
+      },
+      "updatePatchLigneAnnuaireBody" : {
+        "properties" : {
+          "dateFinEffet" : {
+            "$ref" : "#/components/schemas/dateFinEffet"
+          },
+          "matriculePlateforme" : {
+            "$ref" : "#/components/schemas/immatPlateforme"
+          }
+        },
+        "title" : "updatePatchLigneAnnuaireBody",
+        "type" : "object"
+      },
+      "operateurStrict" : {
+        "description" : "Opérateur de comparaison strict",
+        "enum" : [ "strict" ],
+        "example" : "strict",
+        "title" : "opStrict",
+        "type" : "string"
+      },
+      "operateurContient" : {
+        "description" : "Opérateur de comparaison contient",
+        "enum" : [ "contient" ],
+        "example" : "contient",
+        "title" : "opContient",
+        "type" : "string"
+      },
+      "raisonSocialeDestinataire" : {
+        "description" : "Correspond à la raison sociale de l'entreprise.",
+        "example" : "Boulangerie Pascale",
+        "maxLength" : 150,
+        "type" : "string"
+      },
+      "typeEntite" : {
+        "description" : "Correspond au type de la structure.",
+        "enum" : [ "Publique", "Privée assujettie" ],
+        "example" : "Publique",
+        "maxLength" : 20,
+        "type" : "string"
+      },
+      "etatAdministratifUniteLegale" : {
+        "description" : "Correspond à l’état administratif de l'unité légale (Actif; Cessé).",
+        "enum" : [ "A", "C" ],
+        "example" : "A",
+        "maxLength" : 1,
+        "type" : "string"
+      },
+      "dateObservation" : {
+        "description" : "Retourne la date d'observation.",
+        "example" : "2024-01-01",
+        "format" : "date",
+        "type" : "string"
+      },
+      "dateDebutRecherche" : {
+        "description" : "Date de debut recherche.",
+        "example" : "2024-01-01",
+        "format" : "date",
+        "type" : "string"
+      },
+      "dateFinRecherche" : {
+        "description" : "Date de fin recherche.",
+        "example" : "2024-02-01",
+        "format" : "date",
+        "type" : "string"
+      },
+      "creePar" : {
+        "description" : "Correspond au créateur de la ligne d’annuaire.",
+        "example" : "duponta",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "modeAudit" : {
+        "description" : "Mode d'audit.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "ordre" : {
+        "description" : "Ordre de tri (ascendant ou descendant)",
+        "enum" : [ "ascendant", "descendant" ],
+        "example" : "ascendant",
+        "title" : "ordre",
+        "type" : "string"
+      },
+      "limite" : {
+        "description" : "Limite le nombre de résultats",
+        "example" : 50,
+        "format" : "int32",
+        "type" : "integer"
+      },
+      "ignorer" : {
+        "description" : "Nombre de résultat à ignorer",
+        "example" : 20,
+        "format" : "int32",
+        "type" : "integer"
+      },
+      "statutDiffusion" : {
+        "description" : "Correspond au status de diffusion de la structure (Oui; Partiellement diffusible; Refus de prospection).",
+        "enum" : [ "O", "P", "M" ],
+        "example" : "O",
+        "maxLength" : 1,
+        "type" : "string"
+      },
+      "historisationRead" : {
+        "description" : "Objet encapsulant l'historisation.",
+        "properties" : {
+          "dateDefinition" : {
+            "$ref" : "#/components/schemas/dateDefinition"
+          },
+          "dateDebutEffet" : {
+            "$ref" : "#/components/schemas/dateDebutEffet"
+          },
+          "creePar" : {
+            "$ref" : "#/components/schemas/creePar"
+          },
+          "masque" : {
+            "$ref" : "#/components/schemas/masque"
+          },
+          "idInstance" : {
+            "$ref" : "#/components/schemas/idInstance"
+          }
+        },
+        "type" : "object"
+      },
+      "typeEtablissement" : {
+        "description" : "Indique si l’établissement est référencé comme l’établissement principale ou non.",
+        "enum" : [ "P", "S" ],
+        "example" : "P",
+        "maxLength" : 1,
+        "type" : "string"
+      },
+      "denomination" : {
+        "description" : "Correspond au libellé de la structure.",
+        "example" : "Boulangerie Pascale",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "lignesAdresse" : {
+        "description" : "Correspond à l’adresse de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "16 BIS RUE HENRI BARBUSSE - CEDEX 1 - Bâtiment le Callipso",
+        "maxLength" : 600,
+        "type" : "string"
+      },
+      "codePostalContient" : {
+        "description" : "Correspond au code postal du service.",
+        "example" : "38100",
+        "maxLength" : 10,
+        "type" : "string"
+      },
+      "subDivisionPaysContient" : {
+        "description" : "Correspond à la subdivision du pays",
+        "example" : "Bretagne",
+        "maxLength" : 255,
+        "type" : "string"
+      },
+      "localiteContient" : {
+        "description" : "Correspond à la commune de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "Grenoble",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "etatAdministratifEtablissement" : {
+        "description" : "Correspond à l’état administratif de l'établissement (Actif; Fermé).",
+        "enum" : [ "A", "F" ],
+        "example" : "A",
+        "maxLength" : 1,
+        "type" : "string"
+      },
+      "adresseRead" : {
+        "description" : "Objet encapsulant une adresse.",
+        "properties" : {
+          "ligneAdresse1" : {
+            "$ref" : "#/components/schemas/libelleAdresse1"
+          },
+          "ligneAdresse2" : {
+            "$ref" : "#/components/schemas/libelleAdresse2"
+          },
+          "ligneAdresse3" : {
+            "$ref" : "#/components/schemas/libelleAdresse3"
+          },
+          "codePostal" : {
+            "$ref" : "#/components/schemas/codePostal"
+          },
+          "subDivisionPays" : {
+            "$ref" : "#/components/schemas/subDivisionPays"
+          },
+          "localite" : {
+            "$ref" : "#/components/schemas/localite"
+          },
+          "codePays" : {
+            "$ref" : "#/components/schemas/codePaysDestinataire"
+          },
+          "libellePays" : {
+            "$ref" : "#/components/schemas/libellePaysDestinataire"
+          }
+        },
+        "type" : "object"
+      },
+      "statutMoa" : {
+        "description" : "Indique si la structure publique joue le rôle de maîtrise d’ouvrage pour les factures de travaux en plus de la réception des factures simples. Cet attribut n’est retourné que si la ligne d'annuaire est définie pour une structure publique à la maille SIREN / SIRET ou SIREN / SIRET / Code routage.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "statutMoaUnique" : {
+        "description" : "Indique si la structure publique joue uniquement le rôle de maîtrise d’ouvrage, si oui elle ne pourra recevoir que les factures de travaux. Cet attribut n’est retourné que si la ligne d'annuaire est définie pour une structure publique à la maille SIREN / SIRET ou SIREN / SIRET / Code routage.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "gestionStatutMiseEnPaiement" : {
+        "description" : "Correspond à l’information sur la gestion du statut de mise en paiement. Cet attribut n’est retourné que si la ligne d'annuaire est définie pour une structure publique à la maille SIREN / SIRET ou SIREN / SIRET / Code routage.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "gestionEngagementJuridique" : {
+        "description" : "Indique si le numero d’engagement est obligatoire ou non.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "gestionEngagementJuridiqueOuService" : {
+        "description" : "Correspond à l’information sur la gestion engagement juridique ou service. Cet attribut n’est retourné que si la ligne d'annuaire est définie pour une structure publique à la maille SIREN / SIRET ou SIREN / SIRET / Code routage.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "statutService" : {
+        "description" : "Correspond à l’information sur la gestion service. Cet attribut n’est retourné que si la ligne d'annuaire est définie pour une structure publique à la maille SIREN / SIRET ou SIREN / SIRET / Code routage.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "uniteLegalePayloadIncluded" : {
+        "properties" : {
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "raisonSociale" : {
+            "$ref" : "#/components/schemas/raisonSocialeDestinataire"
+          },
+          "typeEntite" : {
+            "$ref" : "#/components/schemas/typeEntite"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifUniteLegale"
+          },
+          "diffusible" : {
+            "$ref" : "#/components/schemas/statutDiffusion"
+          }
+        },
+        "title" : "uniteLegalePayloadIncluded",
+        "type" : "object"
+      },
+      "natureEtablissement" : {
+        "description" : "Correspond à la nature de l'etablissement (privé ou public).",
+        "enum" : [ "Privé", "Public" ],
+        "example" : "Privé",
+        "maxLength" : 6,
+        "type" : "string"
+      },
+      "typeIdentifiantRoutage" : {
+        "description" : "Correspond au type de l'identifiant routage d'un code-routage.",
+        "example" : "0224",
+        "maxLength" : 4,
+        "pattern" : "^\\d{4}$",
+        "type" : "string"
+      },
+      "libelleCodeRoutage" : {
+        "description" : "Correspond au libellé du code routage de la ligne d’annuaire. Cet attribut n’est retourné que si la ligne d'annuaire est définie à la maille SIREN / SIRET / Code routage.",
+        "example" : "Libelle Code routage",
+        "maxLength" : 100,
+        "minLength" : 1,
+        "pattern" : "^(?!\\s*$).+",
+        "type" : "string"
+      },
+      "etatAdministratifCodeRoutage" : {
+        "description" : "Correspond à l’état administratif du code routage.",
+        "enum" : [ "A", "F" ],
+        "example" : "A",
+        "maxLength" : 1,
+        "type" : "string"
+      },
+      "adresseWrite" : {
+        "description" : "Objet encapsulant une adresse.",
+        "properties" : {
+          "ligneAdresse1" : {
+            "$ref" : "#/components/schemas/libelleAdresse1"
+          },
+          "ligneAdresse2" : {
+            "$ref" : "#/components/schemas/libelleAdresse2"
+          },
+          "ligneAdresse3" : {
+            "$ref" : "#/components/schemas/libelleAdresse3"
+          },
+          "codePostal" : {
+            "$ref" : "#/components/schemas/codePostal"
+          },
+          "subDivisionPays" : {
+            "$ref" : "#/components/schemas/subDivisionPays"
+          },
+          "localite" : {
+            "$ref" : "#/components/schemas/localite"
+          },
+          "codePays" : {
+            "$ref" : "#/components/schemas/codePaysDestinataire"
+          }
+        },
+        "type" : "object"
+      },
+      "identifiantRoutageContient" : {
+        "description" : "Correspond à l'identifiant routage d'un code-routage.",
+        "example" : "dcsc456sdcsdcs556",
+        "maxLength" : 100,
+        "pattern" : "^(?!\\s+$)[-_/@a-zA-Z0-9]{0,100}$",
+        "type" : "string"
+      },
+      "libelleCodeRoutageContient" : {
+        "description" : "Correspond au libellé du code routage.",
+        "example" : "Libelle Code routage",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "etablissementPayloadIncluded" : {
+        "properties" : {
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "denomination" : {
+            "$ref" : "#/components/schemas/denomination"
+          },
+          "typeEtablissement" : {
+            "$ref" : "#/components/schemas/typeEtablissement"
+          },
+          "diffusible" : {
+            "$ref" : "#/components/schemas/statutDiffusion"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifEtablissement"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseRead"
+          },
+          "donneesB2gComplementaires" : {
+            "$ref" : "#/components/schemas/etablissementPayloadHistoUle_donneesB2gComplementaires"
+          }
+        },
+        "title" : "etablissementPayloadIncluded",
+        "type" : "object"
+      },
+      "immatPlateformeStrict" : {
+        "description" : "Correspond à l’immatriculation / matricule de la plateforme.",
+        "example" : "0145",
+        "maxLength" : 4,
+        "pattern" : "^(\\d{4})?$",
+        "type" : "string"
+      },
+      "suffixeAdressageStrict" : {
+        "description" : "Correspond au suffixe de la ligne d’annuaire qui définit une maille d'adressage non rattachée à un établissement",
+        "example" : "dcsc456sdcsdcs556",
+        "maxLength" : 100,
+        "pattern" : "^(?!\\s+$)[-_.@a-zA-Z0-9]{0,100}$",
+        "type" : "string"
+      },
+      "immatPlateforme" : {
+        "description" : "Correspond à l’immatriculation / matricule de la plateforme.",
+        "example" : "0145",
+        "maxLength" : 4,
+        "pattern" : "^\\d{4}$",
+        "type" : "string"
+      },
+      "suffixeAdressage" : {
+        "description" : "Correspond au suffixe de la ligne d’annuaire qui définit une maille d'adressage non rattachée à un établissement",
+        "example" : "dcsc456sdcsdcs556",
+        "maxLength" : 100,
+        "pattern" : "^(?!\\s+$)[-_.@a-zA-Z0-9]{1,100}$",
+        "type" : "string"
+      },
+      "dateFinEffet" : {
+        "description" : "Correspond à la date de fin d'effet de la ligne d’annuaire.",
+        "example" : "2023-01-31",
+        "format" : "date",
+        "nullable" : true,
+        "type" : "string"
+      },
+      "dateFinEffective" : {
+        "description" : "Correspond à la date de fin effective",
+        "format" : "date",
+        "type" : "string"
+      },
+      "typePlateforme" : {
+        "description" : "Correspond au type de la plateforme de réception (PPF, PDP, AP(Autre Plateforme), NA(Non Adressable)).",
+        "enum" : [ "PDP", "PPF", "AP", "NA" ],
+        "example" : "PDP",
+        "maxLength" : 3,
+        "type" : "string"
+      },
+      "raisonSocialePlateforme" : {
+        "description" : "Correspond à la raison sociale de la plateforme de la ligne d’annuaire.",
+        "example" : "Raison sociale plateforme",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "nomCommercialPlateforme" : {
+        "description" : "Correspond au nom commercial de la plateforme de la ligne d’annuaire.",
+        "example" : "Nom plateforme",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "contactPlateforme" : {
+        "description" : "Correspond à l’adresse de contact de la plateforme.",
+        "example" : "Adresse de contact",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "statutPlateforme" : {
+        "description" : "Correspond au statut de la plateforme.",
+        "enum" : [ "Actif", "Inactif" ],
+        "example" : "Actif",
+        "maxLength" : 7,
+        "type" : "string"
+      },
+      "dateDefinition" : {
+        "description" : "Correspond à la date de création de la donnée.",
+        "format" : "date-time",
+        "type" : "string"
+      },
+      "masque" : {
+        "description" : "Correspond à l'état de la donnée. O = la donnée est masquée et ne peut pas être exploitée. N = la donnée n'est pas masquée.",
+        "example" : true,
+        "type" : "boolean"
+      },
+      "libelleAdresse1" : {
+        "description" : "Correspond à l’adresse de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "16 BIS RUE HENRI BARBUSSE",
+        "maxLength" : 255,
+        "nullable" : true,
+        "type" : "string"
+      },
+      "libelleAdresse2" : {
+        "description" : "Correspond à l’adresse de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "CEDEX 1",
+        "maxLength" : 255,
+        "nullable" : true,
+        "type" : "string"
+      },
+      "libelleAdresse3" : {
+        "description" : "Correspond à l’adresse de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "Bâtiment le Callipso",
+        "maxLength" : 255,
+        "nullable" : true,
+        "type" : "string"
+      },
+      "codePostal" : {
+        "description" : "Correspond au code postal de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "38100",
+        "maxLength" : 10,
+        "nullable" : true,
+        "type" : "string"
+      },
+      "subDivisionPays" : {
+        "description" : "Correspond à la subdivision du pays",
+        "example" : "Bretagne",
+        "maxLength" : 255,
+        "nullable" : true,
+        "type" : "string"
+      },
+      "localite" : {
+        "description" : "Correspond à la commune de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "Grenoble",
+        "maxLength" : 100,
+        "nullable" : true,
+        "type" : "string"
+      },
+      "codePaysDestinataire" : {
+        "description" : "Correspond au code pays de la structure destinataire.",
+        "example" : "FR",
+        "maxLength" : 2,
+        "nullable" : true,
+        "type" : "string"
+      },
+      "libellePaysDestinataire" : {
+        "description" : "Correspond au pays de la structure destinataire ayant définie la ou les lignes d’annuaire.",
+        "example" : "France",
+        "maxLength" : 100,
+        "type" : "string"
+      },
+      "_siren_recherche_post_200_response" : {
+        "properties" : {
+          "recherche" : {
+            "$ref" : "#/components/schemas/searchSiren"
+          },
+          "nombre_total_resultats" : {
+            "$ref" : "#/components/schemas/nombre_total_resultats"
+          },
+          "resultats" : {
+            "items" : {
+              "$ref" : "#/components/schemas/uniteLegalePayloadHisto"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "_siret_recherche_post_200_response" : {
+        "properties" : {
+          "recherche" : {
+            "$ref" : "#/components/schemas/searchSiret"
+          },
+          "nombre_total_resultats" : {
+            "$ref" : "#/components/schemas/nombre_total_resultats"
+          },
+          "resultats" : {
+            "description" : "# Valorisation future de l'uniteLegale\n",
+            "items" : {
+              "$ref" : "#/components/schemas/etablissementPayloadHistoUle"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "_code_routage_post_201_response" : {
+        "properties" : {
+          "idInstance" : {
+            "$ref" : "#/components/schemas/idInstance"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          }
+        },
+        "type" : "object"
+      },
+      "_code_routage_recherche_post_200_response" : {
+        "properties" : {
+          "recherche" : {
+            "$ref" : "#/components/schemas/searchCodeRoutage"
+          },
+          "nombre_total_resultats" : {
+            "$ref" : "#/components/schemas/nombre_total_resultats"
+          },
+          "resultats" : {
+            "description" : "# Valorisation future de l'uniteLegale et de l'etablissement\n",
+            "items" : {
+              "$ref" : "#/components/schemas/codeRoutagePayloadHistoUleEta"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "_ligne_annuaire_recherche_post_200_response" : {
+        "properties" : {
+          "recherche" : {
+            "$ref" : "#/components/schemas/searchLigneAnnuaire"
+          },
+          "nombre_total_resultats" : {
+            "$ref" : "#/components/schemas/nombre_total_resultats"
+          },
+          "resultats" : {
+            "description" : "# Valorisation future de l'uniteLegale, l'etablissement, du codeRoutage et de la plateforme\n",
+            "items" : {
+              "$ref" : "#/components/schemas/ligneAnnuairePayloadHistoUleEtaRou"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "_ligne_annuaire_post_201_response" : {
+        "properties" : {
+          "idInstance" : {
+            "$ref" : "#/components/schemas/idInstance"
+          },
+          "identifiantAdressage" : {
+            "$ref" : "#/components/schemas/identifiantAdressage"
+          },
+          "dateDebutEffet" : {
+            "$ref" : "#/components/schemas/dateDebutEffet"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_siren" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/siren"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_raisonSociale" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/raisonSocialeDestinataire"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_typeEntite" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/typeEntite"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_etatAdministratif" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/etatAdministratifUniteLegale"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_historisation_dateObservation" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/dateObservation"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_historisation_dateDebutRecherche" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/dateDebutRecherche"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_historisation_dateFinRecherche" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/dateFinRecherche"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_historisation_creePar" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/creePar"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_historisation_modeAudit" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/modeAudit"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres_historisation" : {
+        "properties" : {
+          "dateObservation" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation_dateObservation"
+          },
+          "dateDebutRecherche" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation_dateDebutRecherche"
+          },
+          "dateFinRecherche" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation_dateFinRecherche"
+          },
+          "creePar" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation_creePar"
+          },
+          "modeAudit" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation_modeAudit"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_filtres" : {
+        "properties" : {
+          "siren" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_siren"
+          },
+          "raisonSociale" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_raisonSociale"
+          },
+          "typeEntite" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_typeEntite"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_etatAdministratif"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiren_tris_inner" : {
+        "description" : "Un critère de tri composé d’un champ et d’un ordre (ascendant ou descendant).",
+        "example" : {
+          "champ" : "siren",
+          "ordre" : "ascendant"
+        },
+        "properties" : {
+          "champ" : {
+            "$ref" : "#/components/schemas/champSiren"
+          },
+          "ordre" : {
+            "$ref" : "#/components/schemas/ordre"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_siret" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/siret"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_typeEtablissement" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/typeEtablissement"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_denomination" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/denomination"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_lignesAdresse" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/lignesAdresse"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_codePostal" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/codePostalContient"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_subDivisionPays" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/subDivisionPaysContient"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_localite" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/localiteContient"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres_etatAdministratif" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/etatAdministratifEtablissement"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_filtres" : {
+        "properties" : {
+          "siret" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_siret"
+          },
+          "siren" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_siren"
+          },
+          "typeEtablissement" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_typeEtablissement"
+          },
+          "denomination" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_denomination"
+          },
+          "lignesAdresse" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_lignesAdresse"
+          },
+          "codePostal" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_codePostal"
+          },
+          "subDivisionPays" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_subDivisionPays"
+          },
+          "localite" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_localite"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_etatAdministratif"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation"
+          }
+        },
+        "type" : "object"
+      },
+      "searchSiret_tris_inner" : {
+        "description" : "Un critère de tri composé d’un champ et d’un ordre (ascendant ou descendant).",
+        "example" : {
+          "champ" : "siret",
+          "ordre" : "ascendant"
+        },
+        "properties" : {
+          "champ" : {
+            "$ref" : "#/components/schemas/champSiret"
+          },
+          "ordre" : {
+            "$ref" : "#/components/schemas/ordre"
+          }
+        },
+        "type" : "object"
+      },
+      "etablissementPayloadHistoUle_donneesB2gComplementaires" : {
+        "properties" : {
+          "moa" : {
+            "$ref" : "#/components/schemas/statutMoa"
+          },
+          "moaUniquement" : {
+            "$ref" : "#/components/schemas/statutMoaUnique"
+          },
+          "gestionStatutMiseEnPaiement" : {
+            "$ref" : "#/components/schemas/gestionStatutMiseEnPaiement"
+          },
+          "gestionEngagementJuridique" : {
+            "$ref" : "#/components/schemas/gestionEngagementJuridique"
+          },
+          "gestionEngagementJuridiqueOuService" : {
+            "$ref" : "#/components/schemas/gestionEngagementJuridiqueOuService"
+          },
+          "gestionCodeService" : {
+            "$ref" : "#/components/schemas/statutService"
+          }
+        },
+        "type" : "object"
+      },
+      "searchCodeRoutage_filtres_identifiantRoutage" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/identifiantRoutageContient"
+          }
+        },
+        "type" : "object"
+      },
+      "searchCodeRoutage_filtres_libelleCodeRoutage" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/libelleCodeRoutageContient"
+          }
+        },
+        "type" : "object"
+      },
+      "searchCodeRoutage_filtres_etatAdministratif" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/etatAdministratifCodeRoutage"
+          }
+        },
+        "type" : "object"
+      },
+      "searchCodeRoutage_filtres" : {
+        "properties" : {
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/searchCodeRoutage_filtres_identifiantRoutage"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_siret"
+          },
+          "libelleCodeRoutage" : {
+            "$ref" : "#/components/schemas/searchCodeRoutage_filtres_libelleCodeRoutage"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/searchCodeRoutage_filtres_etatAdministratif"
+          },
+          "lignesAdresse" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_lignesAdresse"
+          },
+          "codePostal" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_codePostal"
+          },
+          "localite" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_localite"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation"
+          }
+        },
+        "type" : "object"
+      },
+      "searchCodeRoutage_tris_inner" : {
+        "description" : "Un critère de tri composé d’un champ et d’un ordre (ascendant ou descendant).",
+        "example" : {
+          "champ" : "siret",
+          "ordre" : "descendant"
+        },
+        "properties" : {
+          "champ" : {
+            "$ref" : "#/components/schemas/champCodeRoutage"
+          },
+          "ordre" : {
+            "$ref" : "#/components/schemas/ordre"
+          }
+        },
+        "type" : "object"
+      },
+      "searchLigneAnnuaire_filtres_identifiantAdressage" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurContient"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/identifiantAdressage"
+          }
+        },
+        "type" : "object"
+      },
+      "searchLigneAnnuaire_filtres_matriculePlateforme" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/immatPlateformeStrict"
+          }
+        },
+        "type" : "object"
+      },
+      "searchLigneAnnuaire_filtres_suffixeAdressage" : {
+        "properties" : {
+          "op" : {
+            "$ref" : "#/components/schemas/operateurStrict"
+          },
+          "valeur" : {
+            "$ref" : "#/components/schemas/suffixeAdressageStrict"
+          }
+        },
+        "type" : "object"
+      },
+      "searchLigneAnnuaire_filtres" : {
+        "properties" : {
+          "identifiantAdressage" : {
+            "$ref" : "#/components/schemas/searchLigneAnnuaire_filtres_identifiantAdressage"
+          },
+          "matriculePlateforme" : {
+            "$ref" : "#/components/schemas/searchLigneAnnuaire_filtres_matriculePlateforme"
+          },
+          "siren" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_siren"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/searchSiret_filtres_siret"
+          },
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/searchCodeRoutage_filtres_identifiantRoutage"
+          },
+          "suffixeAdressage" : {
+            "$ref" : "#/components/schemas/searchLigneAnnuaire_filtres_suffixeAdressage"
+          },
+          "historisation" : {
+            "$ref" : "#/components/schemas/searchSiren_filtres_historisation"
+          }
+        },
+        "type" : "object"
+      },
+      "searchLigneAnnuaire_tris_inner" : {
+        "description" : "Un critère de tri composé d’un champ et d’un ordre (ascendant ou descendant).",
+        "example" : {
+          "champ" : "identifiantAdressage",
+          "ordre" : "ascendant"
+        },
+        "properties" : {
+          "champ" : {
+            "$ref" : "#/components/schemas/champLigneAnnuaire"
+          },
+          "ordre" : {
+            "$ref" : "#/components/schemas/ordre"
+          }
+        },
+        "type" : "object"
+      },
+      "ligneAnnuairePayloadHistoUleEtaRou_codeRoutage" : {
+        "properties" : {
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          },
+          "typeIdentifiantRoutage" : {
+            "$ref" : "#/components/schemas/typeIdentifiantRoutage"
+          },
+          "libelleCodeRoutage" : {
+            "$ref" : "#/components/schemas/libelleCodeRoutage"
+          },
+          "gestionEngagementJuridique" : {
+            "$ref" : "#/components/schemas/gestionEngagementJuridique"
+          },
+          "etatAdministratif" : {
+            "$ref" : "#/components/schemas/etatAdministratifCodeRoutage"
+          },
+          "adresse" : {
+            "$ref" : "#/components/schemas/adresseRead"
+          }
+        },
+        "type" : "object"
+      },
+      "ligneAnnuairePayloadHistoUleEtaRou_plateforme" : {
+        "properties" : {
+          "typePlateforme" : {
+            "$ref" : "#/components/schemas/typePlateforme"
+          },
+          "matriculePlateforme" : {
+            "$ref" : "#/components/schemas/immatPlateforme"
+          },
+          "raisonSocialePlateforme" : {
+            "$ref" : "#/components/schemas/raisonSocialePlateforme"
+          },
+          "nomCommercialPlateforme" : {
+            "$ref" : "#/components/schemas/nomCommercialPlateforme"
+          },
+          "contactOuUrlPlateforme" : {
+            "$ref" : "#/components/schemas/contactPlateforme"
+          },
+          "statutPlateforme" : {
+            "$ref" : "#/components/schemas/statutPlateforme"
+          }
+        },
+        "type" : "object"
+      },
+      "createLigneAnnuaireBody_periodeEffet" : {
+        "properties" : {
+          "dateDebutEffet" : {
+            "$ref" : "#/components/schemas/dateDebutEffet"
+          },
+          "dateFinEffet" : {
+            "$ref" : "#/components/schemas/dateFinEffet"
+          }
+        },
+        "required" : [ "dateDebutEffet" ],
+        "type" : "object"
+      },
+      "createLigneAnnuaireBody_informationAdressage" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "siren" : {
+            "$ref" : "#/components/schemas/siren"
+          },
+          "siret" : {
+            "$ref" : "#/components/schemas/siret"
+          },
+          "identifiantRoutage" : {
+            "$ref" : "#/components/schemas/identifiantRoutage"
+          },
+          "suffixeAdressage" : {
+            "$ref" : "#/components/schemas/suffixeAdressage"
+          },
+          "matriculePlateforme" : {
+            "$ref" : "#/components/schemas/immatPlateforme"
+          }
+        },
+        "required" : [ "matriculePlateforme", "siren" ],
+        "type" : "object"
+      }
+    },
+    "securitySchemes" : {
+      "bearer_auth" : {
+        "bearerFormat" : "JWT",
+        "scheme" : "bearer",
+        "type" : "http"
+      }
+    }
+  }
+}
