@@ -986,6 +986,8 @@ git commit -m "feat(invoice-core): génération UBL 2.1 depuis le modèle canoni
 
 ### Task 5: Validation contre les XSD officiels DGFiP + golden file
 
+**Décision d'architecture (12/07/2026)** : la cible de validation est le profil **F1 FULL** (facture complète). Le profil F1 BASE est l'extrait fiscal minimal — il interdit structurellement les noms des parties et les montants TTC/à payer, mentions légales obligatoires d'une facture commerciale. Un émetteur BASE dédié pourra être ajouté (plan 1.2+) si la transmission flux 1 l'exige.
+
 **Files:**
 - Create: `packages/invoice-core/tests/helpers/xsd.ts`, `packages/invoice-core/tests/helpers/golden.ts`
 - Create: `packages/invoice-core/tests/golden/invoice-simple.ubl.xml` (générée puis figée à l'étape 4)
@@ -995,7 +997,7 @@ git commit -m "feat(invoice-core): génération UBL 2.1 depuis le modèle canoni
 **Interfaces:**
 - Consumes: `generateUbl`, `buildInvoice`, fixtures.
 - Produces (utilisés par la tâche 6) :
-  - `validateAgainstXsd(xml: string): { valid: boolean; errors: string }` — exécute `xmllint --schema` contre `F1BASE_UBL-invoice-2.1.xsd`.
+  - `validateAgainstXsd(xml: string): { valid: boolean; errors: string }` — exécute `xmllint --schema` contre `F1FULL_UBL_invoice-2.1.xsd`.
   - `expectMatchesGolden(fileName: string, actual: string): void` — compare au fichier de `tests/golden/` ; le crée s'il n'existe pas encore et si `UPDATE_GOLDEN=1`.
 
 - [ ] **Step 1: Vérifier la présence de xmllint et du XSD**
@@ -1003,7 +1005,7 @@ git commit -m "feat(invoice-core): génération UBL 2.1 depuis le modèle canoni
 Run:
 ```bash
 xmllint --version
-ls "docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/2 - E-invoicing/F1_BASE_UBL_2.1/F1BASE_UBL-invoice-2.1.xsd"
+ls "docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/2 - E-invoicing/F1_FULL_UBL_2.1/F1FULL_UBL_invoice-2.1.xsd"
 ```
 Expected: version libxml2 affichée (préinstallé sur macOS) ; fichier XSD listé.
 
@@ -1019,7 +1021,7 @@ import { join, resolve } from 'node:path'
 
 const XSD_PATH = resolve(
   import.meta.dirname,
-  '../../../../docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/2 - E-invoicing/F1_BASE_UBL_2.1/F1BASE_UBL-invoice-2.1.xsd',
+  '../../../../docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/2 - E-invoicing/F1_FULL_UBL_2.1/F1FULL_UBL_invoice-2.1.xsd',
 )
 
 export function validateAgainstXsd(xml: string): { valid: boolean; errors: string } {
@@ -1072,8 +1074,8 @@ import { expectMatchesGolden } from '../helpers/golden.js'
 import { validateAgainstXsd } from '../helpers/xsd.js'
 import { simpleInvoiceInput } from '../fixtures.js'
 
-describe('UBL output against official DGFiP XSD (F1 BASE)', () => {
-  it('validates the simple invoice against F1BASE_UBL-invoice-2.1.xsd', () => {
+describe('UBL output against official DGFiP XSD (F1 FULL)', () => {
+  it('validates the simple invoice against F1FULL_UBL_invoice-2.1.xsd', () => {
     const result = validateAgainstXsd(generateUbl(buildInvoice(simpleInvoiceInput)))
     expect(result.errors).toBe('')
     expect(result.valid).toBe(true)
@@ -1086,7 +1088,7 @@ describe('UBL output against official DGFiP XSD (F1 BASE)', () => {
 ```
 
 Run: `pnpm --filter @factelec/invoice-core test -- xsd`
-Expected: FAIL — au minimum le golden file est manquant. Si la validation XSD échoue aussi, lire attentivement `result.errors` : le profil F1 BASE est une restriction de l'UBL standard, et un écart (élément manquant/interdit ou mal ordonné) doit être corrigé dans `src/ubl/generate.ts` — jamais en modifiant le XSD. Itérer jusqu'à `valid: true`.
+Expected: FAIL — au minimum le golden file est manquant. Si la validation XSD échoue aussi, lire attentivement `result.errors` : le profil F1 FULL est une restriction de l'UBL standard, et un écart (élément manquant/interdit ou mal ordonné) doit être corrigé dans `src/ubl/generate.ts` — jamais en modifiant le XSD. Itérer jusqu'à `valid: true`.
 
 - [ ] **Step 4: Créer le golden file puis le figer**
 
@@ -1115,7 +1117,7 @@ Dans `.github/workflows/ci.yml`, ajouter juste après l'étape `actions/setup-no
 
 ```bash
 git add -A
-git commit -m "test(invoice-core): validation XSD DGFiP (F1 BASE UBL) et golden file de référence"
+git commit -m "test(invoice-core): validation XSD DGFiP (F1 FULL UBL) et golden file de référence"
 ```
 
 ---
@@ -1194,7 +1196,7 @@ norme sémantique EN 16931 et les spécifications externes DGFiP v3.2.
 - `validateBusinessRules(invoice: Invoice): RuleViolation[]` — sous-ensemble des
   règles EN 16931 (BR-CO-10/13/14/15/17/25, BR-S-08) ; tableau vide = conforme.
 - `generateUbl(invoice: Invoice): string` — document UBL 2.1 Invoice validé
-  contre le XSD officiel F1 BASE (tests `tests/ubl/`).
+  contre le XSD officiel F1 FULL (tests `tests/ubl/`).
 
 ## Conventions
 
