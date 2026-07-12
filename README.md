@@ -9,9 +9,21 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet : démarrage (phase 1.1).** Seul le package `invoice-core` est en
-> cours de développement. La conception complète est décrite dans
+> **État du projet (12/07/2026) : plan 1.1 terminé et mergé dans `main`.**
+> Le package `invoice-core` (modèle EN 16931, calculs TVA, règles de cohérence,
+> UBL 2.1 validé XSD OASIS) est livré : 36 tests, couverture 100 %, revue finale
+> « prêt à merger » sans point critique. La conception complète est décrite dans
 > [`docs/superpowers/specs/`](docs/superpowers/specs/).
+>
+> **Reprise des travaux — prochaine étape : rédiger puis exécuter le plan 1.2**
+> (« Conformité EN 16931 et extraits de flux » : build + exports map du package,
+> montants non négatifs + avoirs 381, exonérations BT-120/121, Schematron
+> EN 16931 officiel en tests, émetteurs d'extraits F1 BASE/FULL, tests par
+> propriétés). Le plan était en cours de rédaction au moment de la pause — le
+> fichier `docs/superpowers/plans/2026-07-12-phase1-2-*.md` n'existe pas encore ;
+> le relancer en premier. Factur-X/CII suivront (plan 1.2bis), puis l'API NestJS
+> (plan 1.3). Journal de progression détaillé : `.superpowers/sdd/progress.md`
+> (hors git, local).
 
 ## Structure du dépôt
 
