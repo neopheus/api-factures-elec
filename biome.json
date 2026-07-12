@@ -1,0 +1,10 @@
+{
+  "files": {
+    "includes": ["**", "!**/docs/**", "!**/dist/**", "!**/coverage/**"]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
+  "linter": { "enabled": true, "rules": { "preset": "none" } },
+  "javascript": {
+    "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" }
+  }
+}
