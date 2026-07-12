@@ -1,0 +1,23 @@
+{
+  "name": "@factelec/invoice-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/big.js": "^7.0.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "big.js": "^7.0.1",
+    "xmlbuilder2": "^4.0.3",
+    "zod": "^4.4.3"
+  }
+}

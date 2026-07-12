@@ -1,0 +1,6 @@
+export const PACKAGE_NAME = '@factelec/invoice-core'
+export { buildInvoice } from './model/compute.js'
+export * from './model/money.js'
+export { type RuleViolation, validateBusinessRules } from './model/rules.js'
+export * from './model/schema.js'
+export { generateUbl } from './ubl/generate.js'
