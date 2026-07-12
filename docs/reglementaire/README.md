@@ -44,5 +44,7 @@ Répertoire : `specifications-externes-v3.2/`
 Ces XSD et ce swagger sont à utiliser directement dans `invoice-core` et les modules
 annuaire/e-reporting (validation, génération de types, golden files de tests).
 
+Vérification d'intégrité (2026-07-12) : cette copie est identique octet pour octet au zip officiel re-téléchargé (`diff -rq`). Les profils XSD F1 BASE/FULL restreignent volontairement le contenu (pas de noms de parties, de TTC ni de TVA par ligne) : ce sont des extraits fiscaux de flux, distincts de la facture commerciale complète (validée contre OASIS UBL 2.1, cf. docs/reference/README.md).
+
 Note : seule la dernière version (v3.2) est archivée ici ; les versions antérieures
 (v1.x → v3.1) restent disponibles sur la page source si besoin d'historique.
