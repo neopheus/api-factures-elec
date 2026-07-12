@@ -126,7 +126,7 @@ Note : si la version de Biome installée refuse cette config (le format a chang�
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   }
@@ -149,16 +149,25 @@ Note : si la version de Biome installée refuse cette config (le format a chang�
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
-  test: { include: ['tests/**/*.test.ts'] },
+  test: {
+    include: ['tests/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      thresholds: { lines: 90, functions: 90, statements: 90, branches: 90 },
+    },
+  },
 })
 ```
+
+La couverture est bloquante (exigence projet : > 90 %) : le script `test` du package exécute `vitest run --coverage` et la CI échoue sous les seuils.
 
 - [ ] **Step 3: Installer les dépendances**
 
 Run:
 ```bash
 pnpm add -D -w @biomejs/biome typescript
-pnpm --filter @factelec/invoice-core add -D vitest
+pnpm --filter @factelec/invoice-core add -D vitest @vitest/coverage-v8
 pnpm install
 ```
 Expected: lockfile `pnpm-lock.yaml` créé, aucune erreur.
