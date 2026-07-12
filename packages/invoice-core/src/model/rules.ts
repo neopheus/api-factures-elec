@@ -1,7 +1,21 @@
 import { big, round2 } from './money.js'
-import type { Invoice } from './schema.js'
+import type { Invoice, VatCategory } from './schema.js'
 
 export type RuleViolation = { rule: string; message: string }
+
+// EN 16931 : le code de règle de la vérification d'assiette (BR-*-08) dépend
+// de la catégorie de TVA de la ligne de ventilation (BR-S-08, BR-Z-08, ...).
+const taxableSumRuleByCategory: Record<VatCategory, string> = {
+  S: 'BR-S-08',
+  Z: 'BR-Z-08',
+  E: 'BR-E-08',
+  AE: 'BR-AE-08',
+  K: 'BR-IC-08',
+  G: 'BR-G-08',
+  O: 'BR-O-08',
+  L: 'BR-AF-08',
+  M: 'BR-AG-08',
+}
 
 // Sous-ensemble des règles métier EN 16931 (BR-CO-*, BR-S-*) pertinentes
 // pour le périmètre v1 (pas de remises document ni d'acompte).
@@ -57,7 +71,7 @@ export function validateBusinessRules(invoice: Invoice): RuleViolation[] {
     )
     if (expected !== b.taxableAmount)
       push(
-        'BR-S-08',
+        taxableSumRuleByCategory[b.category],
         `assiette ${b.taxableAmount} (${b.category} ${b.rate}%) != somme des lignes ${expected}`,
       )
     const expectedTax = round2(big(b.taxableAmount).times(b.rate).div(100))
