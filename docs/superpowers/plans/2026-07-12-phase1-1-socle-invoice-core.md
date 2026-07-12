@@ -337,6 +337,15 @@ describe('parseInvoiceInput', () => {
     expect(() => parseInvoiceInput({ ...simpleInvoiceInput, issueDate: '12/07/2026' })).toThrow()
   })
 
+  it('rejects impossible calendar dates', () => {
+    expect(() => parseInvoiceInput({ ...simpleInvoiceInput, issueDate: '2026-02-31' })).toThrow()
+    expect(() => parseInvoiceInput({ ...simpleInvoiceInput, issueDate: '2026-02-29' })).toThrow()
+  })
+
+  it('accepts a leap-day issue date', () => {
+    expect(parseInvoiceInput({ ...simpleInvoiceInput, issueDate: '2028-02-29' }).issueDate).toBe('2028-02-29')
+  })
+
   it('rejects a unit price with more than 4 decimals', () => {
     const bad = {
       ...simpleInvoiceInput,
@@ -374,10 +383,20 @@ import { z } from 'zod'
 
 const amount2 = z.string().regex(/^-?\d+\.\d{2}$/, 'amount must have exactly 2 decimals')
 const decimal4 = z.string().regex(/^-?\d+(\.\d{1,4})?$/, 'decimal with up to 4 decimals')
+function isExistingCalendarDate(value: string): boolean {
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 0))
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === (month ?? 1) - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .refine((s) => !Number.isNaN(Date.parse(s)), 'invalid calendar date')
+  .refine(isExistingCalendarDate, 'invalid calendar date')
 
 export const vatCategorySchema = z.enum(['S', 'Z', 'E', 'AE', 'K', 'G', 'O', 'L', 'M']) // BT-151/BT-118
 
