@@ -1,4 +1,8 @@
 export const PACKAGE_NAME = '@factelec/invoice-core'
+export {
+  type FluxProfile,
+  generateFluxExtractUbl,
+} from './flux/generate-extract.js'
 export { buildInvoice } from './model/compute.js'
 export * from './model/money.js'
 export { type RuleViolation, validateBusinessRules } from './model/rules.js'
