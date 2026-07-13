@@ -15,6 +15,20 @@
       "when": 1783953289275,
       "tag": "0001_roles_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783969024224,
+      "tag": "0002_users_sessions_admins",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783969124224,
+      "tag": "0003_auth_rls_functions",
+      "breakpoints": true
     }
   ]
 }
