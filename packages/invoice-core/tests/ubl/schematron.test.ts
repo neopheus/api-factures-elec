@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildInvoice } from '../../src/model/compute.js'
+import { validateBusinessRules } from '../../src/model/rules.js'
 import { generateUbl } from '../../src/ubl/generate.js'
 import { multiRateInvoiceInput, simpleInvoiceInput } from '../fixtures.js'
 import { validateAgainstSchematron } from '../helpers/schematron.js'
@@ -39,5 +40,26 @@ describe('EN 16931 Schematron (official) on generated UBL', () => {
     const result = validateAgainstSchematron(generateUbl(withoutReason))
     expect(result.valid).toBe(false)
     expect(result.failedAsserts.map((f) => f.id)).toContain('BR-E-10')
+  })
+
+  it('stays Schematron-valid when a valid S line erroneously carries an exemption reason', () => {
+    // Reproduit le scénario exact de la revue : une entrée valide dont une ligne S
+    // porte un motif d'exonération (BT-120) ne doit plus produire d'UBL invalide —
+    // le garde-fou du moteur (computeVatBreakdown) filtre le motif avant émission.
+    const input = {
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          ...simpleInvoiceInput.lines[0]!,
+          exemptionReason: 'Motif ne devant pas apparaître (catégorie S)',
+        },
+      ],
+    }
+    const invoice = buildInvoice(input)
+    expect(validateBusinessRules(invoice)).toEqual([])
+
+    const result = validateAgainstSchematron(generateUbl(invoice))
+    expect(result.failedAsserts).toEqual([])
+    expect(result.valid).toBe(true)
   })
 })

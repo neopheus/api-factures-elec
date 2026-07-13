@@ -1,6 +1,6 @@
 {
   "files": {
-    "includes": ["**", "!**/docs", "!**/dist", "!**/coverage"]
+    "includes": ["**", "!**/docs", "!**/dist", "!**/coverage", "!**/*.sef.json"]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
   "linter": { "enabled": true, "rules": { "preset": "recommended" } },

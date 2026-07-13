@@ -19,13 +19,25 @@ const taxableSumRuleByCategory: Record<VatCategory, string> = {
 
 // EN 16931 : une ventilation TVA (BG-23) d'une catégorie exonérée doit porter
 // un code de motif (BT-121) OU un texte de motif (BT-120). Le code de règle
-// dépend de la catégorie.
+// dépend de la catégorie. Ces 5 clés correspondent exactement à
+// EXEMPT_VAT_CATEGORIES (schema.ts).
 const exemptionReasonRuleByCategory: Partial<Record<VatCategory, string>> = {
   E: 'BR-E-10',
   AE: 'BR-AE-10',
   K: 'BR-IC-10',
   G: 'BR-G-10',
   O: 'BR-O-10',
+}
+
+// EN 16931 : à l'inverse, une ventilation TVA d'une catégorie NON exonérée
+// (S, Z, L, M) ne doit porter ni code de motif (BT-121) ni texte de motif
+// (BT-120). Catégorie O exclue : ses règles BR-O-* exigent le motif
+// (cf. exemptionReasonRuleByCategory ci-dessus), elles ne l'interdisent pas.
+const forbiddenExemptionRuleByCategory: Partial<Record<VatCategory, string>> = {
+  S: 'BR-S-10',
+  Z: 'BR-Z-10',
+  L: 'BR-AF-10',
+  M: 'BR-AG-10',
 }
 
 // Sous-ensemble des règles métier EN 16931 (BR-CO-*, BR-S-*) pertinentes
@@ -80,6 +92,13 @@ export function validateBusinessRules(invoice: Invoice): RuleViolation[] {
       push(
         exemptionRule,
         `ventilation ${b.category} sans motif d'exonération (BT-120/BT-121 requis)`,
+      )
+
+    const forbiddenRule = forbiddenExemptionRuleByCategory[b.category]
+    if (forbiddenRule && (b.exemptionReasonCode || b.exemptionReason))
+      push(
+        forbiddenRule,
+        `ventilation ${b.category} avec motif d'exonération interdit (BT-120/BT-121 non autorisés pour cette catégorie)`,
       )
 
     const expected = round2(

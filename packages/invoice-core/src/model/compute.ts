@@ -1,5 +1,6 @@
 import { big, round2 } from './money.js'
 import {
+  EXEMPT_VAT_CATEGORIES,
   type Invoice,
   type InvoiceInput,
   type InvoiceLine,
@@ -43,10 +44,15 @@ function computeVatBreakdown(lines: InvoiceLine[]): VatBreakdown[] {
       big('0'),
     )
     // BT-120/BT-121 : le motif d'exonération de la ventilation (BG-23) reprend
-    // celui de la première ligne du groupe qui en porte un.
-    const withReason = groupLines.find(
-      (line) => line.exemptionReasonCode || line.exemptionReason,
-    )
+    // celui de la première ligne du groupe qui en porte un — mais seulement pour
+    // les catégories exonérées (EXEMPT_VAT_CATEGORIES) : BR-S-10/BR-Z-10/BR-AF-10/
+    // BR-AG-10 interdisent un motif sur les ventilations S, Z, L, M, y compris
+    // lorsqu'une ligne d'entrée en porte un par erreur.
+    const withReason = EXEMPT_VAT_CATEGORIES.has(category)
+      ? groupLines.find(
+          (line) => line.exemptionReasonCode || line.exemptionReason,
+        )
+      : undefined
     return {
       category,
       rate,

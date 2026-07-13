@@ -144,3 +144,56 @@ describe('exemption reason rules (BR-*-10)', () => {
     )
   })
 })
+
+// BR-S-10/BR-Z-10/BR-AF-10/BR-AG-10 : catégories non exonérées, le motif
+// d'exonération (BT-120/BT-121) y est interdit (cf. EXEMPT_VAT_CATEGORIES,
+// schema.ts, pour les 5 catégories où il est au contraire requis).
+const forbiddenExemptionCases: ReadonlyArray<
+  [VatCategory, string, 'code' | 'text']
+> = [
+  ['S', 'BR-S-10', 'code'],
+  ['Z', 'BR-Z-10', 'text'],
+  ['L', 'BR-AF-10', 'code'],
+  ['M', 'BR-AG-10', 'text'],
+]
+
+describe('forbidden exemption reason rules (BR-S/Z/AF/AG-10)', () => {
+  for (const [category, rule, kind] of forbiddenExemptionCases) {
+    it(`flags ${rule} when a ${category} breakdown carries an exemption reason (${kind})`, () => {
+      const base = buildInvoice(simpleInvoiceInput)
+      const invoice = {
+        ...base,
+        lines: [{ ...base.lines[0]!, vatCategory: category, vatRate: '20.00' }],
+        vatBreakdown: [
+          {
+            category,
+            rate: '20.00',
+            taxableAmount: base.lines[0]!.lineNetAmount,
+            taxAmount: base.totals.taxAmount,
+            ...(kind === 'code'
+              ? { exemptionReasonCode: 'VATEX-EU-132-1I' }
+              : { exemptionReason: 'Motif interdit pour cette catégorie' }),
+          },
+        ],
+      }
+      const rules = validateBusinessRules(invoice).map((v) => v.rule)
+      expect(rules).toContain(rule)
+    })
+
+    it(`does not flag ${rule} when the ${category} breakdown has no exemption reason`, () => {
+      const invoice = buildInvoice({
+        ...simpleInvoiceInput,
+        lines: [
+          {
+            ...simpleInvoiceInput.lines[0]!,
+            vatCategory: category,
+            vatRate: '20.00',
+          },
+        ],
+      })
+      expect(validateBusinessRules(invoice).map((v) => v.rule)).not.toContain(
+        rule,
+      )
+    })
+  }
+})

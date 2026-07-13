@@ -41,6 +41,19 @@ export const vatCategorySchema = z.enum([
   'M',
 ]) // BT-151/BT-118
 
+// EN 16931 : catégories de TVA « exonérées » sur lesquelles un motif d'exonération
+// (BT-120/BT-121) est autorisé — et même requis (BR-E/AE/IC/G/O-10, cf. rules.ts,
+// exemptionReasonRuleByCategory). Sur toute autre catégorie (S, Z, L, M) le motif
+// est interdit (BR-S/Z/AF/AG-10) : le moteur de calcul (compute.ts) s'appuie sur
+// cet ensemble pour ne jamais propager un motif porté par erreur sur ces lignes.
+export const EXEMPT_VAT_CATEGORIES = new Set<VatCategory>([
+  'E',
+  'AE',
+  'K',
+  'G',
+  'O',
+])
+
 // BT-23 « Cadre de Facturation » (cbc:ProfileID des extraits de flux F1) : nomenclature
 // fermée de 13 codes prescrite par la règle de gestion DGFiP G1.02 (Annexe 7 v1.9,
 // spécifications externes v3.2). Aucune valeur hors liste n'est acceptée.
