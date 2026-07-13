@@ -109,4 +109,35 @@ describe('generateCii (CII D16B, EN 16931 profile)', () => {
     expect(out).toContain('<ram:Name>Vendeur Minimal</ram:Name>')
     expect(out).toContain('<ram:Name>Acheteur Minimal</ram:Name>')
   })
+
+  it('emits BT-9 DueDateDateTime (format 102) when a due date is present', () => {
+    const xml = generateCii(buildInvoice(simpleInvoiceInput))
+    expect(xml).toContain('<ram:SpecifiedTradePaymentTerms>')
+    expect(xml).toContain(
+      '<udt:DateTimeString format="102">20260811</udt:DateTimeString>',
+    )
+    // BT-9 vit sous ApplicableHeaderTradeSettlement, avant la sommation.
+    expect(xml.indexOf('<ram:SpecifiedTradePaymentTerms>')).toBeLessThan(
+      xml.indexOf('<ram:SpecifiedTradeSettlementHeaderMonetarySummation>'),
+    )
+  })
+
+  it('omits payment terms when no due date is present', () => {
+    const xml = generateCii(buildInvoice(minimalInvoiceInput))
+    expect(xml).not.toContain('<ram:SpecifiedTradePaymentTerms>')
+  })
+
+  // Canari : prouve que le Schematron CII est réellement chargé et contraignant
+  // (et non un SEF vide qui « passerait » tout). Un CII amputé d'un total
+  // obligatoire (BR-CO) DOIT échouer.
+  it('canary: the CII Schematron actually rejects a non-conformant document', () => {
+    const good = generateCii(buildInvoice(simpleInvoiceInput))
+    const broken = good.replace(
+      /<ram:SpecifiedTradeSettlementHeaderMonetarySummation>[\s\S]*?<\/ram:SpecifiedTradeSettlementHeaderMonetarySummation>/,
+      '',
+    )
+    const r = validateAgainstSchematron(broken, CII_SEF)
+    expect(r.valid).toBe(false)
+    expect(r.failedAsserts.length).toBeGreaterThan(0)
+  })
 })

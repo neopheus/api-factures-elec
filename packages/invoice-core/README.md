@@ -77,6 +77,11 @@ contre `VATEX_CODES` (`src/model/vatex.ts` — interne, utilisée par
 de la liste blanche BR-CL-22 du Schematron EN 16931 CII et synchronisés par
 test avec le fichier vendorisé (provenance : `docs/reference/vatex/README.md`).
 
+**Décision (plan 1.3)** : `VATEX_CODES`/`isVatexCode` restent internes ;
+l'appartenance BT-121 est appliquée par `invoiceInputSchema` (via
+`parseInvoiceInput`, en amont de la génération). L'API 1.3 n'a pas besoin
+d'exposer la liste ; réexamen en 1.4 si le dashboard requiert une picklist.
+
 ## Conformité vérifiée en tests
 
 - **XSD OASIS UBL 2.1** (Invoice **et** CreditNote, document commercial) — xmllint.

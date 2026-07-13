@@ -1,0 +1,52 @@
+{
+  "name": "@factelec/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "swc src --out-dir dist --strip-leading-paths",
+    "dev": "node --import tsx --watch src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node --import tsx scripts/migrate.ts",
+    "provision:tenant": "node --import tsx scripts/provision-tenant.ts"
+  },
+  "dependencies": {
+    "@factelec/invoice-core": "workspace:*",
+    "@nestjs/common": "11.1.28",
+    "@nestjs/config": "4.0.4",
+    "@nestjs/core": "11.1.28",
+    "@nestjs/platform-express": "11.1.28",
+    "@nestjs/terminus": "11.1.1",
+    "@nestjs/throttler": "6.5.0",
+    "@node-rs/argon2": "2.0.2",
+    "drizzle-orm": "0.45.2",
+    "helmet": "8.3.0",
+    "nestjs-pino": "4.6.1",
+    "pg": "8.22.0",
+    "pino": "10.3.1",
+    "pino-http": "11.0.0",
+    "reflect-metadata": "0.2.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "11.1.28",
+    "@swc/cli": "0.8.1",
+    "@swc/core": "1.15.43",
+    "@testcontainers/postgresql": "12.0.4",
+    "@types/express": "5.0.6",
+    "@types/pg": "8.20.0",
+    "@types/supertest": "7.2.0",
+    "@vitest/coverage-v8": "4.1.10",
+    "drizzle-kit": "0.31.10",
+    "supertest": "7.2.2",
+    "testcontainers": "12.0.4",
+    "tsx": "4.23.1",
+    "unplugin-swc": "1.5.9",
+    "vitest": "4.1.10"
+  }
+}

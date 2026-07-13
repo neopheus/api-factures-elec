@@ -5,7 +5,8 @@
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
   "linter": { "enabled": true, "rules": { "preset": "recommended" } },
   "javascript": {
-    "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" }
+    "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" },
+    "parser": { "unsafeParameterDecoratorsEnabled": true }
   },
   "overrides": [
     {
