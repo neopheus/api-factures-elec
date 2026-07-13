@@ -1,5 +1,6 @@
 export const PACKAGE_NAME = '@factelec/invoice-core'
 export { generateCii } from './cii/generate.js'
+export { generateFacturX } from './facturx/generate.js'
 export { MissingBusinessProcessTypeError } from './flux/errors.js'
 export {
   type FluxProfile,

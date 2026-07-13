@@ -26,6 +26,11 @@ Tout ce qui suit est exporté depuis `src/index.ts`.
   (Annexe 7 v1.9) : B1, S1, M1, B2, S2, M2, B4, S4, M4, S5, S6, B7, S7. Ce champ
   est obligatoire pour cette fonction, qui lève `MissingBusinessProcessTypeError`
   en son absence.
+- `generateFacturX(invoice: Invoice): Promise<Uint8Array>` — Factur-X (profil
+  EN 16931) : PDF/A-3 porteur minimal (une page sans glyphe, donc sans fonte à
+  embarquer) avec `factur-x.xml` (sortie de `generateCii`) en pièce jointe
+  `AFRelationship=Alternative`, `OutputIntent` sRGB et XMP PDF/A-3 + Factur-X.
+  Asynchrone (API `@cantoo/pdf-lib`). Couvre la facture (380) et l'avoir (381).
 - `validateBusinessRules(invoice: Invoice): RuleViolation[]` — sous-ensemble EN 16931 :
   BR-CO-10/13/14/15/17/25, BR-{S,Z,E,AE,IC,G,O,AF,AG}-08, et motifs d'exonération
   BR-{E,AE,IC,G,O}-10 (BT-120/121). Tableau vide = conforme.
@@ -61,3 +66,11 @@ exonérée sans motif est refusée par les règles et par le Schematron officiel
   Node pur, aucune JVM ; toute `svrl:failed-assert` rend le test rouge.
 - **XSD DGFiP F1 BASE/FULL** (extraits de flux) — xmllint.
 - **Tests par propriétés** (fast-check, seedés) sur les invariants du moteur.
+- **Factur-X** (`generateFacturX`) — vérifié en Node pur : structure PDF/A-3
+  (magic bytes, `OutputIntent`, XMP `pdfaid`/`fx`), et surtout **le XML embarqué
+  == `generateCii(invoice)` et passe le Schematron CII** (helper
+  `doc.getAttachments()` de `@cantoo/pdf-lib`). La conformité PDF/A-3 formelle
+  (structure complète ISO 19005-3) n'est **pas** vérifiable en JS pur ; elle est
+  déléguée à un job CI optionnel et non bloquant (`.github/workflows/ci-pdfa.yml`,
+  déclenchement manuel `workflow_dispatch`) qui exécute **veraPDF** (Java) sur un
+  PDF de fixture et publie le rapport en artefact.
