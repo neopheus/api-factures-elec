@@ -66,6 +66,61 @@ describe('runInTenant (unit — séquence de commandes, sans Postgres réel)', (
     ])
     expect(client.query.mock.calls.some((c) => c[0] === 'COMMIT')).toBe(false)
     expect(client.release).toHaveBeenCalledTimes(1)
+    // ROLLBACK a réussi : connexion saine, PAS d'éviction (release sans erreur).
+    expect(client.release.mock.calls[0]?.[0]).toBeUndefined()
+  })
+
+  it('propagates the ORIGINAL error (not the ROLLBACK failure) and evicts the client from the pool when ROLLBACK itself rejects', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rows: [] }) // set_config
+      .mockRejectedValueOnce(new Error('rollback failed — connexion morte')) // ROLLBACK
+    const release = vi.fn()
+    const client = { query, release }
+    const pool = fakePool(client)
+
+    await expect(
+      runInTenant(pool, 'tenant-123', async () => {
+        throw new Error('boom original')
+      }),
+    ).rejects.toThrow('boom original')
+
+    expect(client.query.mock.calls.map((c) => c[0])).toEqual([
+      'BEGIN',
+      "SELECT set_config('app.tenant_id', $1, true)",
+      'ROLLBACK',
+    ])
+    // Release unique, mais avec une erreur : signale au pool d'évincer cette
+    // connexion (probablement cassée) plutôt que de la remettre en circulation.
+    expect(release).toHaveBeenCalledTimes(1)
+    const releasedWith = release.mock.calls[0]?.[0]
+    expect(releasedWith).toBeInstanceOf(Error)
+    expect((releasedWith as Error).message).toContain('rollback failed')
+  })
+
+  it('wraps a non-Error ROLLBACK rejection (e.g. a driver throwing a plain string) into an Error before evicting', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rows: [] }) // set_config
+      .mockRejectedValueOnce('connexion fermée par le serveur') // ROLLBACK (rejet non-Error)
+    const release = vi.fn()
+    const client = { query, release }
+    const pool = fakePool(client)
+
+    await expect(
+      runInTenant(pool, 'tenant-123', async () => {
+        throw new Error('boom original')
+      }),
+    ).rejects.toThrow('boom original')
+
+    expect(release).toHaveBeenCalledTimes(1)
+    const releasedWith = release.mock.calls[0]?.[0]
+    expect(releasedWith).toBeInstanceOf(Error)
+    expect((releasedWith as Error).message).toContain(
+      'connexion fermée par le serveur',
+    )
   })
 
   it('still releases the client when COMMIT itself rejects', async () => {

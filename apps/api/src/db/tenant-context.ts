@@ -12,6 +12,10 @@ export async function runInTenant<T>(
   work: (db: Db) => Promise<T>,
 ): Promise<T> {
   const client = await pool.connect()
+  // Non undefined UNIQUEMENT si le ROLLBACK lui-même échoue (connexion
+  // probablement cassée) : sert alors à évincer le client du pool via
+  // release(err) au lieu de le remettre en circulation.
+  let evictionError: Error | undefined
   try {
     await client.query('BEGIN')
     await client.query("SELECT set_config('app.tenant_id', $1, true)", [
@@ -22,9 +26,19 @@ export async function runInTenant<T>(
     await client.query('COMMIT')
     return result
   } catch (err) {
-    await client.query('ROLLBACK')
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackErr) {
+      // L'erreur du ROLLBACK ne doit JAMAIS remplacer l'erreur d'origine
+      // (celle de `work` ou du COMMIT) remontée à l'appelant ci-dessous —
+      // elle sert uniquement à décider de l'éviction de la connexion.
+      evictionError =
+        rollbackErr instanceof Error
+          ? rollbackErr
+          : new Error(String(rollbackErr))
+    }
     throw err
   } finally {
-    client.release()
+    client.release(evictionError)
   }
 }
