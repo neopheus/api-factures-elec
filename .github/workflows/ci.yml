@@ -16,6 +16,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libxml2-utils
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm build
-      - run: pnpm test
+      - run: pnpm build        # invoice-core (tsc) puis apps/api (swc), ordre topologique pnpm
+      - run: pnpm typecheck     # apps/api résout @factelec/invoice-core via son dist/
+      - run: pnpm test          # invoice-core + apps/api (Testcontainers Postgres via Docker du runner)
