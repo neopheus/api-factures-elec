@@ -23,7 +23,9 @@
   "devDependencies": {
     "@types/big.js": "^7.0.0",
     "@vitest/coverage-v8": "^4.1.10",
-    "vitest": "^4.1.10"
+    "saxon-js": "2.7.0",
+    "vitest": "^4.1.10",
+    "xslt3": "2.7.0"
   },
   "dependencies": {
     "big.js": "^7.0.1",
