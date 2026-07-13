@@ -15,6 +15,8 @@ jobs:
           cache: pnpm
       - run: sudo apt-get update && sudo apt-get install -y libxml2-utils
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit          # 0 vulnérabilité exigé (toutes sévérités)
+      - run: pnpm outdated -r    # échoue si une dépendance n'est pas en dernière stable
       - run: pnpm lint
       - run: pnpm build        # invoice-core (tsc) puis apps/api (swc), ordre topologique pnpm
       - run: pnpm typecheck     # apps/api résout @factelec/invoice-core via son dist/
