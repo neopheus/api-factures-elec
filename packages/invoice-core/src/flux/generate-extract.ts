@@ -1,25 +1,17 @@
 import { create } from 'xmlbuilder2'
 import type { XMLBuilder } from 'xmlbuilder2/lib/interfaces.js'
 import type { Invoice, Party } from '../model/schema.js'
+import {
+  addAmount,
+  appendTaxTotal,
+  NS_CAC,
+  NS_CBC,
+  NS_INVOICE,
+} from '../ubl/common.js'
 import { UnsupportedTypeCodeError } from '../ubl/errors.js'
 import { MissingBusinessProcessTypeError } from './errors.js'
 
 export type FluxProfile = 'BASE' | 'FULL'
-
-const NS_INVOICE = 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2'
-const NS_CAC =
-  'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
-const NS_CBC =
-  'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
-
-function addAmount(
-  parent: XMLBuilder,
-  name: string,
-  value: string,
-  currency: string,
-): void {
-  parent.ele(`cbc:${name}`).att('currencyID', currency).txt(value)
-}
 
 // Partie « fiscale » : ni cac:PartyName ni cbc:RegistrationName (interdits F1).
 // PartyLegalEntity = cbc:CompanyID seul, omis si le SIREN est absent (sinon bloc vide invalide).
@@ -78,21 +70,7 @@ export function generateFluxExtractUbl(
   addFluxParty(root, 'AccountingSupplierParty', invoice.seller)
   addFluxParty(root, 'AccountingCustomerParty', invoice.buyer)
 
-  const taxTotal = root.ele('cac:TaxTotal')
-  addAmount(taxTotal, 'TaxAmount', invoice.totals.taxAmount, invoice.currency)
-  for (const b of invoice.vatBreakdown) {
-    const sub = taxTotal.ele('cac:TaxSubtotal')
-    addAmount(sub, 'TaxableAmount', b.taxableAmount, invoice.currency)
-    addAmount(sub, 'TaxAmount', b.taxAmount, invoice.currency)
-    const category = sub.ele('cac:TaxCategory')
-    category.ele('cbc:ID').txt(b.category)
-    category.ele('cbc:Percent').txt(b.rate)
-    if (b.exemptionReasonCode)
-      category.ele('cbc:TaxExemptionReasonCode').txt(b.exemptionReasonCode)
-    if (b.exemptionReason)
-      category.ele('cbc:TaxExemptionReason').txt(b.exemptionReason)
-    category.ele('cac:TaxScheme').ele('cbc:ID').txt('VAT')
-  }
+  appendTaxTotal(root, invoice)
 
   // LegalMonetaryTotal réduit au SEUL TaxExclusiveAmount (F1).
   const total = root.ele('cac:LegalMonetaryTotal')
