@@ -20,7 +20,7 @@ export const envSchema = z.object({
     .default('info'),
   // Rôle applicatif UNIQUEMENT (soumis à la RLS). L'URL du rôle owner n'est
   // jamais chargée par le process API (elle sert aux scripts migration/provision).
-  DATABASE_URL: z.string().url(),
+  DATABASE_URL: z.url(),
   CORS_ALLOWED_ORIGINS: csv,
   RATE_LIMIT_TTL: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(120),
