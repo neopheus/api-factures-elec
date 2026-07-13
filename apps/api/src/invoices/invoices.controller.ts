@@ -13,18 +13,23 @@ import {
 import type { Response } from 'express'
 import { ApiKeyGuard } from '../auth/api-key.guard.js'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
+import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
 import { parseFormatKind } from './format-kind.js'
 // biome-ignore lint/style/useImportType: InvoicesService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { InvoicesService } from './invoices.service.js'
 
-@UseGuards(ApiKeyGuard)
+// Guards posés PAR MÉTHODE (pas de classe) : l'ingestion (POST) reste
+// exclusivement machine (ApiKeyGuard, pas de CSRF — pas de cookie côté
+// machine) ; la lecture (GET) accepte clé API OU session utilisateur du même
+// tenant (TenantAuthGuard) — jamais une session admin (refusée par ce guard).
 @Controller('invoices')
 export class InvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
 
   @Post()
   @HttpCode(201)
+  @UseGuards(ApiKeyGuard)
   ingest(
     @CurrentTenant() tenantId: string,
     @Body() body: unknown,
@@ -33,6 +38,7 @@ export class InvoicesController {
   }
 
   @Get()
+  @UseGuards(TenantAuthGuard)
   list(
     @CurrentTenant() tenantId: string,
     @Query('limit') limit?: string,
@@ -46,6 +52,7 @@ export class InvoicesController {
   }
 
   @Get(':id')
+  @UseGuards(TenantAuthGuard)
   get(@CurrentTenant() tenantId: string, @Param('id') id: string) {
     return this.invoices.get(tenantId, id)
   }
@@ -55,6 +62,7 @@ export class InvoicesController {
   // ProblemDetailsFilter. Ordre des routes : Nest résout :id/formats/:format
   // sans conflit avec :id (segment supplémentaire).
   @Get(':id/formats/:format')
+  @UseGuards(TenantAuthGuard)
   async getFormat(
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,

@@ -18,4 +18,5 @@ export interface SessionRequest extends Request {
   authUser?: AuthenticatedUser
   authAdmin?: AuthenticatedAdmin
   tenantId?: string // posé pour un user → réutilise @CurrentTenant / runInTenant
+  apiKeyId?: string // posé quand TenantAuthGuard authentifie via clé API (aligné sur TenantRequest, 1.3)
 }
