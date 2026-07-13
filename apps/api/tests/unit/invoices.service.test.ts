@@ -152,7 +152,10 @@ describe('InvoicesService.ingest', () => {
     vi.mocked(buildInvoice).mockReturnValue({ number: 'FA-DUP' } as never)
     vi.mocked(validateBusinessRules).mockReturnValue([])
     const repo = fakeRepo()
-    repo.persist.mockRejectedValue({ code: '23505' })
+    repo.persist.mockRejectedValue({
+      code: '23505',
+      constraint: 'invoices_tenant_number_unique',
+    })
     const service = new InvoicesService(repo as never, fakeGenerator() as never)
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
@@ -174,7 +177,10 @@ describe('InvoicesService.ingest', () => {
     vi.mocked(validateBusinessRules).mockReturnValue([])
     const repo = fakeRepo()
     const wrapped = new Error('Failed query: insert into "invoices" ...')
-    ;(wrapped as { cause?: unknown }).cause = { code: '23505' }
+    ;(wrapped as { cause?: unknown }).cause = {
+      code: '23505',
+      constraint: 'invoices_tenant_number_unique',
+    }
     repo.persist.mockRejectedValue(wrapped)
     const service = new InvoicesService(repo as never, fakeGenerator() as never)
 
@@ -185,6 +191,26 @@ describe('InvoicesService.ingest', () => {
           type: 'urn:factelec:problem:conflict',
         }),
       ),
+    )
+  })
+
+  it('does NOT map a 23505 with a DIFFERENT constraint name to 409 (hardening, task-8)', async () => {
+    // Une violation d'unicité 23505 sur une AUTRE contrainte (ex: future
+    // contrainte sur invoice_formats) ne doit jamais être faussement
+    // interprétée comme un doublon (tenant, number).
+    vi.mocked(parseInvoiceInput).mockReturnValue({} as never)
+    vi.mocked(buildInvoice).mockReturnValue({ number: 'FA-1' } as never)
+    vi.mocked(validateBusinessRules).mockReturnValue([])
+    const repo = fakeRepo()
+    const otherConstraintError = {
+      code: '23505',
+      constraint: 'invoice_formats_invoice_kind_unique',
+    }
+    repo.persist.mockRejectedValue(otherConstraintError)
+    const service = new InvoicesService(repo as never, fakeGenerator() as never)
+
+    await expect(service.ingest('tenant-1', {})).rejects.toBe(
+      otherConstraintError,
     )
   })
 

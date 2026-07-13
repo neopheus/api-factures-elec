@@ -8,13 +8,17 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common'
 import { ProblemType, problem } from '../common/problem.js'
 import {
+  type FormatKind,
   INVOICE_FORMAT_GENERATOR,
   type InvoiceFormatGenerator,
 } from './format-generator.port.js'
+import { isUuid } from './format-kind.js'
+import type { InvoiceSummary } from './invoices.repository.js'
 // biome-ignore lint/style/useImportType: InvoicesRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { InvoicesRepository } from './invoices.repository.js'
 
@@ -43,6 +47,14 @@ function isZodValidationError(e: unknown): e is { issues: ZodIssueLike[] } {
 // place l'erreur originale (celle qui porte le SQLSTATE `.code`) dans `.cause`
 // — on remonte donc la chaîne de causes (bornée) plutôt que de ne lire que le
 // niveau racine. Cf. task-7-report.md pour le détail de cette correction.
+//
+// Hardening (task-8, suite à la revue du plan) : on exige EN PLUS que
+// `.constraint` soit `invoices_tenant_number_unique` — sans cette vérification,
+// N'IMPORTE QUELLE violation d'unicité 23505 survenant dans la même
+// transaction (ex: une future contrainte sur invoice_formats) serait
+// faussement mappée en 409 "Invoice already exists" au lieu de remonter
+// l'erreur réelle. `constraint` est un champ standard des erreurs pg
+// (DatabaseError) pour ce SQLSTATE — présent au même niveau que `.code`.
 function isUniqueViolation(e: unknown): boolean {
   let current: unknown = e
   for (
@@ -52,7 +64,9 @@ function isUniqueViolation(e: unknown): boolean {
   ) {
     if (
       typeof current === 'object' &&
-      (current as { code?: string }).code === '23505'
+      (current as { code?: string }).code === '23505' &&
+      (current as { constraint?: string }).constraint ===
+        'invoices_tenant_number_unique'
     ) {
       return true
     }
@@ -120,5 +134,33 @@ export class InvoicesService {
       }
       throw e
     }
+  }
+
+  async get(
+    tenantId: string,
+    id: string,
+  ): Promise<InvoiceSummary & { availableFormats: FormatKind[] }> {
+    if (!isUuid(id)) throw this.notFound()
+    const invoice = await this.repo.findById(tenantId, id)
+    if (!invoice) throw this.notFound()
+    const availableFormats = await this.repo.listFormatKinds(tenantId, id)
+    return { ...invoice, availableFormats }
+  }
+
+  list(tenantId: string, limit: number, cursor?: string) {
+    return this.repo.list(tenantId, limit, cursor)
+  }
+
+  async getFormat(tenantId: string, id: string, kind: FormatKind) {
+    if (!isUuid(id)) throw this.notFound()
+    const format = await this.repo.findFormat(tenantId, id, kind)
+    if (!format) throw this.notFound()
+    return format
+  }
+
+  private notFound(): NotFoundException {
+    return new NotFoundException(
+      problem(404, ProblemType.notFound, 'Invoice not found'),
+    )
   }
 }
