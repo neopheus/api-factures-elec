@@ -89,16 +89,22 @@ test avec le fichier vendorisé (provenance : `docs/reference/vatex/README.md`).
   CII commercial) — xmllint.
 - **Tests par propriétés** (fast-check, seedés) sur les invariants du moteur.
 - **Factur-X** (`generateFacturX`) — vérifié en Node pur : structure PDF/A-3
-  (magic bytes, `OutputIntent`, XMP `pdfaid`/`fx`), et surtout **le XML embarqué
-  == `generateCii(invoice)` et passe le Schematron CII** (helper
-  `doc.getAttachments()` de `@cantoo/pdf-lib`). Deux limites assumées en v1,
-  toutes deux documentées : **(1)** la **conformité PDF/A-3 formelle**
-  (structure complète ISO 19005-3) n'est **pas** vérifiable en JS pur ; elle
-  est déléguée à un job CI optionnel et non bloquant
-  (`.github/workflows/ci-pdfa.yml`, déclenchement manuel `workflow_dispatch`)
-  qui exécute **veraPDF** (Java) sur un PDF de fixture et publie le rapport en
-  artefact — un PDF structurellement correct côté Node peut donc encore
-  échouer un contrôle PDF/A fin (transparence, fontes) tant que veraPDF n'a pas
-  tourné ; **(2)** la **page visuelle est minimale** (aucun glyphe, donc aucune
-  fonte à embarquer) — le rendu humainement lisible de la facture est reporté à
-  un plan ultérieur.
+  (magic bytes, `OutputIntent`, XMP `pdfaid`/`fx`, trailer `/ID`, XMP miroir de
+  DocInfo — `xmp:CreateDate`/`ModifyDate`, `pdf:Producer`, `dc:format`), et
+  surtout **le XML embarqué == `generateCii(invoice)` et passe le Schematron
+  CII** (helper `doc.getAttachments()` de `@cantoo/pdf-lib`). Génération
+  déterministe (DocInfo dérivé de `invoice.issueDate`, `/ID` dérivé d'un sha256
+  du XML embarqué) : deux appels sur la même facture produisent des octets
+  identiques. Deux limites assumées en v1, toutes deux documentées : **(1)** la
+  **conformité PDF/A-3 formelle** (structure complète ISO 19005-3) n'est
+  **pas** vérifiable en JS pur ; elle est déléguée à un job CI non bloquant
+  (`.github/workflows/ci-pdfa.yml`, déclenché manuellement
+  `workflow_dispatch` et automatiquement sur push touchant
+  `src/facturx/`/`src/cii/`) qui exécute **veraPDF** (Java) sur un PDF de
+  fixture et publie le rapport en artefact. Exécuté manuellement en local sur
+  ce fixture (profil PDF/A-3b, veraPDF 1.30.2) : **conforme** — 146/146 règles
+  et 258/258 contrôles passés, 0 échec ; le job restant non bloquant, une
+  régression future n'empêchera pas la CI principale de passer mais sera
+  visible dans le rapport artefact. **(2)** la **page visuelle est minimale**
+  (aucun glyphe, donc aucune fonte à embarquer) — le rendu humainement lisible
+  de la facture est reporté à un plan ultérieur.

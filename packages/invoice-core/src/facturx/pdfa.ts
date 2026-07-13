@@ -1,16 +1,37 @@
 import { type PDFDocument, PDFName, PDFString } from '@cantoo/pdf-lib'
 import { SRGB_ICC_BASE64 } from './srgb-icc.js'
 
-// XMP minimal : identification PDF/A-3 + description Factur-X (profil EN 16931).
+// Métadonnées XMP devant être le miroir exact de DocInfo (CreationDate/ModDate/
+// Producer) — PDF/A (ISO 19005-3 §6.7.3) interdit toute désynchronisation entre
+// les deux. createDate/modifyDate : ISO 8601 (ex. "2026-07-12T00:00:00Z").
+export interface FacturXXmpMetadata {
+  producer: string
+  createDate: string
+  modifyDate: string
+}
+
+// XMP minimal : identification PDF/A-3 + description Factur-X (profil EN 16931)
+// + miroir DocInfo (xmp:CreateDate/ModifyDate, pdf:Producer, dc:format — requis
+// par PDF/A, cf. FacturXXmpMetadata ci-dessus).
 // dc:title reprend le numéro de facture pour donner un contexte au paquet XMP ;
 // le reste de la structure suit le schéma d'extension Factur-X (FNFE-MPE) tel que
 // repris par les implémentations éprouvées (node-zugferd).
-export function facturXXmp(invoiceNumber: string): string {
+export function facturXXmp(
+  invoiceNumber: string,
+  metadata: FacturXXmpMetadata,
+): string {
   return `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
   <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
    <dc:title><rdf:Alt><rdf:li xml:lang="x-default">${escapeXml(invoiceNumber)}</rdf:li></rdf:Alt></dc:title>
+   <dc:format>application/pdf</dc:format>
+  </rdf:Description>
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
+   <xmp:CreateDate>${escapeXml(metadata.createDate)}</xmp:CreateDate>
+   <xmp:ModifyDate>${escapeXml(metadata.modifyDate)}</xmp:ModifyDate>
+   <pdf:Producer>${escapeXml(metadata.producer)}</pdf:Producer>
   </rdf:Description>
   <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
    <pdfaid:part>3</pdfaid:part>

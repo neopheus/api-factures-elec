@@ -3,9 +3,16 @@ name: PDF/A-3 conformance (veraPDF, optional)
 # Vérification formelle de la conformité PDF/A-3 du Factur-X produit par
 # generateFacturX, via veraPDF (Java, GPLv3+/MPLv2+). Aucun validateur PDF/A
 # pur JS n'existe : cette étape est déportée hors de la suite Node principale
-# (ci.yml), déclenchée manuellement, et non bloquante (continue-on-error).
+# (ci.yml), non bloquante (continue-on-error). Déclenchée manuellement
+# (workflow_dispatch) et automatiquement sur push touchant la génération
+# Factur-X/CII embarqué (le job reste non bloquant : un échec ne bloque pas
+# la CI principale).
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'packages/invoice-core/src/facturx/**'
+      - 'packages/invoice-core/src/cii/**'
 
 jobs:
   verapdf:
@@ -52,11 +59,14 @@ jobs:
           "
 
       - name: veraPDF (profil PDF/A-3B)
+        # verapdf/verapdf n'existe pas sur Docker Hub (image inexistante,
+        # constaté en local : pull access denied). verapdf/cli est l'image
+        # officielle du consortium veraPDF portant ce CLI.
         run: |
           mkdir -p verapdf-report
           docker run --rm \
             -v "$PWD:/data" \
-            verapdf/verapdf \
+            verapdf/cli \
             --flavour 3b --format text \
             "/data/facturx-fixture.pdf" > verapdf-report/report.txt || true
           cat verapdf-report/report.txt

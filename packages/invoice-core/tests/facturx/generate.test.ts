@@ -51,6 +51,29 @@ describe('generateFacturX (PDF/A-3 + embedded CII)', () => {
     expect(SRGB_ICC_BASE64.length).toBeGreaterThan(1000)
   })
 
+  it('sets a trailer /ID, mandatory per ISO 19005-3 §6.1.3', async () => {
+    const pdf = await generateFacturX(buildInvoice(simpleInvoiceInput))
+    const raw = new TextDecoder('latin1').decode(pdf)
+    expect(raw).toContain('/ID [')
+  })
+
+  it('mirrors DocInfo (CreationDate/ModDate/Producer) in the XMP packet, as PDF/A requires', async () => {
+    const pdf = await generateFacturX(buildInvoice(simpleInvoiceInput))
+    const raw = new TextDecoder('latin1').decode(pdf)
+    expect(raw).toContain('xmp:CreateDate')
+    expect(raw).toContain('xmp:ModifyDate')
+    expect(raw).toContain('pdf:Producer')
+    expect(raw).toContain('dc:format')
+    expect(raw).toContain('application/pdf')
+  })
+
+  it('is deterministic: generating the same invoice twice yields identical bytes', async () => {
+    const invoice = buildInvoice(simpleInvoiceInput)
+    const pdf1 = await generateFacturX(invoice)
+    const pdf2 = await generateFacturX(invoice)
+    expect(Buffer.from(pdf1).equals(Buffer.from(pdf2))).toBe(true)
+  })
+
   it('keeps the src ICC constant in sync with the vendored profile', () => {
     const vendored = readFileSync(
       resolve(
