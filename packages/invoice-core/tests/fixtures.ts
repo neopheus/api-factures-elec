@@ -41,6 +41,12 @@ export const simpleInvoiceInput: InvoiceInput = {
   ],
 }
 
+export const creditNoteInput: InvoiceInput = {
+  ...simpleInvoiceInput,
+  number: 'AV-2026-001',
+  typeCode: '381',
+}
+
 export const multiRateInvoiceInput: InvoiceInput = {
   ...simpleInvoiceInput,
   number: 'FA-2026-002',

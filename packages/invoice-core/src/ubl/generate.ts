@@ -1,6 +1,7 @@
 import { create } from 'xmlbuilder2'
 import type { XMLBuilder } from 'xmlbuilder2/lib/interfaces.js'
 import type { Invoice, Party } from '../model/schema.js'
+import { UnsupportedTypeCodeError } from './errors.js'
 
 const NS_INVOICE = 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2'
 const NS_CAC =
@@ -45,6 +46,9 @@ function addParty(
 }
 
 export function generateUbl(invoice: Invoice): string {
+  if (invoice.typeCode !== '380') {
+    throw new UnsupportedTypeCodeError(invoice.typeCode)
+  }
   const doc = create({ version: '1.0', encoding: 'UTF-8' })
   const root = doc
     .ele(NS_INVOICE, 'Invoice')

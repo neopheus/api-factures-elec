@@ -70,4 +70,34 @@ describe('parseInvoiceInput', () => {
         .issueDate,
     ).toBe('2028-02-29')
   })
+
+  it('rejects a negative quantity', () => {
+    const bad = {
+      ...simpleInvoiceInput,
+      lines: [{ ...simpleInvoiceInput.lines[0]!, quantity: '-1' }],
+    }
+    expect(() => parseInvoiceInput(bad)).toThrow()
+  })
+
+  it('rejects a negative unit price', () => {
+    const bad = {
+      ...simpleInvoiceInput,
+      lines: [{ ...simpleInvoiceInput.lines[0]!, unitPrice: '-10.00' }],
+    }
+    expect(() => parseInvoiceInput(bad)).toThrow()
+  })
+
+  it('rejects a negative VAT rate', () => {
+    const bad = {
+      ...simpleInvoiceInput,
+      lines: [{ ...simpleInvoiceInput.lines[0]!, vatRate: '-20.00' }],
+    }
+    expect(() => parseInvoiceInput(bad)).toThrow()
+  })
+
+  it('accepts a credit note type code (381)', () => {
+    expect(
+      parseInvoiceInput({ ...simpleInvoiceInput, typeCode: '381' }).typeCode,
+    ).toBe('381')
+  })
 })

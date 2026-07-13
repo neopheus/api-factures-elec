@@ -5,10 +5,10 @@ import { z } from 'zod'
 
 const amount2 = z
   .string()
-  .regex(/^-?\d+\.\d{2}$/, 'amount must have exactly 2 decimals')
+  .regex(/^\d+\.\d{2}$/, 'amount must be non-negative with exactly 2 decimals')
 const decimal4 = z
   .string()
-  .regex(/^-?\d+(\.\d{1,4})?$/, 'decimal with up to 4 decimals')
+  .regex(/^\d+(\.\d{1,4})?$/, 'non-negative decimal with up to 4 decimals')
 function isExistingCalendarDate(value: string): boolean {
   const year = Number(value.slice(0, 4))
   const month = Number(value.slice(5, 7))
