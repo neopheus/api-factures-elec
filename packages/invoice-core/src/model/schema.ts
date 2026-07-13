@@ -5,10 +5,13 @@ import { z } from 'zod'
 
 const amount2 = z
   .string()
-  .regex(/^-?\d+\.\d{2}$/, 'amount must have exactly 2 decimals')
+  .regex(/^\d+\.\d{2}$/, 'amount must be non-negative with exactly 2 decimals')
 const decimal4 = z
   .string()
-  .regex(/^-?\d+(\.\d{1,4})?$/, 'decimal with up to 4 decimals')
+  .regex(/^\d+(\.\d{1,4})?$/, 'non-negative decimal with up to 4 decimals')
+const vatexCode = z
+  .string()
+  .regex(/^VATEX-[A-Z]{2}(-[A-Za-z0-9]+)+$/, 'invalid VATEX code') // BT-121
 function isExistingCalendarDate(value: string): boolean {
   const year = Number(value.slice(0, 4))
   const month = Number(value.slice(5, 7))
@@ -38,6 +41,38 @@ export const vatCategorySchema = z.enum([
   'M',
 ]) // BT-151/BT-118
 
+// EN 16931 : catégories de TVA « exonérées » sur lesquelles un motif d'exonération
+// (BT-120/BT-121) est autorisé — et même requis (BR-E/AE/IC/G/O-10, cf. rules.ts,
+// exemptionReasonRuleByCategory). Sur toute autre catégorie (S, Z, L, M) le motif
+// est interdit (BR-S/Z/AF/AG-10) : le moteur de calcul (compute.ts) s'appuie sur
+// cet ensemble pour ne jamais propager un motif porté par erreur sur ces lignes.
+export const EXEMPT_VAT_CATEGORIES = new Set<VatCategory>([
+  'E',
+  'AE',
+  'K',
+  'G',
+  'O',
+])
+
+// BT-23 « Cadre de Facturation » (cbc:ProfileID des extraits de flux F1) : nomenclature
+// fermée de 13 codes prescrite par la règle de gestion DGFiP G1.02 (Annexe 7 v1.9,
+// spécifications externes v3.2). Aucune valeur hors liste n'est acceptée.
+export const businessProcessTypeSchema = z.enum([
+  'B1',
+  'S1',
+  'M1',
+  'B2',
+  'S2',
+  'M2',
+  'B4',
+  'S4',
+  'M4',
+  'S5',
+  'S6',
+  'B7',
+  'S7',
+])
+
 export const postalAddressSchema = z.object({
   streetName: z.string().min(1).optional(), // BT-35/BT-50
   city: z.string().min(1).optional(), // BT-37/BT-52
@@ -66,6 +101,8 @@ export const invoiceLineInputSchema = z.object({
   unitPrice: decimal4, // BT-146
   vatCategory: vatCategorySchema, // BT-151
   vatRate: decimal4, // BT-152 (pourcentage)
+  exemptionReasonCode: vatexCode.optional(), // BT-121 (VATEX)
+  exemptionReason: z.string().min(1).optional(), // BT-120 (texte libre)
 })
 
 export const invoiceInputSchema = z.object({
@@ -77,6 +114,7 @@ export const invoiceInputSchema = z.object({
   seller: partySchema, // BG-4
   buyer: partySchema, // BG-7
   lines: z.array(invoiceLineInputSchema).min(1), // BG-25
+  businessProcessType: businessProcessTypeSchema.optional(), // BT-23 (règle G1.02)
 })
 
 export const invoiceLineSchema = invoiceLineInputSchema.extend({
@@ -88,6 +126,8 @@ export const vatBreakdownSchema = z.object({
   rate: decimal4, // BT-119
   taxableAmount: amount2, // BT-116
   taxAmount: amount2, // BT-117
+  exemptionReasonCode: vatexCode.optional(), // BT-121
+  exemptionReason: z.string().min(1).optional(), // BT-120
 })
 
 export const totalsSchema = z.object({
@@ -105,6 +145,7 @@ export const invoiceSchema = invoiceInputSchema.extend({
 })
 
 export type VatCategory = z.infer<typeof vatCategorySchema>
+export type BusinessProcessType = z.infer<typeof businessProcessTypeSchema>
 export type PostalAddress = z.infer<typeof postalAddressSchema>
 export type Party = z.infer<typeof partySchema>
 export type InvoiceLineInput = z.infer<typeof invoiceLineInputSchema>

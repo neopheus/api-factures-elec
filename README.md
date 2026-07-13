@@ -9,20 +9,15 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (12/07/2026) : plan 1.1 terminé et mergé dans `main`.**
-> Le package `invoice-core` (modèle EN 16931, calculs TVA, règles de cohérence,
-> UBL 2.1 validé XSD OASIS) est livré : 36 tests, couverture 100 %, revue finale
-> « prêt à merger » sans point critique. La conception complète est décrite dans
-> [`docs/superpowers/specs/`](docs/superpowers/specs/).
+> **État du projet (13/07/2026) : plans 1.1 et 1.2 terminés et mergés dans `main`.**
+> `invoice-core` (v0.2.0) livre : modèle EN 16931, calculs TVA, règles de cohérence
+> et d'exonération (BT-120/121), UBL 2.1 validé XSD OASIS **et** Schematron officiel
+> EN 16931 (Node pur, saxon-js), extraits de flux DGFiP F1 BASE/FULL validés XSD,
+> build `dist/` + `exports` map, tests par propriétés fast-check. Couverture 100 %.
 >
-> **Reprise des travaux — prochaine étape : rédiger puis exécuter le plan 1.2**
-> (« Conformité EN 16931 et extraits de flux » : build + exports map du package,
-> montants non négatifs + avoirs 381, exonérations BT-120/121, Schematron
-> EN 16931 officiel en tests, émetteurs d'extraits F1 BASE/FULL, tests par
-> propriétés). Le plan était en cours de rédaction au moment de la pause — le
-> fichier `docs/superpowers/plans/2026-07-12-phase1-2-*.md` n'existe pas encore ;
-> le relancer en premier. Factur-X/CII suivront (plan 1.2bis), puis l'API NestJS
-> (plan 1.3). Journal de progression détaillé : `.superpowers/sdd/progress.md`
+> **Reprise des travaux — prochaine étape : plan 1.2bis** (Factur-X PDF/A-3 + CII,
+> CII seul, génération UBL CreditNote pour l'avoir 381), puis le plan 1.3 (API
+> NestJS, auth multi-tenant, ingestion). Journal détaillé : `.superpowers/sdd/progress.md`
 > (hors git, local).
 
 ## Structure du dépôt
@@ -52,9 +47,19 @@ Cœur métier de la facturation, aligné sur le modèle sémantique EN 16931 :
 - **Moteur de calcul** (`src/model/compute.ts`) : `buildInvoice` calcule la
   ventilation TVA et les totaux à partir des lignes.
 - **Règles de gestion** (`src/model/rules.ts`) : contrôles de cohérence EN 16931
-  (BR-CO-*), signalés en `RuleViolation`.
-- **Génération UBL 2.1** (en cours) : XML validé contre les XSD officiels DGFiP
-  (`docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/`).
+  (BR-CO-*) et motifs d'exonération BT-120/121 (BR-{E,AE,IC,G,O}-10), signalés en
+  `RuleViolation`.
+- **Génération UBL 2.1** : XML validé dans les tests contre le XSD standard
+  OASIS **et** le Schematron officiel EN 16931 (`validation-1.3.16`, exécuté en
+  Node pur via saxon-js, sans JVM). Lève `UnsupportedTypeCodeError` pour un avoir
+  (typeCode 381 — génération CreditNote reportée au plan 1.2bis).
+- **Extraits de flux DGFiP F1** (`src/flux/generate-extract.ts`) : profils BASE
+  (en-tête sans lignes) et FULL (lignes épurées), validés contre les XSD
+  réglementaires (`docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/`).
+  Le `cbc:ProfileID` de l'extrait porte le cadre de facturation BT-23 (règle de
+  gestion DGFiP G1.02, nomenclature fermée de 13 codes) ; `generateFluxExtractUbl`
+  lève `MissingBusinessProcessTypeError` si `businessProcessType` n'est pas
+  renseigné sur la facture.
 
 La bibliothèque n'effectue aucun accès réseau, base de données ni système de
 fichiers (hors tests).
@@ -62,12 +67,15 @@ fichiers (hors tests).
 ## Développement
 
 Prérequis : Node.js ≥ 22 (`.nvmrc`), pnpm 10, et `xmllint` (libxml2) pour la
-validation XSD dans les tests.
+validation XSD dans les tests. Le Schematron EN 16931 officiel s'exécute en
+**Node pur** (saxon-js, `xslt3`), sans JVM ; le premier `pnpm test` compile le
+SEF (~10-20 s), mis en cache ensuite (répertoire git-ignoré).
 
 ```sh
 pnpm install
 pnpm lint        # Biome (lint + format check)
 pnpm typecheck   # tsc --noEmit sur tous les packages
+pnpm build       # Compilation dist/ (tsc -p tsconfig.build.json)
 pnpm test        # Vitest avec couverture (seuil bloquant : 90 %)
 ```
 
@@ -90,8 +98,12 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
 
 ## Feuille de route (phase 1)
 
-1. **1.1 — Socle monorepo + invoice-core** (en cours) : modèle canonique, calculs,
+1. **1.1 — Socle monorepo + invoice-core** (terminé) : modèle canonique, calculs,
    UBL 2.1 validé XSD.
-2. **1.2** — Factur-X/CII, validation Schematron, golden files étendus.
-3. **1.3** — API NestJS, auth multi-tenant, ingestion.
-4. **1.4** — Dashboard minimal.
+2. **1.2 — Conformité EN 16931 + extraits de flux** (terminé) : montants non
+   négatifs et refus de l'avoir 381, exonérations BT-120/121, Schematron EN 16931
+   officiel, extraits de flux DGFiP F1 BASE/FULL, tests par propriétés.
+3. **1.2bis** — Factur-X (PDF/A-3 + CII), CII seul, génération UBL CreditNote
+   pour l'avoir 381.
+4. **1.3** — API NestJS, auth multi-tenant, ingestion.
+5. **1.4** — Dashboard minimal.

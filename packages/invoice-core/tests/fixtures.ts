@@ -6,6 +6,7 @@ export const simpleInvoiceInput: InvoiceInput = {
   dueDate: '2026-08-11',
   typeCode: '380',
   currency: 'EUR',
+  businessProcessType: 'S1', // BT-23 : prestation de service seule (conseil)
   seller: {
     name: 'AV Digital',
     siren: '123456789',
@@ -41,9 +42,16 @@ export const simpleInvoiceInput: InvoiceInput = {
   ],
 }
 
+export const creditNoteInput: InvoiceInput = {
+  ...simpleInvoiceInput,
+  number: 'AV-2026-001',
+  typeCode: '381',
+}
+
 export const multiRateInvoiceInput: InvoiceInput = {
   ...simpleInvoiceInput,
   number: 'FA-2026-002',
+  businessProcessType: 'M1', // BT-23 : facture double (biens + services)
   lines: [
     {
       id: '1',
@@ -71,6 +79,7 @@ export const multiRateInvoiceInput: InvoiceInput = {
       unitPrice: '150.00',
       vatCategory: 'E',
       vatRate: '0.00',
+      exemptionReasonCode: 'VATEX-EU-132-1I',
     },
   ],
 }

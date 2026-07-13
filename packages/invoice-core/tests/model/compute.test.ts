@@ -44,6 +44,7 @@ describe('buildInvoice', () => {
         rate: '0.00',
         taxableAmount: '300.00',
         taxAmount: '0.00',
+        exemptionReasonCode: 'VATEX-EU-132-1I',
       },
     ])
     expect(invoice.totals).toEqual({
@@ -93,5 +94,60 @@ describe('buildInvoice', () => {
         taxAmount: '30.00',
       },
     ])
+  })
+
+  it('propagates the exemption reason from the line to the VAT breakdown', () => {
+    const invoice = buildInvoice(multiRateInvoiceInput)
+    const exempt = invoice.vatBreakdown.find((b) => b.category === 'E')
+    expect(exempt?.exemptionReasonCode).toBe('VATEX-EU-132-1I')
+  })
+
+  it('leaves standard-rate breakdowns without an exemption reason', () => {
+    const invoice = buildInvoice(multiRateInvoiceInput)
+    const standard = invoice.vatBreakdown.find((b) => b.category === 'S')
+    expect(standard?.exemptionReasonCode).toBeUndefined()
+    expect(standard?.exemptionReason).toBeUndefined()
+  })
+
+  it('strips the exemption reason from a non-exempt category (S) even when the input line carries one', () => {
+    // BR-S-10 (EN 16931) interdit un motif d'exonération sur une ventilation S :
+    // le moteur ne doit pas propager un motif porté par erreur sur une ligne S/Z/L/M.
+    const invoice = buildInvoice({
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          ...simpleInvoiceInput.lines[0]!,
+          exemptionReason: 'Motif ne devant pas apparaître (catégorie S)',
+        },
+      ],
+    })
+    const standard = invoice.vatBreakdown.find((b) => b.category === 'S')
+    expect(standard).not.toHaveProperty('exemptionReason')
+    expect(standard).not.toHaveProperty('exemptionReasonCode')
+  })
+
+  it('propagates businessProcessType (BT-23) from input to the built invoice', () => {
+    const invoice = buildInvoice({
+      ...simpleInvoiceInput,
+      businessProcessType: 'S1',
+    })
+    expect(invoice.businessProcessType).toBe('S1')
+  })
+
+  it('propagates a free-text exemption reason when no VATEX code is given', () => {
+    const invoice = buildInvoice({
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          ...simpleInvoiceInput.lines[0]!,
+          vatCategory: 'E',
+          vatRate: '0.00',
+          exemptionReason: 'Motif exonération sans code VATEX',
+        },
+      ],
+    })
+    const exempt = invoice.vatBreakdown.find((b) => b.category === 'E')
+    expect(exempt?.exemptionReason).toBe('Motif exonération sans code VATEX')
+    expect(exempt?.exemptionReasonCode).toBeUndefined()
   })
 })

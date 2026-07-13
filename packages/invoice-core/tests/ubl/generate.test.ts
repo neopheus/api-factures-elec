@@ -69,6 +69,25 @@ describe('generateUbl', () => {
     )
   })
 
+  it('emits a free-text exemption reason without a code when only the text is given', () => {
+    const invoice = buildInvoice({
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          ...simpleInvoiceInput.lines[0]!,
+          vatCategory: 'E',
+          vatRate: '0.00',
+          exemptionReason: 'Motif exonération sans code VATEX',
+        },
+      ],
+    })
+    const out = generateUbl(invoice)
+    expect(out).toContain(
+      '<cbc:TaxExemptionReason>Motif exonération sans code VATEX</cbc:TaxExemptionReason>',
+    )
+    expect(out).not.toContain('<cbc:TaxExemptionReasonCode>')
+  })
+
   it('omits optional elements when address parts, vatId, siren and due date are absent', () => {
     const out = generateUbl(buildInvoice(minimalInvoiceInput))
     expect(out).not.toContain('<cbc:DueDate>')

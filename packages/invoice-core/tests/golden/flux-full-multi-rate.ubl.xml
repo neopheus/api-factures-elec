@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
   <cbc:CustomizationID>urn:cen.eu:en16931:2017</cbc:CustomizationID>
+  <cbc:ProfileID>M1</cbc:ProfileID>
   <cbc:ID>FA-2026-002</cbc:ID>
   <cbc:IssueDate>2026-07-12</cbc:IssueDate>
   <cbc:DueDate>2026-08-11</cbc:DueDate>
@@ -8,9 +9,6 @@
   <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
   <cac:AccountingSupplierParty>
     <cac:Party>
-      <cac:PartyName>
-        <cbc:Name>AV Digital</cbc:Name>
-      </cac:PartyName>
       <cac:PostalAddress>
         <cbc:StreetName>1 rue de la Paix</cbc:StreetName>
         <cbc:CityName>Paris</cbc:CityName>
@@ -26,16 +24,12 @@
         </cac:TaxScheme>
       </cac:PartyTaxScheme>
       <cac:PartyLegalEntity>
-        <cbc:RegistrationName>AV Digital</cbc:RegistrationName>
         <cbc:CompanyID>123456789</cbc:CompanyID>
       </cac:PartyLegalEntity>
     </cac:Party>
   </cac:AccountingSupplierParty>
   <cac:AccountingCustomerParty>
     <cac:Party>
-      <cac:PartyName>
-        <cbc:Name>Client SARL</cbc:Name>
-      </cac:PartyName>
       <cac:PostalAddress>
         <cbc:StreetName>5 avenue des Champs</cbc:StreetName>
         <cbc:CityName>Lyon</cbc:CityName>
@@ -51,7 +45,6 @@
         </cac:TaxScheme>
       </cac:PartyTaxScheme>
       <cac:PartyLegalEntity>
-        <cbc:RegistrationName>Client SARL</cbc:RegistrationName>
         <cbc:CompanyID>987654321</cbc:CompanyID>
       </cac:PartyLegalEntity>
     </cac:Party>
@@ -94,60 +87,30 @@
     </cac:TaxSubtotal>
   </cac:TaxTotal>
   <cac:LegalMonetaryTotal>
-    <cbc:LineExtensionAmount currencyID="EUR">409.87</cbc:LineExtensionAmount>
     <cbc:TaxExclusiveAmount currencyID="EUR">409.87</cbc:TaxExclusiveAmount>
-    <cbc:TaxInclusiveAmount currencyID="EUR">423.15</cbc:TaxInclusiveAmount>
-    <cbc:PayableAmount currencyID="EUR">423.15</cbc:PayableAmount>
   </cac:LegalMonetaryTotal>
   <cac:InvoiceLine>
-    <cbc:ID>1</cbc:ID>
     <cbc:InvoicedQuantity unitCode="C62">3</cbc:InvoicedQuantity>
-    <cbc:LineExtensionAmount currencyID="EUR">59.97</cbc:LineExtensionAmount>
     <cac:Item>
       <cbc:Name>Livre</cbc:Name>
-      <cac:ClassifiedTaxCategory>
-        <cbc:ID>S</cbc:ID>
-        <cbc:Percent>5.50</cbc:Percent>
-        <cac:TaxScheme>
-          <cbc:ID>VAT</cbc:ID>
-        </cac:TaxScheme>
-      </cac:ClassifiedTaxCategory>
     </cac:Item>
     <cac:Price>
       <cbc:PriceAmount currencyID="EUR">19.99</cbc:PriceAmount>
     </cac:Price>
   </cac:InvoiceLine>
   <cac:InvoiceLine>
-    <cbc:ID>2</cbc:ID>
     <cbc:InvoicedQuantity unitCode="C62">1</cbc:InvoicedQuantity>
-    <cbc:LineExtensionAmount currencyID="EUR">49.90</cbc:LineExtensionAmount>
     <cac:Item>
       <cbc:Name>Abonnement SaaS</cbc:Name>
-      <cac:ClassifiedTaxCategory>
-        <cbc:ID>S</cbc:ID>
-        <cbc:Percent>20.00</cbc:Percent>
-        <cac:TaxScheme>
-          <cbc:ID>VAT</cbc:ID>
-        </cac:TaxScheme>
-      </cac:ClassifiedTaxCategory>
     </cac:Item>
     <cac:Price>
       <cbc:PriceAmount currencyID="EUR">49.90</cbc:PriceAmount>
     </cac:Price>
   </cac:InvoiceLine>
   <cac:InvoiceLine>
-    <cbc:ID>3</cbc:ID>
     <cbc:InvoicedQuantity unitCode="C62">2</cbc:InvoicedQuantity>
-    <cbc:LineExtensionAmount currencyID="EUR">300.00</cbc:LineExtensionAmount>
     <cac:Item>
       <cbc:Name>Formation exonérée</cbc:Name>
-      <cac:ClassifiedTaxCategory>
-        <cbc:ID>E</cbc:ID>
-        <cbc:Percent>0.00</cbc:Percent>
-        <cac:TaxScheme>
-          <cbc:ID>VAT</cbc:ID>
-        </cac:TaxScheme>
-      </cac:ClassifiedTaxCategory>
     </cac:Item>
     <cac:Price>
       <cbc:PriceAmount currencyID="EUR">150.00</cbc:PriceAmount>
