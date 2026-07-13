@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
+import cookieParser from 'cookie-parser'
 import helmet from 'helmet'
 import { AppModule } from '../../../src/app.module.js'
 import { ProblemDetailsFilter } from '../../../src/common/http-exception.filter.js'
@@ -20,6 +21,7 @@ export async function createTestApp(appUrl: string): Promise<INestApplication> {
     .compile()
   const app = moduleRef.createNestApplication({ bufferLogs: true })
   app.use(helmet())
+  app.use(cookieParser())
   app.useGlobalFilters(new ProblemDetailsFilter())
   app.enableShutdownHooks()
   await app.init()

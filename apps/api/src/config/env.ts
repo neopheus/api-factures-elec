@@ -31,6 +31,12 @@ export const envSchema = z.object({
   // seul un entier ≥ 0 est accepté (nombre de sauts de proxy à faire
   // confiance, cf. doc Express `trust proxy`).
   TRUST_PROXY: z.coerce.number().int().nonnegative().default(0),
+  // Durée de vie ABSOLUE de la session (aucun renouvellement glissant à la
+  // lecture) : cf. session.service.ts / session.guard.ts.
+  SESSION_TTL_HOURS: z.coerce.number().int().positive().max(720).default(12),
+  // Domaine du cookie de session (ex: `.factelec.fr` en prod, pour partager le
+  // cookie entre le dashboard et l'API sur des sous-domaines). Absent en dev.
+  SESSION_COOKIE_DOMAIN: z.string().optional(),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

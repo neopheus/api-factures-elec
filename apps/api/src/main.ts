@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { ConfigService } from '@nestjs/config'
 import { NestFactory } from '@nestjs/core'
+import cookieParser from 'cookie-parser'
 import helmet from 'helmet'
 import { Logger } from 'nestjs-pino'
 import { AppModule } from './app.module.js'
@@ -13,10 +14,12 @@ async function bootstrap(): Promise<void> {
   const config = app.get<ConfigService<EnvConfig, true>>(ConfigService)
 
   app.use(helmet())
+  app.use(cookieParser())
   app.enableCors({
     origin: config.get('CORS_ALLOWED_ORIGINS', { infer: true }),
-    methods: ['GET', 'POST'],
-    credentials: false,
+    methods: ['GET', 'POST', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+    credentials: true, // cookies de session cross-subdomain (dashboard ↔ API)
   })
 
   // `trust proxy` : désactivé (0) par défaut — comportement actuel inchangé.

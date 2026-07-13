@@ -172,4 +172,16 @@ describe('POST /invoices (e2e)', () => {
       .send(body)
       .expect(201)
   })
+
+  // Amendement Task 4 : CsrfGuard ne s'applique JAMAIS aux chemins machine
+  // (ApiKeyGuard/Bearer) — seules les mutations authentifiées par session
+  // cookie l'exigent. InvoicesController n'est gardé que par ApiKeyGuard :
+  // aucun en-tête X-CSRF-Token n'est envoyé ici, la requête doit réussir.
+  it('never requires a CSRF header on a machine (API key) path', async () => {
+    await request(app.getHttpServer())
+      .post('/invoices')
+      .set('Authorization', auth())
+      .send({ ...valid, number: 'FA-2026-NO-CSRF' })
+      .expect(201)
+  })
 })

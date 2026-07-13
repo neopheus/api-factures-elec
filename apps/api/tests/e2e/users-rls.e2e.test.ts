@@ -119,4 +119,34 @@ describe('users/sessions/admins isolation (DB level)', () => {
     )
     expect(r.rows[0]).toMatchObject({ rolsuper: false, rolbypassrls: false })
   })
+
+  // Déviation Task 2 (couverte ici, Task 4) : preuve directe des contraintes
+  // CHECK de `sessions` par des INSERT violateurs en connexion owner (hors
+  // RLS, ce qui isole la contrainte testée de la RLS elle-même).
+  it('rejects a session row with neither user_id nor admin_id (sessions_subject_xor, 23514)', async () => {
+    await expect(
+      ownerPool.query(
+        "INSERT INTO sessions (user_id, admin_id, tenant_id, token_hash, csrf_hash, expires_at) VALUES (NULL, NULL, $1, 'xor-neither', 'csrf-x', now() + interval '1 hour')",
+        [tenantA],
+      ),
+    ).rejects.toMatchObject({ code: '23514' })
+  })
+
+  it('rejects a session row with BOTH user_id and admin_id set (sessions_subject_xor, 23514)', async () => {
+    await expect(
+      ownerPool.query(
+        "INSERT INTO sessions (user_id, admin_id, tenant_id, token_hash, csrf_hash, expires_at) VALUES (gen_random_uuid(), gen_random_uuid(), $1, 'xor-both', 'csrf-x', now() + interval '1 hour')",
+        [tenantA],
+      ),
+    ).rejects.toMatchObject({ code: '23514' })
+  })
+
+  it('rejects an admin session row carrying a tenant_id (sessions_admin_no_tenant, 23514)', async () => {
+    await expect(
+      ownerPool.query(
+        "INSERT INTO sessions (user_id, admin_id, tenant_id, token_hash, csrf_hash, expires_at) VALUES (NULL, gen_random_uuid(), $1, 'admin-with-tenant', 'csrf-x', now() + interval '1 hour')",
+        [tenantA],
+      ),
+    ).rejects.toMatchObject({ code: '23514' })
+  })
 })
