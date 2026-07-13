@@ -74,4 +74,23 @@ describe('ApiKeyGuard', () => {
     expect(req.tenantId).toBe('tenant-1')
     expect(req.apiKeyId).toBe('key-1')
   })
+
+  it.each([
+    'bearer',
+    'BEARER',
+    'BeArEr',
+  ])('accepts the scheme case-insensitively (RFC 7235): "%s fk_x.y"', async (scheme) => {
+    authenticate.mockResolvedValue({
+      apiKeyId: 'key-1',
+      tenantId: 'tenant-1',
+    })
+    const { ctx } = mockContext(`${scheme} fk_x.y`)
+
+    const activated = await guard.canActivate(ctx)
+
+    expect(activated).toBe(true)
+    // Le TOKEN, lui, reste comparé tel quel (seul le mot-clé de schéma est
+    // insensible à la casse).
+    expect(authenticate).toHaveBeenCalledWith('fk_x.y')
+  })
 })

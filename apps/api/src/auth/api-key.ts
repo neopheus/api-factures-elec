@@ -43,7 +43,11 @@ export function verifySecret(
   secret: string,
 ): Promise<boolean> {
   // Les paramètres/sel sont encodés dans le hash → pas d'options nécessaires.
-  return verify(secretHash, secret)
+  // `.catch(() => false)` : un hash stocké malformé (corruption DB, migration
+  // partielle) fait `throw` argon2 plutôt que renvoyer `false` — sans ce
+  // filet, l'exception remonterait non catchée jusqu'au guard (500 au lieu
+  // d'un 401 propre). On la traite comme un échec de vérification ordinaire.
+  return verify(secretHash, secret).catch(() => false)
 }
 
 // Égalise le temps de réponse quand le préfixe est inconnu (pas d'oracle temporel).

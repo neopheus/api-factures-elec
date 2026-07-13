@@ -18,6 +18,17 @@ async function bootstrap(): Promise<void> {
     methods: ['GET', 'POST'],
     credentials: false,
   })
+
+  // `trust proxy` : désactivé (0) par défaut — comportement actuel inchangé.
+  // À positionner au nombre de proxys de confiance devant l'API (LB /
+  // reverse-proxy) pour que le rate limiting par IP (`ThrottlerGuard`) lise
+  // la vraie IP client via `X-Forwarded-For` plutôt que l'IP du proxy (qui
+  // ferait retomber TOUS les clients dans le même seau de throttling).
+  // JAMAIS `true` : cf. commentaire TRUST_PROXY dans config/env.ts.
+  const trustProxy = config.get('TRUST_PROXY', { infer: true })
+  if (trustProxy > 0) {
+    app.getHttpAdapter().getInstance().set('trust proxy', trustProxy)
+  }
   app.useGlobalFilters(new ProblemDetailsFilter())
   app.enableShutdownHooks() // SIGTERM/SIGINT → onModuleDestroy (fermeture du pool DB, Task 5)
 

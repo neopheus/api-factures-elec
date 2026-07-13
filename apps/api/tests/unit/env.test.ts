@@ -40,6 +40,25 @@ describe('validateEnv', () => {
     }
   })
 
+  it('defaults TRUST_PROXY to 0 (direct connection, current behavior) when unset', () => {
+    const env = validateEnv(base)
+    expect(env.TRUST_PROXY).toBe(0)
+  })
+
+  it.each([
+    '0',
+    '2',
+  ])('accepts a non-negative integer TRUST_PROXY (%s)', (v) => {
+    const env = validateEnv({ ...base, TRUST_PROXY: v })
+    expect(env.TRUST_PROXY).toBe(Number(v))
+  })
+
+  it.each(['-1', '1.5', 'abc'])('rejects an invalid TRUST_PROXY (%s)', (v) => {
+    expect(() => validateEnv({ ...base, TRUST_PROXY: v })).toThrowError(
+      /TRUST_PROXY/,
+    )
+  })
+
   it('falls back to the (root) marker when a zod issue carries no field path', () => {
     // Un input qui n'est pas un objet (ex: null) produit une issue racine
     // (path: []) plutôt qu'une issue liée à une clé précise.

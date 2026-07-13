@@ -113,6 +113,14 @@ describe('ApiKeyGuard (e2e)', () => {
     expect(res.body.tenantId).toBe(tenantId)
   })
 
+  it('accepts a lowercase "bearer" scheme (RFC 7235 : case-insensitive)', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/whoami')
+      .set('Authorization', `bearer ${token}`)
+      .expect(200)
+    expect(res.body.tenantId).toBe(tenantId)
+  })
+
   it('rejects a revoked key (401)', async () => {
     const { token: revoked } = await seedTenantWithKey(ownerPool, 'Revoked')
     const prefix = revoked.slice(3, revoked.indexOf('.'))

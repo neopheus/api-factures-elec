@@ -153,7 +153,7 @@ propre `SET LOCAL`.
   SQL ni de détail interne). Isolation cross-tenant renvoie systématiquement
   **404** (jamais 403, jamais 200) — prouvé byte-identique à un vrai
   not-found en test e2e.
-- **Logs pino redactés** : les en-têtes sensibles (`authorization`
+- **Logs pino masqués** : les en-têtes sensibles (`authorization`
   notamment) et tout corps de requête sont retirés du flux de logs
   structurés, vérifié à la fois unitairement et sur le pipeline HTTP réel
   (tentative d'authentification échouée et réussie, secret absent des deux).
@@ -172,11 +172,27 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `CORS_ALLOWED_ORIGINS` | Liste d'origines autorisées, séparées par virgule | `''` (aucune) |
 | `RATE_LIMIT_TTL` | Fenêtre du rate limit (secondes) | `60` |
 | `RATE_LIMIT_LIMIT` | Requêtes max par fenêtre et par IP | `120` |
+| `TRUST_PROXY` | Nombre de proxys de confiance devant l'API (`app.set('trust proxy', n)`) | `0` (aucun) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
 `scripts/migrate.ts` et `scripts/provision-tenant.ts`, tous deux exécutés
 hors du chemin de requête HTTP.
+
+**`TRUST_PROXY` — topologie réseau.** Le rate limiting par IP
+(`ThrottlerGuard`) lit `req.ip`, qu'Express calcule à partir de
+`X-Forwarded-For` **seulement** si `trust proxy` est activé. Déployée
+directement (aucun load balancer / reverse-proxy devant elle), l'API doit
+garder `TRUST_PROXY=0` (défaut) : tous les clients partagent alors
+correctement leur vraie IP socket. **Derrière un LB/reverse-proxy**,
+`TRUST_PROXY` doit être positionné au nombre exact de sauts de proxy pour que
+le throttling par IP fonctionne (sinon tous les clients sont vus avec l'IP du
+proxy et partagent le même seau). **Ne jamais positionner une valeur trop
+haute** : un client pourrait alors forger son propre `X-Forwarded-For` pour
+usurper une IP arbitraire et contourner le rate limiting d'un autre client
+(risque de spoofing) — d'où le choix de n'accepter qu'un entier explicite
+plutôt que `true` (qui ferait confiance à n'importe quelle chaîne de proxy
+annoncée par le client).
 
 ## Développement
 
@@ -222,6 +238,10 @@ fk_<prefix>.<secret>`.
   (précision milliseconde), pour éviter la perte de lignes dont le timestamp
   partage la même milliseconde qu'une borne de page (cas réaliste en cas
   d'ingestion par lot).
+- **Contrat volontaire d'un curseur malformé** : un `cursor` illisible (mal
+  recollé par un client, tronqué, etc.) ne renvoie jamais une erreur 400 —
+  `decodeCursor` renvoie `null`, silencieusement traité comme « pas de
+  curseur » (redémarrage en première page).
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
   (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 111

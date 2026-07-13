@@ -14,6 +14,12 @@ export interface TenantRequest extends Request {
   apiKeyId?: string
 }
 
+// RFC 7235 §2.1 : le nom du schéma d'authentification est un `token`
+// (case-insensitive par définition du protocole). `bearer`, `BEARER` et
+// `Bearer` doivent tous être acceptés — seul le token68 qui suit (le secret)
+// reste comparé tel quel (`.+` n'est pas affecté par le flag `i`).
+const BEARER_SCHEME_RE = /^Bearer\s+(.+)$/i
+
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
   // @Inject(ApiKeyService) explicite (au-delà du brief) : sans lui, SWC émet un
@@ -28,7 +34,7 @@ export class ApiKeyGuard implements CanActivate {
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest<TenantRequest>()
     const header = req.header('authorization') ?? ''
-    const token = header.startsWith('Bearer ') ? header.slice(7) : ''
+    const token = header.match(BEARER_SCHEME_RE)?.[1] ?? ''
     const auth = token ? await this.apiKeys.authenticate(token) : null
     if (!auth) {
       throw new UnauthorizedException(

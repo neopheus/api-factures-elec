@@ -23,7 +23,7 @@ API publique pour les systèmes custom.
 >
 > **1.3 — `apps/api` (NestJS 11 ESM)** livre l'**ingestion et la lecture des
 > factures** : santé (`/health`, `/health/ready`), config validée zod
-> (fail-fast), logs pino redactés, helmet/CORS allowlist ; **Postgres
+> (fail-fast), logs pino masqués, helmet/CORS allowlist ; **Postgres
 > multi-tenant** avec RLS **`ENABLE` + `FORCE`** sur les 4 tables (policies
 > fail-closed, rôle applicatif `factelec_app` **sans** `BYPASSRLS`) ; **auth
 > par clés API Argon2id** (`fk_<prefix>.<secret>`, lookup via fonction

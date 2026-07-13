@@ -40,4 +40,14 @@ describe('api key format', () => {
     expect(a.prefix).not.toBe(b.prefix)
     expect(a.token).not.toBe(b.token)
   })
+
+  it('resolves to false (never throws) when the stored hash is malformed/corrupted', async () => {
+    // @node-rs/argon2 `verify()` REJETTE (throw) sur un hash qui n'est pas un
+    // encodage argon2 valide (ex: corruption DB, migration partielle). Sans
+    // garde, ce throw remonterait jusqu'au guard → 500 au lieu d'un 401
+    // propre pour un cas qui doit être traité comme « secret invalide ».
+    await expect(
+      verifySecret('not-a-valid-argon2-hash', 'any-secret'),
+    ).resolves.toBe(false)
+  })
 })
