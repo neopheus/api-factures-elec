@@ -13,6 +13,23 @@ describe('generateUbl routing (Invoice 380 / CreditNote 381)', () => {
     expect(out).toContain('<cac:InvoiceLine>')
   })
 
+  it('emits cbc:ProfileID (BT-23) between CustomizationID and ID on an Invoice', () => {
+    const out = generateUbl(buildInvoice(simpleInvoiceInput))
+    expect(out).toContain('<cbc:ProfileID>S1</cbc:ProfileID>')
+    const customizationIdx = out.indexOf('<cbc:CustomizationID>')
+    const profileIdx = out.indexOf('<cbc:ProfileID>')
+    const idIdx = out.indexOf('<cbc:ID>')
+    expect(customizationIdx).toBeLessThan(profileIdx)
+    expect(profileIdx).toBeLessThan(idIdx)
+  })
+
+  it('omits cbc:ProfileID on an Invoice without businessProcessType', () => {
+    const { businessProcessType: _omitted, ...withoutField } =
+      simpleInvoiceInput
+    const out = generateUbl(buildInvoice(withoutField))
+    expect(out).not.toContain('<cbc:ProfileID>')
+  })
+
   it('generates a UBL CreditNote for type code 381', () => {
     const out = generateUbl(buildInvoice(creditNoteInput))
     expect(out).toContain(
@@ -28,6 +45,22 @@ describe('generateUbl routing (Invoice 380 / CreditNote 381)', () => {
     // pas de cbc:DueDate dans un CreditNote (absent du CreditNoteType OASIS)
     expect(out).not.toContain('<cbc:DueDate>')
     expect(out).not.toContain('<cbc:InvoiceTypeCode>')
+  })
+
+  it('emits cbc:ProfileID (BT-23) between CustomizationID and ID on a CreditNote', () => {
+    const out = generateUbl(buildInvoice(creditNoteInput))
+    expect(out).toContain('<cbc:ProfileID>S1</cbc:ProfileID>')
+    const customizationIdx = out.indexOf('<cbc:CustomizationID>')
+    const profileIdx = out.indexOf('<cbc:ProfileID>')
+    const idIdx = out.indexOf('<cbc:ID>')
+    expect(customizationIdx).toBeLessThan(profileIdx)
+    expect(profileIdx).toBeLessThan(idIdx)
+  })
+
+  it('omits cbc:ProfileID on a CreditNote without businessProcessType', () => {
+    const { businessProcessType: _omitted, ...withoutField } = creditNoteInput
+    const out = generateUbl(buildInvoice(withoutField))
+    expect(out).not.toContain('<cbc:ProfileID>')
   })
 
   it('produces a CreditNote valid against the OASIS CreditNote XSD', () => {

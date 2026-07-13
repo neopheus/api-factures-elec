@@ -20,7 +20,18 @@ export function generateUbl(invoice: Invoice): string {
     .att('xmlns:cac', NS_CAC)
     .att('xmlns:cbc', NS_CBC)
 
+  // BT-24 (CustomizationID) : ni l'Annexe 1 (Flux 1, specs externes v3.2) ni le
+  // Dossier général FE/Chorus Pro ne prescrivent de CIUS-FR (recherche tâche 6,
+  // aucun `urn:` ni « CIUS » trouvé hors la seule mention nue « BT-24 »). Décision
+  // par défaut : rester sur `urn:cen.eu:en16931:2017`, seule valeur validée par le
+  // Schematron officiel (docs/reference/en16931-schematron/). À revoir si la DGFiP
+  // publie un jour un CIUS-FR dédié.
   root.ele('cbc:CustomizationID').txt('urn:cen.eu:en16931:2017')
+  // cbc:ProfileID (BT-23, cadre de facturation) : optionnel en EN 16931 pur,
+  // émis seulement si businessProcessType est renseigné (le CII l'émet déjà,
+  // cf. cii/generate.ts, et les extraits de flux F1 le rendent obligatoire).
+  if (invoice.businessProcessType)
+    root.ele('cbc:ProfileID').txt(invoice.businessProcessType)
   root.ele('cbc:ID').txt(invoice.number)
   root.ele('cbc:IssueDate').txt(invoice.issueDate)
   if (invoice.dueDate) root.ele('cbc:DueDate').txt(invoice.dueDate)

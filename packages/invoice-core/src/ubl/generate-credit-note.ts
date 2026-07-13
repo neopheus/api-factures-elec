@@ -20,7 +20,14 @@ export function generateCreditNote(invoice: Invoice): string {
     .att('xmlns:cac', NS_CAC)
     .att('xmlns:cbc', NS_CBC)
 
+  // BT-24 (CustomizationID) : décision consignée dans ubl/generate.ts — aucun
+  // CIUS-FR prescrit (recherche tâche 6), on reste sur `urn:cen.eu:en16931:2017`.
   root.ele('cbc:CustomizationID').txt('urn:cen.eu:en16931:2017')
+  // cbc:ProfileID (BT-23, cadre de facturation) : optionnel en EN 16931 pur,
+  // émis seulement si businessProcessType est renseigné (le CII l'émet déjà,
+  // cf. cii/generate.ts, et les extraits de flux F1 le rendent obligatoire).
+  if (invoice.businessProcessType)
+    root.ele('cbc:ProfileID').txt(invoice.businessProcessType)
   root.ele('cbc:ID').txt(invoice.number)
   root.ele('cbc:IssueDate').txt(invoice.issueDate)
   root.ele('cbc:CreditNoteTypeCode').txt(invoice.typeCode)
