@@ -9,14 +9,20 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (13/07/2026) : plans 1.1, 1.2 et 1.2bis terminés et mergés.**
+> **État du projet (13/07/2026) : plans 1.1, 1.2 et 1.2bis terminés et mergés ;
+> dettes héritées soldées avant le début de 1.3.**
 > `invoice-core` (v0.3.0) livre les **formats du socle** : UBL 2.1 Invoice **et**
-> CreditNote (avoir), extraits de flux DGFiP F1 (facture et avoir), CII D16B et
-> Factur-X PDF/A-3 (CII embarqué), tous validés XSD + Schematron officiel EN 16931
-> (Node pur, saxon-js) ; motifs d'exonération BT-120/121 avec appartenance VATEX ;
+> CreditNote (avoir), extraits de flux DGFiP F1 (facture et avoir), CII D16B
+> (avec échéance de paiement BT-9) et Factur-X PDF/A-3 (CII embarqué), tous
+> validés XSD + Schematron officiel EN 16931 (Node pur, saxon-js — un test
+> canari prouve que le Schematron CII rejette bien un document non conforme) ;
+> motifs d'exonération BT-120/121 avec appartenance VATEX (décision : liste
+> interne, non exposée par l'API 1.3 — voir `packages/invoice-core/README.md`) ;
 > tests par propriétés fast-check. Couverture 100 %.
 >
 > **Reprise — prochaine étape : plan 1.3** (API NestJS, auth multi-tenant, ingestion).
+> Aucune dette héritée hors périmètre 1.3 n'est identifiée à ce jour (BT-9 et le
+> canari Schematron CII, seules dettes recensées, sont soldés ci-dessus).
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
 
@@ -63,8 +69,10 @@ Cœur métier de la facturation, aligné sur le modèle sémantique EN 16931 :
   lève `MissingBusinessProcessTypeError` si `businessProcessType` n'est pas
   renseigné sur la facture.
 - **CII D16B** (`src/cii/generate.ts`) : `generateCii` émet le CII UN/CEFACT
-  D16B (profil EN 16931) pour la facture et l'avoir, validé XSD D16B vendorisé
-  et Schematron officiel EN 16931 CII (Node pur, saxon-js).
+  D16B (profil EN 16931) pour la facture et l'avoir, y compris l'échéance de
+  paiement BT-9 (`ram:SpecifiedTradePaymentTerms/ram:DueDateDateTime`) quand
+  `dueDate` est renseigné, validé XSD D16B vendorisé et Schematron officiel
+  EN 16931 CII (Node pur, saxon-js).
 - **Factur-X PDF/A-3** (`src/facturx/generate.ts`) : `generateFacturX` produit
   un PDF/A-3 porteur avec le CII (`generateCii`) embarqué en pièce jointe
   (`AFRelationship=Alternative`), XMP PDF/A-3 + Factur-X et `OutputIntent` sRGB.

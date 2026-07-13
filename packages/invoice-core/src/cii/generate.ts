@@ -88,6 +88,16 @@ export function generateCii(invoice: Invoice): string {
       tax.ele('ram:ExemptionReasonCode').txt(b.exemptionReasonCode)
     tax.ele('ram:RateApplicablePercent').txt(b.rate)
   }
+  // BT-9 : échéance de paiement (SpecifiedTradePaymentTerms/DueDateDateTime).
+  // Ordre D16B : après ApplicableTradeTax, avant la sommation d'en-tête.
+  if (invoice.dueDate)
+    settle
+      .ele('ram:SpecifiedTradePaymentTerms')
+      .ele('ram:DueDateDateTime')
+      .ele('udt:DateTimeString')
+      .att('format', '102')
+      .txt(ciiDate(invoice.dueDate))
+
   const sum = settle.ele('ram:SpecifiedTradeSettlementHeaderMonetarySummation')
   sum.ele('ram:LineTotalAmount').txt(invoice.totals.sumOfLines)
   sum.ele('ram:TaxBasisTotalAmount').txt(invoice.totals.taxExclusive)

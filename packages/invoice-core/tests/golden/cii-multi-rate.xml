@@ -151,6 +151,11 @@
         <ram:ExemptionReasonCode>VATEX-EU-132-1I</ram:ExemptionReasonCode>
         <ram:RateApplicablePercent>0.00</ram:RateApplicablePercent>
       </ram:ApplicableTradeTax>
+      <ram:SpecifiedTradePaymentTerms>
+        <ram:DueDateDateTime>
+          <udt:DateTimeString format="102">20260811</udt:DateTimeString>
+        </ram:DueDateDateTime>
+      </ram:SpecifiedTradePaymentTerms>
       <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
         <ram:LineTotalAmount>409.87</ram:LineTotalAmount>
         <ram:TaxBasisTotalAmount>409.87</ram:TaxBasisTotalAmount>
