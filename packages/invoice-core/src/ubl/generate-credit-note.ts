@@ -7,24 +7,23 @@ import {
   appendTaxTotal,
   NS_CAC,
   NS_CBC,
-  NS_INVOICE,
+  NS_CREDIT_NOTE,
 } from './common.js'
-import { generateCreditNote } from './generate-credit-note.js'
 
-export function generateUbl(invoice: Invoice): string {
-  if (invoice.typeCode === '381') return generateCreditNote(invoice)
-
+// UBL 2.1 CreditNote (avoir, typeCode 381). Différences vs Invoice : racine et
+// namespace CreditNote-2, cbc:CreditNoteTypeCode, cac:CreditNoteLine /
+// cbc:CreditedQuantity, et PAS de cbc:DueDate (absent du CreditNoteType OASIS).
+export function generateCreditNote(invoice: Invoice): string {
   const doc = create({ version: '1.0', encoding: 'UTF-8' })
   const root = doc
-    .ele(NS_INVOICE, 'Invoice')
+    .ele(NS_CREDIT_NOTE, 'CreditNote')
     .att('xmlns:cac', NS_CAC)
     .att('xmlns:cbc', NS_CBC)
 
   root.ele('cbc:CustomizationID').txt('urn:cen.eu:en16931:2017')
   root.ele('cbc:ID').txt(invoice.number)
   root.ele('cbc:IssueDate').txt(invoice.issueDate)
-  if (invoice.dueDate) root.ele('cbc:DueDate').txt(invoice.dueDate)
-  root.ele('cbc:InvoiceTypeCode').txt(invoice.typeCode)
+  root.ele('cbc:CreditNoteTypeCode').txt(invoice.typeCode)
   root.ele('cbc:DocumentCurrencyCode').txt(invoice.currency)
 
   appendCommercialParty(root, 'AccountingSupplierParty', invoice.seller)
@@ -33,9 +32,9 @@ export function generateUbl(invoice: Invoice): string {
   appendLegalMonetaryTotal(root, invoice)
 
   for (const line of invoice.lines) {
-    const l = root.ele('cac:InvoiceLine')
+    const l = root.ele('cac:CreditNoteLine')
     l.ele('cbc:ID').txt(line.id)
-    l.ele('cbc:InvoicedQuantity')
+    l.ele('cbc:CreditedQuantity')
       .att('unitCode', line.unitCode)
       .txt(line.quantity)
     l.ele('cbc:LineExtensionAmount')

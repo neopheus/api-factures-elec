@@ -10,6 +10,10 @@ export const OASIS_UBL_INVOICE_XSD = resolve(
   import.meta.dirname,
   '../../../../docs/reference/ubl-2.1/maindoc/UBL-Invoice-2.1.xsd',
 )
+export const OASIS_UBL_CREDITNOTE_XSD = resolve(
+  import.meta.dirname,
+  '../../../../docs/reference/ubl-2.1/maindoc/UBL-CreditNote-2.1.xsd',
+)
 export const F1_BASE_UBL_INVOICE_XSD = resolve(
   import.meta.dirname,
   `${REG}/F1_BASE_UBL_2.1/F1BASE_UBL-invoice-2.1.xsd`,

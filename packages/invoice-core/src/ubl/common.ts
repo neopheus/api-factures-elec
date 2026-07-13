@@ -1,5 +1,5 @@
 import type { XMLBuilder } from 'xmlbuilder2/lib/interfaces.js'
-import type { Invoice } from '../model/schema.js'
+import type { Invoice, InvoiceLine, Party } from '../model/schema.js'
 
 export const NS_INVOICE =
   'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2'
@@ -38,4 +38,76 @@ export function appendTaxTotal(parent: XMLBuilder, invoice: Invoice): void {
       category.ele('cbc:TaxExemptionReason').txt(b.exemptionReason)
     category.ele('cac:TaxScheme').ele('cbc:ID').txt('VAT')
   }
+}
+
+// Partie commerciale complète (cac:PartyName + cbc:RegistrationName), partagée
+// entre la facture (Invoice) et l'avoir (CreditNote).
+export function appendCommercialParty(
+  parent: XMLBuilder,
+  role: 'AccountingSupplierParty' | 'AccountingCustomerParty',
+  party: Party,
+): void {
+  const p = parent.ele(`cac:${role}`).ele('cac:Party')
+  p.ele('cac:PartyName').ele('cbc:Name').txt(party.name)
+  const address = p.ele('cac:PostalAddress')
+  if (party.address.streetName)
+    address.ele('cbc:StreetName').txt(party.address.streetName)
+  if (party.address.city) address.ele('cbc:CityName').txt(party.address.city)
+  if (party.address.postalCode)
+    address.ele('cbc:PostalZone').txt(party.address.postalCode)
+  address
+    .ele('cac:Country')
+    .ele('cbc:IdentificationCode')
+    .txt(party.address.countryCode)
+  if (party.vatId) {
+    const taxScheme = p.ele('cac:PartyTaxScheme')
+    taxScheme.ele('cbc:CompanyID').txt(party.vatId)
+    taxScheme.ele('cac:TaxScheme').ele('cbc:ID').txt('VAT')
+  }
+  const legal = p.ele('cac:PartyLegalEntity')
+  legal.ele('cbc:RegistrationName').txt(party.name)
+  if (party.siren) legal.ele('cbc:CompanyID').txt(party.siren)
+}
+
+// cac:LegalMonetaryTotal complet (BG-22), identique Invoice/CreditNote.
+export function appendLegalMonetaryTotal(
+  parent: XMLBuilder,
+  invoice: Invoice,
+): void {
+  const totals = parent.ele('cac:LegalMonetaryTotal')
+  addAmount(
+    totals,
+    'LineExtensionAmount',
+    invoice.totals.sumOfLines,
+    invoice.currency,
+  )
+  addAmount(
+    totals,
+    'TaxExclusiveAmount',
+    invoice.totals.taxExclusive,
+    invoice.currency,
+  )
+  addAmount(
+    totals,
+    'TaxInclusiveAmount',
+    invoice.totals.taxInclusive,
+    invoice.currency,
+  )
+  addAmount(totals, 'PayableAmount', invoice.totals.payable, invoice.currency)
+}
+
+// cac:Item (Name + ClassifiedTaxCategory) puis cac:Price : identiques par ligne.
+export function appendItemAndPrice(
+  line: XMLBuilder,
+  invoiceLine: InvoiceLine,
+  currency: string,
+): void {
+  const item = line.ele('cac:Item')
+  item.ele('cbc:Name').txt(invoiceLine.name)
+  const taxCategory = item.ele('cac:ClassifiedTaxCategory')
+  taxCategory.ele('cbc:ID').txt(invoiceLine.vatCategory)
+  taxCategory.ele('cbc:Percent').txt(invoiceLine.vatRate)
+  taxCategory.ele('cac:TaxScheme').ele('cbc:ID').txt('VAT')
+  const price = line.ele('cac:Price')
+  addAmount(price, 'PriceAmount', invoiceLine.unitPrice, currency)
 }
