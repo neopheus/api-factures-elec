@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common'
+import { AdminModule } from './admin/admin.module.js'
 import { ApiKeysModule } from './api-keys/api-keys.module.js'
 import { AuthModule } from './auth/auth.module.js'
 import { AppConfigModule } from './config/config.module.js'
@@ -18,6 +19,7 @@ import { UsersModule } from './users/users.module.js'
     InvoicesModule,
     UsersModule,
     ApiKeysModule,
+    AdminModule,
   ],
 })
 export class AppModule {}
