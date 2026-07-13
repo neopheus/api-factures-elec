@@ -11,18 +11,33 @@ Tout ce qui suit est exporté depuis `src/index.ts`.
   (zod, `invoiceInputSchema`).
 - `buildInvoice(input: InvoiceInput): Invoice` — calcule montants de lignes,
   ventilation TVA (groupée par catégorie + taux) et totaux (arrondi demi-supérieur).
-- `validateBusinessRules(invoice: Invoice): RuleViolation[]` — sous-ensemble des
-  règles EN 16931 (BR-CO-10/13/14/15/17/25, BR-S-08) ; tableau vide = conforme.
-- `generateUbl(invoice: Invoice): string` — document UBL 2.1 Invoice, validé dans
-  les tests (`tests/ubl/`) contre le XSD standard OASIS UBL 2.1
-  (`docs/reference/ubl-2.1/`).
+- `generateUbl(invoice: Invoice): string` — facture commerciale UBL 2.1 Invoice,
+  validée dans les tests contre le XSD OASIS **et** le Schematron officiel EN 16931
+  (`docs/reference/en16931-schematron/`, exécuté en Node pur via saxon-js). Lève
+  `UnsupportedTypeCodeError` pour un avoir (typeCode 381 — génération CreditNote
+  reportée au plan 1.2bis).
+- `generateFluxExtractUbl(invoice: Invoice, profile: 'BASE' | 'FULL'): string` —
+  extrait fiscal de flux DGFiP F1, validé contre les XSD réglementaires
+  (`docs/reglementaire/…/F1_BASE_UBL_2.1`, `…/F1_FULL_UBL_2.1`). BASE = en-tête sans
+  lignes ; FULL = lignes épurées (sans TVA par ligne). Sans noms de parties ni
+  totaux TTC/à payer (restrictions fiscales de flux). Le `cbc:ProfileID` de
+  l'extrait porte le cadre de facturation BT-23 (`invoice.businessProcessType`),
+  nomenclature fermée de 13 codes imposée par la règle de gestion DGFiP G1.02
+  (Annexe 7 v1.9) : B1, S1, M1, B2, S2, M2, B4, S4, M4, S5, S6, B7, S7. Ce champ
+  est obligatoire pour cette fonction, qui lève `MissingBusinessProcessTypeError`
+  en son absence.
+- `validateBusinessRules(invoice: Invoice): RuleViolation[]` — sous-ensemble EN 16931 :
+  BR-CO-10/13/14/15/17/25, BR-{S,Z,E,AE,IC,G,O,AF,AG}-08, et motifs d'exonération
+  BR-{E,AE,IC,G,O}-10 (BT-120/121). Tableau vide = conforme.
 
 Schémas zod et types associés, également exportés (`src/model/schema.ts`) :
 `invoiceInputSchema` / `InvoiceInput`, `invoiceSchema` / `Invoice`,
 `invoiceLineInputSchema` / `InvoiceLineInput`, `invoiceLineSchema` / `InvoiceLine`,
 `partySchema` / `Party`, `postalAddressSchema` / `PostalAddress`,
 `vatCategorySchema` / `VatCategory`, `vatBreakdownSchema` / `VatBreakdown`,
-`totalsSchema` / `Totals`.
+`totalsSchema` / `Totals`, `businessProcessTypeSchema` / `BusinessProcessType`
+(BT-23, cadre de facturation). Erreurs et types dédiés également exportés :
+`UnsupportedTypeCodeError`, `MissingBusinessProcessTypeError`, `FluxProfile`.
 
 ## Conventions
 
@@ -32,18 +47,17 @@ Schémas zod et types associés, également exportés (`src/model/schema.ts`) :
   toute modification doit être relue et volontaire (`UPDATE_GOLDEN=1` ne crée
   que les fichiers absents).
 
-## Validation XSD
+## Motifs d'exonération (BT-120 / BT-121)
 
-Le XML généré par `generateUbl` est validé dans les tests contre le XSD standard
-OASIS UBL 2.1 vendorisé (`docs/reference/ubl-2.1/maindoc/UBL-Invoice-2.1.xsd`) :
-c'est une validation de forme du document UBL, pas des contraintes DGFiP
-spécifiques au flux F1. Les émetteurs de flux DGFiP (extraits fiscaux F1),
-validés contre les XSD réglementaires
-(`docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/`), sont hors
-périmètre v1 — voir ci-dessous.
+Les lignes des catégories exonérées (E, AE, K, G, O) portent un code VATEX
+(`exemptionReasonCode`, BT-121) et/ou un texte (`exemptionReason`, BT-120),
+propagés vers la ventilation TVA et l'UBL (`cac:TaxCategory`). Une ventilation
+exonérée sans motif est refusée par les règles et par le Schematron officiel.
 
-## Hors périmètre v1 (plans suivants)
+## Conformité vérifiée en tests
 
-Émetteurs de flux DGFiP F1 (extraits fiscaux), Factur-X (PDF/A-3 + CII), CII
-seul, Schematron EN 16931, remises/charges de pied de facture, acomptes,
-lecture de factures entrantes.
+- **XSD OASIS UBL 2.1** (forme du document commercial) — xmllint.
+- **Schematron EN 16931** officiel (`validation-1.3.16`, ConnectingEurope) — saxon-js,
+  Node pur, aucune JVM ; toute `svrl:failed-assert` rend le test rouge.
+- **XSD DGFiP F1 BASE/FULL** (extraits de flux) — xmllint.
+- **Tests par propriétés** (fast-check, seedés) sur les invariants du moteur.
