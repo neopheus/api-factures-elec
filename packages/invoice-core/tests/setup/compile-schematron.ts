@@ -5,25 +5,40 @@ import { dirname, resolve } from 'node:path'
 
 const require = createRequire(import.meta.url)
 
-const XSLT = resolve(
-  import.meta.dirname,
-  '../../../../docs/reference/en16931-schematron/1.3.16/xslt/EN16931-UBL-validation.xslt',
-)
-export const SEF = resolve(
-  import.meta.dirname,
-  '../.sef/EN16931-UBL-validation.sef.json',
-)
-
-// Compile une seule fois le Schematron (XSLT 2.0) en SEF SaxonJS, si absent ou périmé.
-export default function setup(): void {
-  if (existsSync(SEF) && statSync(SEF).mtimeMs >= statSync(XSLT).mtimeMs) return
-  mkdirSync(dirname(SEF), { recursive: true })
-  const xslt3Bin = require.resolve('xslt3')
-  execFileSync(
-    process.execPath,
-    [xslt3Bin, `-xsl:${XSLT}`, `-export:${SEF}`, '-nogo'],
-    {
-      stdio: 'pipe',
-    },
+const ref = (p: string) =>
+  resolve(
+    import.meta.dirname,
+    '../../../../docs/reference/en16931-schematron/1.3.16/xslt',
+    p,
   )
+const sef = (p: string) => resolve(import.meta.dirname, '../.sef', p)
+
+// UBL_SEF conserve exactement son chemin d'origine (`../.sef/EN16931-UBL-validation.sef.json`,
+// identique à l'ancienne constante `SEF`) : d'autres tests en dépendent.
+const PAIRS: ReadonlyArray<{ xslt: string; sef: string }> = [
+  {
+    xslt: ref('EN16931-UBL-validation.xslt'),
+    sef: sef('EN16931-UBL-validation.sef.json'),
+  },
+  {
+    xslt: ref('EN16931-CII-validation.xslt'),
+    sef: sef('EN16931-CII-validation.sef.json'),
+  },
+]
+
+// Compile une seule fois chaque Schematron (XSLT 2.0) en SEF SaxonJS, si absent ou périmé.
+export default function setup(): void {
+  const xslt3Bin = require.resolve('xslt3')
+  for (const { xslt, sef: out } of PAIRS) {
+    if (existsSync(out) && statSync(out).mtimeMs >= statSync(xslt).mtimeMs)
+      continue
+    mkdirSync(dirname(out), { recursive: true })
+    execFileSync(
+      process.execPath,
+      [xslt3Bin, `-xsl:${xslt}`, `-export:${out}`, '-nogo'],
+      {
+        stdio: 'pipe',
+      },
+    )
+  }
 }
