@@ -6,6 +6,7 @@ export const simpleInvoiceInput: InvoiceInput = {
   dueDate: '2026-08-11',
   typeCode: '380',
   currency: 'EUR',
+  businessProcessType: 'S1', // BT-23 : prestation de service seule (conseil)
   seller: {
     name: 'AV Digital',
     siren: '123456789',
@@ -50,6 +51,7 @@ export const creditNoteInput: InvoiceInput = {
 export const multiRateInvoiceInput: InvoiceInput = {
   ...simpleInvoiceInput,
   number: 'FA-2026-002',
+  businessProcessType: 'M1', // BT-23 : facture double (biens + services)
   lines: [
     {
       id: '1',

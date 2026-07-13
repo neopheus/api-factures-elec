@@ -41,6 +41,25 @@ export const vatCategorySchema = z.enum([
   'M',
 ]) // BT-151/BT-118
 
+// BT-23 « Cadre de Facturation » (cbc:ProfileID des extraits de flux F1) : nomenclature
+// fermée de 13 codes prescrite par la règle de gestion DGFiP G1.02 (Annexe 7 v1.9,
+// spécifications externes v3.2). Aucune valeur hors liste n'est acceptée.
+export const businessProcessTypeSchema = z.enum([
+  'B1',
+  'S1',
+  'M1',
+  'B2',
+  'S2',
+  'M2',
+  'B4',
+  'S4',
+  'M4',
+  'S5',
+  'S6',
+  'B7',
+  'S7',
+])
+
 export const postalAddressSchema = z.object({
   streetName: z.string().min(1).optional(), // BT-35/BT-50
   city: z.string().min(1).optional(), // BT-37/BT-52
@@ -82,6 +101,7 @@ export const invoiceInputSchema = z.object({
   seller: partySchema, // BG-4
   buyer: partySchema, // BG-7
   lines: z.array(invoiceLineInputSchema).min(1), // BG-25
+  businessProcessType: businessProcessTypeSchema.optional(), // BT-23 (règle G1.02)
 })
 
 export const invoiceLineSchema = invoiceLineInputSchema.extend({
@@ -112,6 +132,7 @@ export const invoiceSchema = invoiceInputSchema.extend({
 })
 
 export type VatCategory = z.infer<typeof vatCategorySchema>
+export type BusinessProcessType = z.infer<typeof businessProcessTypeSchema>
 export type PostalAddress = z.infer<typeof postalAddressSchema>
 export type Party = z.infer<typeof partySchema>
 export type InvoiceLineInput = z.infer<typeof invoiceLineInputSchema>

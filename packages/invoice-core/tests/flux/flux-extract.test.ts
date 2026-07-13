@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { MissingBusinessProcessTypeError } from '../../src/flux/errors.js'
 import { generateFluxExtractUbl } from '../../src/flux/generate-extract.js'
 import { buildInvoice } from '../../src/model/compute.js'
 import type { InvoiceInput } from '../../src/model/schema.js'
@@ -15,6 +16,7 @@ const minimalInvoiceInput: InvoiceInput = {
   issueDate: '2026-07-12',
   typeCode: '380',
   currency: 'EUR',
+  businessProcessType: 'S1',
   seller: {
     name: 'Vendeur Minimal',
     address: { countryCode: 'FR' },
@@ -59,16 +61,25 @@ describe('generateFluxExtractUbl', () => {
     }
   })
 
-  it('emits the mandatory ProfileID and drops the forbidden monetary totals', () => {
+  it('emits the mandatory ProfileID (BT-23/G1.02) and drops the forbidden monetary totals', () => {
     const xml = generateFluxExtractUbl(
       buildInvoice(multiRateInvoiceInput),
       'BASE',
     )
-    expect(xml).toContain('<cbc:ProfileID>')
+    expect(xml).toContain('<cbc:ProfileID>M1</cbc:ProfileID>')
     expect(xml).not.toContain('TaxInclusiveAmount')
     expect(xml).not.toContain('PayableAmount')
     expect(xml).toContain(
       '<cbc:TaxExclusiveAmount currencyID="EUR">409.87</cbc:TaxExclusiveAmount>',
+    )
+  })
+
+  it('throws MissingBusinessProcessTypeError when BT-23 is absent (G1.02)', () => {
+    const { businessProcessType: _omitted, ...withoutField } =
+      simpleInvoiceInput
+    const invoice = buildInvoice(withoutField)
+    expect(() => generateFluxExtractUbl(invoice, 'BASE')).toThrow(
+      MissingBusinessProcessTypeError,
     )
   })
 

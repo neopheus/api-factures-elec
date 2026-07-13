@@ -1,4 +1,5 @@
 export const PACKAGE_NAME = '@factelec/invoice-core'
+export { MissingBusinessProcessTypeError } from './flux/errors.js'
 export {
   type FluxProfile,
   generateFluxExtractUbl,

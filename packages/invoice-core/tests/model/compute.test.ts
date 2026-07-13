@@ -109,6 +109,14 @@ describe('buildInvoice', () => {
     expect(standard?.exemptionReason).toBeUndefined()
   })
 
+  it('propagates businessProcessType (BT-23) from input to the built invoice', () => {
+    const invoice = buildInvoice({
+      ...simpleInvoiceInput,
+      businessProcessType: 'S1',
+    })
+    expect(invoice.businessProcessType).toBe('S1')
+  })
+
   it('propagates a free-text exemption reason when no VATEX code is given', () => {
     const invoice = buildInvoice({
       ...simpleInvoiceInput,

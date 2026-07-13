@@ -2,6 +2,7 @@ import { create } from 'xmlbuilder2'
 import type { XMLBuilder } from 'xmlbuilder2/lib/interfaces.js'
 import type { Invoice, Party } from '../model/schema.js'
 import { UnsupportedTypeCodeError } from '../ubl/errors.js'
+import { MissingBusinessProcessTypeError } from './errors.js'
 
 export type FluxProfile = 'BASE' | 'FULL'
 
@@ -10,12 +11,6 @@ const NS_CAC =
   'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
 const NS_CBC =
   'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
-
-// cbc:ProfileID est structurellement OBLIGATOIRE dans les XSD F1 (aucune énumération,
-// toute chaîne non vide valide). La valeur sémantique DGFiP exacte (identifiant de
-// processus du flux 1) reste à confirmer contre le dossier de spécifications externes
-// v3.2 — cf. point de risque du plan. Valeur provisoire, isolée dans une constante.
-const FLUX_PROFILE_ID = 'DGFIP:CTC:FLUX1:1.0'
 
 function addAmount(
   parent: XMLBuilder,
@@ -61,6 +56,9 @@ export function generateFluxExtractUbl(
   if (invoice.typeCode !== '380') {
     throw new UnsupportedTypeCodeError(invoice.typeCode)
   }
+  if (!invoice.businessProcessType) {
+    throw new MissingBusinessProcessTypeError()
+  }
   const doc = create({ version: '1.0', encoding: 'UTF-8' })
   const root = doc
     .ele(NS_INVOICE, 'Invoice')
@@ -68,7 +66,9 @@ export function generateFluxExtractUbl(
     .att('xmlns:cbc', NS_CBC)
 
   root.ele('cbc:CustomizationID').txt('urn:cen.eu:en16931:2017')
-  root.ele('cbc:ProfileID').txt(FLUX_PROFILE_ID) // obligatoire F1
+  // cbc:ProfileID (BT-23, cadre de facturation) : valeur prescrite par la règle de
+  // gestion DGFiP G1.02 (Annexe 7 v1.9), obligatoire F1.
+  root.ele('cbc:ProfileID').txt(invoice.businessProcessType)
   root.ele('cbc:ID').txt(invoice.number)
   root.ele('cbc:IssueDate').txt(invoice.issueDate)
   if (invoice.dueDate) root.ele('cbc:DueDate').txt(invoice.dueDate)

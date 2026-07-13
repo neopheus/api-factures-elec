@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { parseInvoiceInput } from '../../src/model/schema.js'
+import {
+  businessProcessTypeSchema,
+  parseInvoiceInput,
+} from '../../src/model/schema.js'
 import { multiRateInvoiceInput, simpleInvoiceInput } from '../fixtures.js'
 
 describe('parseInvoiceInput', () => {
@@ -119,5 +122,40 @@ describe('parseInvoiceInput', () => {
     expect(parsed.lines[0]!.exemptionReason).toBe(
       'Formation professionnelle exonérée',
     )
+  })
+})
+
+describe('businessProcessTypeSchema', () => {
+  it.each([
+    'B1',
+    'S1',
+    'M1',
+    'S5',
+    'S7',
+  ] as const)('accepts the G1.02 code %s', (code) => {
+    expect(businessProcessTypeSchema.parse(code)).toBe(code)
+  })
+
+  it('rejects a code outside the G1.02 nomenclature', () => {
+    expect(() => businessProcessTypeSchema.parse('X1')).toThrow()
+  })
+
+  it('leaves businessProcessType optional on the invoice input', () => {
+    const { businessProcessType: _omitted, ...withoutField } =
+      simpleInvoiceInput
+    expect(parseInvoiceInput(withoutField).businessProcessType).toBeUndefined()
+  })
+
+  it('accepts businessProcessType when a valid G1.02 code is given', () => {
+    expect(
+      parseInvoiceInput({ ...simpleInvoiceInput, businessProcessType: 'B2' })
+        .businessProcessType,
+    ).toBe('B2')
+  })
+
+  it('rejects businessProcessType when the code is outside the nomenclature', () => {
+    expect(() =>
+      parseInvoiceInput({ ...simpleInvoiceInput, businessProcessType: 'X1' }),
+    ).toThrow()
   })
 })
