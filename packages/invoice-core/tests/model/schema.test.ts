@@ -100,4 +100,24 @@ describe('parseInvoiceInput', () => {
       parseInvoiceInput({ ...simpleInvoiceInput, typeCode: '381' }).typeCode,
     ).toBe('381')
   })
+
+  it('accepts an exemption reason code and text on a line', () => {
+    const withReason = {
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          ...simpleInvoiceInput.lines[0]!,
+          vatCategory: 'E',
+          vatRate: '0.00',
+          exemptionReasonCode: 'VATEX-EU-132-1I',
+          exemptionReason: 'Formation professionnelle exonérée',
+        },
+      ],
+    }
+    const parsed = parseInvoiceInput(withReason)
+    expect(parsed.lines[0]!.exemptionReasonCode).toBe('VATEX-EU-132-1I')
+    expect(parsed.lines[0]!.exemptionReason).toBe(
+      'Formation professionnelle exonérée',
+    )
+  })
 })

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildInvoice } from '../../src/model/compute.js'
 import { validateBusinessRules } from '../../src/model/rules.js'
+import type { VatCategory } from '../../src/model/schema.js'
 import { multiRateInvoiceInput, simpleInvoiceInput } from '../fixtures.js'
 
 describe('validateBusinessRules', () => {
@@ -97,6 +98,49 @@ describe('validateBusinessRules', () => {
     }
     expect(validateBusinessRules(tampered).map((v) => v.rule)).toContain(
       'BR-CO-25',
+    )
+  })
+})
+
+const exemptionCases: ReadonlyArray<[VatCategory, string]> = [
+  ['E', 'BR-E-10'],
+  ['AE', 'BR-AE-10'],
+  ['K', 'BR-IC-10'],
+  ['G', 'BR-G-10'],
+  ['O', 'BR-O-10'],
+]
+
+describe('exemption reason rules (BR-*-10)', () => {
+  for (const [category, rule] of exemptionCases) {
+    it(`flags ${rule} when a ${category} breakdown has no exemption reason`, () => {
+      const base = buildInvoice(simpleInvoiceInput)
+      const invoice = {
+        ...base,
+        lines: [{ ...base.lines[0]!, vatCategory: category, vatRate: '0.00' }],
+        vatBreakdown: [
+          {
+            category,
+            rate: '0.00',
+            taxableAmount: base.lines[0]!.lineNetAmount,
+            taxAmount: '0.00',
+          },
+        ],
+        totals: {
+          ...base.totals,
+          taxAmount: '0.00',
+          taxInclusive: base.totals.taxExclusive,
+          payable: base.totals.taxExclusive,
+        },
+      }
+      const rules = validateBusinessRules(invoice).map((v) => v.rule)
+      expect(rules).toContain(rule)
+    })
+  }
+
+  it('does not flag BR-E-10 when the exemption reason code is present', () => {
+    const invoice = buildInvoice(multiRateInvoiceInput) // ligne E porte VATEX-EU-132-1I
+    expect(validateBusinessRules(invoice).map((v) => v.rule)).not.toContain(
+      'BR-E-10',
     )
   })
 })

@@ -74,6 +74,10 @@ export function generateUbl(invoice: Invoice): string {
     const category = sub.ele('cac:TaxCategory')
     category.ele('cbc:ID').txt(b.category)
     category.ele('cbc:Percent').txt(b.rate)
+    if (b.exemptionReasonCode)
+      category.ele('cbc:TaxExemptionReasonCode').txt(b.exemptionReasonCode)
+    if (b.exemptionReason)
+      category.ele('cbc:TaxExemptionReason').txt(b.exemptionReason)
     category.ele('cac:TaxScheme').ele('cbc:ID').txt('VAT')
   }
 

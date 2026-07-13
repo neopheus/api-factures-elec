@@ -35,15 +35,30 @@ function computeVatBreakdown(lines: InvoiceLine[]): VatBreakdown[] {
     ).values(),
   ]
   return pairs.map(({ category, rate }) => {
-    const taxable = lines
-      .filter((line) => vatKey(line) === `${category}|${rate}`)
-      .reduce((acc, line) => acc.plus(line.lineNetAmount), big('0'))
+    const groupLines = lines.filter(
+      (line) => vatKey(line) === `${category}|${rate}`,
+    )
+    const taxable = groupLines.reduce(
+      (acc, line) => acc.plus(line.lineNetAmount),
+      big('0'),
+    )
+    // BT-120/BT-121 : le motif d'exonération de la ventilation (BG-23) reprend
+    // celui de la première ligne du groupe qui en porte un.
+    const withReason = groupLines.find(
+      (line) => line.exemptionReasonCode || line.exemptionReason,
+    )
     return {
       category,
       rate,
       taxableAmount: round2(taxable),
       // BR-CO-17 : TVA de catégorie = assiette × taux, arrondie à 2 décimales
       taxAmount: round2(taxable.times(rate).div(100)),
+      ...(withReason?.exemptionReasonCode
+        ? { exemptionReasonCode: withReason.exemptionReasonCode }
+        : {}),
+      ...(withReason?.exemptionReason
+        ? { exemptionReason: withReason.exemptionReason }
+        : {}),
     }
   })
 }

@@ -9,6 +9,9 @@ const amount2 = z
 const decimal4 = z
   .string()
   .regex(/^\d+(\.\d{1,4})?$/, 'non-negative decimal with up to 4 decimals')
+const vatexCode = z
+  .string()
+  .regex(/^VATEX-[A-Z]{2}(-[A-Za-z0-9]+)+$/, 'invalid VATEX code') // BT-121
 function isExistingCalendarDate(value: string): boolean {
   const year = Number(value.slice(0, 4))
   const month = Number(value.slice(5, 7))
@@ -66,6 +69,8 @@ export const invoiceLineInputSchema = z.object({
   unitPrice: decimal4, // BT-146
   vatCategory: vatCategorySchema, // BT-151
   vatRate: decimal4, // BT-152 (pourcentage)
+  exemptionReasonCode: vatexCode.optional(), // BT-121 (VATEX)
+  exemptionReason: z.string().min(1).optional(), // BT-120 (texte libre)
 })
 
 export const invoiceInputSchema = z.object({
@@ -88,6 +93,8 @@ export const vatBreakdownSchema = z.object({
   rate: decimal4, // BT-119
   taxableAmount: amount2, // BT-116
   taxAmount: amount2, // BT-117
+  exemptionReasonCode: vatexCode.optional(), // BT-121
+  exemptionReason: z.string().min(1).optional(), // BT-120
 })
 
 export const totalsSchema = z.object({

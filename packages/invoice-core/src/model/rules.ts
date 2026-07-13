@@ -17,6 +17,17 @@ const taxableSumRuleByCategory: Record<VatCategory, string> = {
   M: 'BR-AG-08',
 }
 
+// EN 16931 : une ventilation TVA (BG-23) d'une catégorie exonérée doit porter
+// un code de motif (BT-121) OU un texte de motif (BT-120). Le code de règle
+// dépend de la catégorie.
+const exemptionReasonRuleByCategory: Partial<Record<VatCategory, string>> = {
+  E: 'BR-E-10',
+  AE: 'BR-AE-10',
+  K: 'BR-IC-10',
+  G: 'BR-G-10',
+  O: 'BR-O-10',
+}
+
 // Sous-ensemble des règles métier EN 16931 (BR-CO-*, BR-S-*) pertinentes
 // pour le périmètre v1 (pas de remises document ni d'acompte).
 export function validateBusinessRules(invoice: Invoice): RuleViolation[] {
@@ -64,6 +75,13 @@ export function validateBusinessRules(invoice: Invoice): RuleViolation[] {
     )
 
   for (const b of invoice.vatBreakdown) {
+    const exemptionRule = exemptionReasonRuleByCategory[b.category]
+    if (exemptionRule && !b.exemptionReasonCode && !b.exemptionReason)
+      push(
+        exemptionRule,
+        `ventilation ${b.category} sans motif d'exonération (BT-120/BT-121 requis)`,
+      )
+
     const expected = round2(
       invoice.lines
         .filter((l) => l.vatCategory === b.category && l.vatRate === b.rate)

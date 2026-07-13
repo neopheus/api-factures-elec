@@ -77,6 +77,7 @@ export const multiRateInvoiceInput: InvoiceInput = {
       unitPrice: '150.00',
       vatCategory: 'E',
       vatRate: '0.00',
+      exemptionReasonCode: 'VATEX-EU-132-1I',
     },
   ],
 }

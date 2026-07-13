@@ -44,6 +44,7 @@ describe('buildInvoice', () => {
         rate: '0.00',
         taxableAmount: '300.00',
         taxAmount: '0.00',
+        exemptionReasonCode: 'VATEX-EU-132-1I',
       },
     ])
     expect(invoice.totals).toEqual({
@@ -93,5 +94,35 @@ describe('buildInvoice', () => {
         taxAmount: '30.00',
       },
     ])
+  })
+
+  it('propagates the exemption reason from the line to the VAT breakdown', () => {
+    const invoice = buildInvoice(multiRateInvoiceInput)
+    const exempt = invoice.vatBreakdown.find((b) => b.category === 'E')
+    expect(exempt?.exemptionReasonCode).toBe('VATEX-EU-132-1I')
+  })
+
+  it('leaves standard-rate breakdowns without an exemption reason', () => {
+    const invoice = buildInvoice(multiRateInvoiceInput)
+    const standard = invoice.vatBreakdown.find((b) => b.category === 'S')
+    expect(standard?.exemptionReasonCode).toBeUndefined()
+    expect(standard?.exemptionReason).toBeUndefined()
+  })
+
+  it('propagates a free-text exemption reason when no VATEX code is given', () => {
+    const invoice = buildInvoice({
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          ...simpleInvoiceInput.lines[0]!,
+          vatCategory: 'E',
+          vatRate: '0.00',
+          exemptionReason: 'Motif exonération sans code VATEX',
+        },
+      ],
+    })
+    const exempt = invoice.vatBreakdown.find((b) => b.category === 'E')
+    expect(exempt?.exemptionReason).toBe('Motif exonération sans code VATEX')
+    expect(exempt?.exemptionReasonCode).toBeUndefined()
   })
 })
