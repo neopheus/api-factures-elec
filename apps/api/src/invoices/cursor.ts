@@ -1,5 +1,13 @@
-export function encodeCursor(createdAt: Date, id: string): string {
-  return Buffer.from(`${createdAt.toISOString()}|${id}`).toString('base64url')
+// `createdAt` accepte soit un Date JS (précision milliseconde — sérialisé via
+// toISOString(), comportement historique), soit une chaîne DÉJÀ formatée
+// (précision microseconde, ex. la valeur brute `created_at` renvoyée par
+// Postgres via to_char en UTC) : le repository doit encoder le curseur à
+// partir de cette chaîne microseconde-précise pour la pagination keyset — cf.
+// InvoicesRepository.list (fix task-8, précision du curseur).
+export function encodeCursor(createdAt: Date | string, id: string): string {
+  const value =
+    typeof createdAt === 'string' ? createdAt : createdAt.toISOString()
+  return Buffer.from(`${value}|${id}`).toString('base64url')
 }
 
 export function decodeCursor(
