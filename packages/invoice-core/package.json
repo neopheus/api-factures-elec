@@ -1,6 +1,6 @@
 {
   "name": "@factelec/invoice-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@types/big.js": "^7.0.0",
+    "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
     "fast-check": "4.9.0",
     "saxon-js": "2.7.0",
@@ -29,6 +30,7 @@
     "xslt3": "2.7.0"
   },
   "dependencies": {
+    "@cantoo/pdf-lib": "2.7.2",
     "big.js": "^7.0.1",
     "xmlbuilder2": "^4.0.3",
     "zod": "^4.4.3"

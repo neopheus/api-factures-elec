@@ -104,6 +104,21 @@ describe('parseInvoiceInput', () => {
     ).toBe('381')
   })
 
+  it('rejects a well-formed but unknown VATEX code (BT-121)', () => {
+    const bad = {
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          ...simpleInvoiceInput.lines[0]!,
+          vatCategory: 'E',
+          vatRate: '0.00',
+          exemptionReasonCode: 'VATEX-EU-ZZZ99',
+        },
+      ],
+    }
+    expect(() => parseInvoiceInput(bad)).toThrow()
+  })
+
   it('accepts an exemption reason code and text on a line', () => {
     const withReason = {
       ...simpleInvoiceInput,

@@ -3,10 +3,16 @@ import { MissingBusinessProcessTypeError } from '../../src/flux/errors.js'
 import { generateFluxExtractUbl } from '../../src/flux/generate-extract.js'
 import { buildInvoice } from '../../src/model/compute.js'
 import type { InvoiceInput } from '../../src/model/schema.js'
-import { multiRateInvoiceInput, simpleInvoiceInput } from '../fixtures.js'
+import {
+  creditNoteInput,
+  multiRateInvoiceInput,
+  simpleInvoiceInput,
+} from '../fixtures.js'
 import { expectMatchesGolden } from '../helpers/golden.js'
 import {
+  F1_BASE_UBL_CREDITNOTE_XSD,
   F1_BASE_UBL_INVOICE_XSD,
+  F1_FULL_UBL_CREDITNOTE_XSD,
   F1_FULL_UBL_INVOICE_XSD,
   validateAgainstXsd,
 } from '../helpers/xsd.js'
@@ -112,14 +118,6 @@ describe('generateFluxExtractUbl', () => {
     }
   })
 
-  it('rejects a credit note (381)', () => {
-    const creditNote = {
-      ...buildInvoice(simpleInvoiceInput),
-      typeCode: '381' as const,
-    }
-    expect(() => generateFluxExtractUbl(creditNote, 'BASE')).toThrow()
-  })
-
   it('emits a free-text exemption reason without a code when only the text is given', () => {
     const invoice = buildInvoice({
       ...simpleInvoiceInput,
@@ -165,6 +163,49 @@ describe('generateFluxExtractUbl', () => {
     expectMatchesGolden(
       'flux-full-multi-rate.ubl.xml',
       generateFluxExtractUbl(buildInvoice(multiRateInvoiceInput), 'FULL'),
+    )
+  })
+})
+
+describe('generateFluxExtractUbl for a credit note (381)', () => {
+  it('BASE validates against the F1 BASE CreditNote XSD', () => {
+    const r = validateAgainstXsd(
+      generateFluxExtractUbl(buildInvoice(creditNoteInput), 'BASE'),
+      F1_BASE_UBL_CREDITNOTE_XSD,
+    )
+    expect(r.errors).toBe('')
+    expect(r.valid).toBe(true)
+  })
+
+  it('FULL validates against the F1 FULL CreditNote XSD', () => {
+    const r = validateAgainstXsd(
+      generateFluxExtractUbl(buildInvoice(creditNoteInput), 'FULL'),
+      F1_FULL_UBL_CREDITNOTE_XSD,
+    )
+    expect(r.errors).toBe('')
+    expect(r.valid).toBe(true)
+  })
+
+  it('emits a CreditNote root with mandatory ProfileID and CreditNoteTypeCode', () => {
+    const xml = generateFluxExtractUbl(buildInvoice(creditNoteInput), 'BASE')
+    expect(xml).toContain(
+      'xmlns="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"',
+    )
+    expect(xml).toContain('<cbc:ProfileID>')
+    expect(xml).toContain(
+      '<cbc:CreditNoteTypeCode>381</cbc:CreditNoteTypeCode>',
+    )
+    expect(xml).not.toContain('TaxInclusiveAmount')
+  })
+
+  it('matches the flux credit note goldens', () => {
+    expectMatchesGolden(
+      'flux-base-credit-note.ubl.xml',
+      generateFluxExtractUbl(buildInvoice(creditNoteInput), 'BASE'),
+    )
+    expectMatchesGolden(
+      'flux-full-credit-note.ubl.xml',
+      generateFluxExtractUbl(buildInvoice(creditNoteInput), 'FULL'),
     )
   })
 })

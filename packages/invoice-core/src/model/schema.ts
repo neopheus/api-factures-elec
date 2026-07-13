@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isVatexCode } from './vatex.js'
 
 // Références BT-x / BG-x : modèle sémantique EN 16931
 // (annexe 1 « Format sémantique FE e-invoicing », docs/reglementaire/).
@@ -9,9 +10,12 @@ const amount2 = z
 const decimal4 = z
   .string()
   .regex(/^\d+(\.\d{1,4})?$/, 'non-negative decimal with up to 4 decimals')
+// BT-121 : appartenance à la liste blanche BR-CL-22 (docs/reference/vatex), pas
+// simple forme — un code bien formé mais absent de la liste (ex. VATEX-EU-ZZZ99)
+// doit être rejeté.
 const vatexCode = z
   .string()
-  .regex(/^VATEX-[A-Z]{2}(-[A-Za-z0-9]+)+$/, 'invalid VATEX code') // BT-121
+  .refine(isVatexCode, 'unknown VATEX code (BT-121) — see docs/reference/vatex')
 function isExistingCalendarDate(value: string): boolean {
   const year = Number(value.slice(0, 4))
   const month = Number(value.slice(5, 7))

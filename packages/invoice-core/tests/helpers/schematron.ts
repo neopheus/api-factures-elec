@@ -2,9 +2,13 @@ import { resolve } from 'node:path'
 // saxon-js n'a pas de types ; import CommonJS via l'interop ESM.
 import SaxonJS from 'saxon-js'
 
-const SEF = resolve(
+export const UBL_SEF = resolve(
   import.meta.dirname,
   '../.sef/EN16931-UBL-validation.sef.json',
+)
+export const CII_SEF = resolve(
+  import.meta.dirname,
+  '../.sef/EN16931-CII-validation.sef.json',
 )
 
 export type SchematronViolation = {
@@ -14,15 +18,19 @@ export type SchematronViolation = {
   location: string
 }
 
-// Exécute le Schematron EN 16931 (SEF SaxonJS) sur un document UBL et renvoie
-// les assertions en échec extraites du rapport SVRL. 100 % Node, aucune JVM.
-// Forme d'appel vérifiée le 2026-07-13 : stylesheetFileName (SEF) + sourceText.
-export function validateAgainstSchematron(xml: string): {
+// Exécute un Schematron EN 16931 (SEF SaxonJS, UBL par défaut, CII via le 2e argument)
+// sur un document et renvoie les assertions en échec extraites du rapport SVRL. 100 %
+// Node, aucune JVM. Forme d'appel vérifiée le 2026-07-13 : stylesheetFileName (SEF) +
+// sourceText.
+export function validateAgainstSchematron(
+  xml: string,
+  sef: string = UBL_SEF,
+): {
   valid: boolean
   failedAsserts: SchematronViolation[]
 } {
   const out = SaxonJS.transform(
-    { stylesheetFileName: SEF, sourceText: xml, destination: 'serialized' },
+    { stylesheetFileName: sef, sourceText: xml, destination: 'serialized' },
     'sync',
   ) as { principalResult: string }
   const svrl = out.principalResult

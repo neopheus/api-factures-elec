@@ -6,7 +6,12 @@
     "noEmit": false,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    // "node" explicite : src/facturx/generate.ts importe node:crypto
+    // (createHash, calcul pur — cf. README, purity src/). Contrairement à
+    // tsconfig.json (typecheck), ce programme n'inclut pas tests/ et n'a donc
+    // pas d'inclusion transitive des types Node via vitest/vite.
+    "types": ["node"]
   },
   "include": ["src/**/*"]
 }

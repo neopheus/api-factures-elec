@@ -10,6 +10,10 @@ export const OASIS_UBL_INVOICE_XSD = resolve(
   import.meta.dirname,
   '../../../../docs/reference/ubl-2.1/maindoc/UBL-Invoice-2.1.xsd',
 )
+export const OASIS_UBL_CREDITNOTE_XSD = resolve(
+  import.meta.dirname,
+  '../../../../docs/reference/ubl-2.1/maindoc/UBL-CreditNote-2.1.xsd',
+)
 export const F1_BASE_UBL_INVOICE_XSD = resolve(
   import.meta.dirname,
   `${REG}/F1_BASE_UBL_2.1/F1BASE_UBL-invoice-2.1.xsd`,
@@ -17,6 +21,20 @@ export const F1_BASE_UBL_INVOICE_XSD = resolve(
 export const F1_FULL_UBL_INVOICE_XSD = resolve(
   import.meta.dirname,
   `${REG}/F1_FULL_UBL_2.1/F1FULL_UBL_invoice-2.1.xsd`,
+)
+export const F1_BASE_UBL_CREDITNOTE_XSD = resolve(
+  import.meta.dirname,
+  `${REG}/F1_BASE_UBL_2.1/F1BASE_UBL-CreditNote-2.1.xsd`,
+)
+export const F1_FULL_UBL_CREDITNOTE_XSD = resolve(
+  import.meta.dirname,
+  `${REG}/F1_FULL_UBL_2.1/F1FULL_UBL_CreditNote-2.1.xsd`,
+)
+// Racine réelle du tarball vendorisé (cf. docs/reference/cii-d16b/README.md) :
+// uncefact/data/standard/, pas la racine plate supposée par le brief initial.
+export const CII_D16B_XSD = resolve(
+  import.meta.dirname,
+  '../../../../docs/reference/cii-d16b/uncefact/data/standard/CrossIndustryInvoice_100pD16B.xsd',
 )
 
 // xsdPath par défaut = XSD commercial OASIS (compatibilité avec les tests existants).
