@@ -6,9 +6,9 @@ import {
   appendTaxTotal,
   NS_CAC,
   NS_CBC,
+  NS_CREDIT_NOTE,
   NS_INVOICE,
 } from '../ubl/common.js'
-import { UnsupportedTypeCodeError } from '../ubl/errors.js'
 import { MissingBusinessProcessTypeError } from './errors.js'
 
 export type FluxProfile = 'BASE' | 'FULL'
@@ -45,15 +45,19 @@ export function generateFluxExtractUbl(
   invoice: Invoice,
   profile: FluxProfile,
 ): string {
-  if (invoice.typeCode !== '380') {
-    throw new UnsupportedTypeCodeError(invoice.typeCode)
-  }
   if (!invoice.businessProcessType) {
     throw new MissingBusinessProcessTypeError()
   }
+  const isCredit = invoice.typeCode === '381'
+  const rootNs = isCredit ? NS_CREDIT_NOTE : NS_INVOICE
+  const rootName = isCredit ? 'CreditNote' : 'Invoice'
+  const typeCodeEl = isCredit ? 'CreditNoteTypeCode' : 'InvoiceTypeCode'
+  const lineEl = isCredit ? 'CreditNoteLine' : 'InvoiceLine'
+  const qtyEl = isCredit ? 'CreditedQuantity' : 'InvoicedQuantity'
+
   const doc = create({ version: '1.0', encoding: 'UTF-8' })
   const root = doc
-    .ele(NS_INVOICE, 'Invoice')
+    .ele(rootNs, rootName)
     .att('xmlns:cac', NS_CAC)
     .att('xmlns:cbc', NS_CBC)
 
@@ -63,8 +67,10 @@ export function generateFluxExtractUbl(
   root.ele('cbc:ProfileID').txt(invoice.businessProcessType)
   root.ele('cbc:ID').txt(invoice.number)
   root.ele('cbc:IssueDate').txt(invoice.issueDate)
-  if (invoice.dueDate) root.ele('cbc:DueDate').txt(invoice.dueDate)
-  root.ele('cbc:InvoiceTypeCode').txt(invoice.typeCode)
+  // cbc:DueDate : absent du CreditNoteType OASIS, jamais émis pour l'avoir.
+  // Comportement Invoice inchangé (émis si présent).
+  if (!isCredit && invoice.dueDate) root.ele('cbc:DueDate').txt(invoice.dueDate)
+  root.ele(`cbc:${typeCodeEl}`).txt(invoice.typeCode)
   root.ele('cbc:DocumentCurrencyCode').txt(invoice.currency)
 
   addFluxParty(root, 'AccountingSupplierParty', invoice.seller)
@@ -81,13 +87,16 @@ export function generateFluxExtractUbl(
     invoice.currency,
   )
 
-  // BASE : aucune ligne. FULL : lignes épurées (pas d'ID, pas de montant net, pas de TVA/ligne).
-  if (profile === 'FULL') {
+  // BASE : aucune ligne (cac:InvoiceLine/cac:CreditNoteLine commenté dans les deux
+  // XSD F1 BASE — un élément présent est rejeté « This element is not expected »).
+  // FULL : lignes épurées obligatoires (minOccurs="1" dans les deux XSD F1 FULL —
+  // absence rejetée « Missing child element(s) »). Symétrique Invoice/CreditNote,
+  // vérifié xmllint le 2026-07-13 (F1BASE/F1FULL_UBL{-,_}CreditNote-2.1.xsd).
+  const emitLines = profile === 'FULL'
+  if (emitLines) {
     for (const line of invoice.lines) {
-      const l = root.ele('cac:InvoiceLine')
-      l.ele('cbc:InvoicedQuantity')
-        .att('unitCode', line.unitCode)
-        .txt(line.quantity)
+      const l = root.ele(`cac:${lineEl}`)
+      l.ele(`cbc:${qtyEl}`).att('unitCode', line.unitCode).txt(line.quantity)
       l.ele('cac:Item').ele('cbc:Name').txt(line.name)
       const price = l.ele('cac:Price')
       addAmount(price, 'PriceAmount', line.unitPrice, invoice.currency)

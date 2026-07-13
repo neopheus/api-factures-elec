@@ -22,6 +22,14 @@ export const F1_FULL_UBL_INVOICE_XSD = resolve(
   import.meta.dirname,
   `${REG}/F1_FULL_UBL_2.1/F1FULL_UBL_invoice-2.1.xsd`,
 )
+export const F1_BASE_UBL_CREDITNOTE_XSD = resolve(
+  import.meta.dirname,
+  `${REG}/F1_BASE_UBL_2.1/F1BASE_UBL-CreditNote-2.1.xsd`,
+)
+export const F1_FULL_UBL_CREDITNOTE_XSD = resolve(
+  import.meta.dirname,
+  `${REG}/F1_FULL_UBL_2.1/F1FULL_UBL_CreditNote-2.1.xsd`,
+)
 
 // xsdPath par défaut = XSD commercial OASIS (compatibilité avec les tests existants).
 export function validateAgainstXsd(
