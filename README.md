@@ -9,16 +9,16 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (13/07/2026) : plans 1.1 et 1.2 terminés et mergés dans `main`.**
-> `invoice-core` (v0.2.0) livre : modèle EN 16931, calculs TVA, règles de cohérence
-> et d'exonération (BT-120/121), UBL 2.1 validé XSD OASIS **et** Schematron officiel
-> EN 16931 (Node pur, saxon-js), extraits de flux DGFiP F1 BASE/FULL validés XSD,
-> build `dist/` + `exports` map, tests par propriétés fast-check. Couverture 100 %.
+> **État du projet (13/07/2026) : plans 1.1, 1.2 et 1.2bis terminés et mergés.**
+> `invoice-core` (v0.3.0) livre les **formats du socle** : UBL 2.1 Invoice **et**
+> CreditNote (avoir), extraits de flux DGFiP F1 (facture et avoir), CII D16B et
+> Factur-X PDF/A-3 (CII embarqué), tous validés XSD + Schematron officiel EN 16931
+> (Node pur, saxon-js) ; motifs d'exonération BT-120/121 avec appartenance VATEX ;
+> tests par propriétés fast-check. Couverture 100 %.
 >
-> **Reprise des travaux — prochaine étape : plan 1.2bis** (Factur-X PDF/A-3 + CII,
-> CII seul, génération UBL CreditNote pour l'avoir 381), puis le plan 1.3 (API
-> NestJS, auth multi-tenant, ingestion). Journal détaillé : `.superpowers/sdd/progress.md`
-> (hors git, local).
+> **Reprise — prochaine étape : plan 1.3** (API NestJS, auth multi-tenant, ingestion).
+> La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
+> Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
 
 ## Structure du dépôt
 
@@ -49,17 +49,28 @@ Cœur métier de la facturation, aligné sur le modèle sémantique EN 16931 :
 - **Règles de gestion** (`src/model/rules.ts`) : contrôles de cohérence EN 16931
   (BR-CO-*) et motifs d'exonération BT-120/121 (BR-{E,AE,IC,G,O}-10), signalés en
   `RuleViolation`.
-- **Génération UBL 2.1** : XML validé dans les tests contre le XSD standard
-  OASIS **et** le Schematron officiel EN 16931 (`validation-1.3.16`, exécuté en
-  Node pur via saxon-js, sans JVM). Lève `UnsupportedTypeCodeError` pour un avoir
-  (typeCode 381 — génération CreditNote reportée au plan 1.2bis).
+- **Génération UBL 2.1** : `generateUbl` route la facture (380 → Invoice) **et**
+  l'avoir (381 → `generateCreditNote`, CreditNote), XML validé dans les tests
+  contre le XSD standard OASIS (Invoice **et** CreditNote) **et** le Schematron
+  officiel EN 16931 (`validation-1.3.16`, exécuté en Node pur via saxon-js, sans
+  JVM).
 - **Extraits de flux DGFiP F1** (`src/flux/generate-extract.ts`) : profils BASE
-  (en-tête sans lignes) et FULL (lignes épurées), validés contre les XSD
-  réglementaires (`docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/`).
-  Le `cbc:ProfileID` de l'extrait porte le cadre de facturation BT-23 (règle de
+  (en-tête sans lignes) et FULL (lignes épurées), pour la facture **et** l'avoir,
+  validés contre les XSD réglementaires
+  (`docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/`). Le
+  `cbc:ProfileID` de l'extrait porte le cadre de facturation BT-23 (règle de
   gestion DGFiP G1.02, nomenclature fermée de 13 codes) ; `generateFluxExtractUbl`
   lève `MissingBusinessProcessTypeError` si `businessProcessType` n'est pas
   renseigné sur la facture.
+- **CII D16B** (`src/cii/generate.ts`) : `generateCii` émet le CII UN/CEFACT
+  D16B (profil EN 16931) pour la facture et l'avoir, validé XSD D16B vendorisé
+  et Schematron officiel EN 16931 CII (Node pur, saxon-js).
+- **Factur-X PDF/A-3** (`src/facturx/generate.ts`) : `generateFacturX` produit
+  un PDF/A-3 porteur avec le CII (`generateCii`) embarqué en pièce jointe
+  (`AFRelationship=Alternative`), XMP PDF/A-3 + Factur-X et `OutputIntent` sRGB.
+  Page visuelle minimale en v1 (rendu lisible reporté) ; conformité PDF/A-3
+  formelle vérifiée hors bande par veraPDF en CI optionnelle non bloquante
+  (`.github/workflows/ci-pdfa.yml`).
 
 La bibliothèque n'effectue aucun accès réseau, base de données ni système de
 fichiers (hors tests).
@@ -103,7 +114,9 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
 2. **1.2 — Conformité EN 16931 + extraits de flux** (terminé) : montants non
    négatifs et refus de l'avoir 381, exonérations BT-120/121, Schematron EN 16931
    officiel, extraits de flux DGFiP F1 BASE/FULL, tests par propriétés.
-3. **1.2bis** — Factur-X (PDF/A-3 + CII), CII seul, génération UBL CreditNote
-   pour l'avoir 381.
+3. **1.2bis — Formats du socle : CII D16B, Factur-X, avoir** (terminé) : UBL
+   CreditNote pour l'avoir 381 (commercial et extrait de flux F1), CII D16B
+   (facture et avoir), Factur-X PDF/A-3 (CII embarqué), appartenance VATEX
+   (BT-121) et ProfileID BT-23 sur les documents commerciaux.
 4. **1.3** — API NestJS, auth multi-tenant, ingestion.
 5. **1.4** — Dashboard minimal.
