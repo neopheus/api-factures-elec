@@ -18,6 +18,6 @@ jobs:
       - run: pnpm audit          # 0 vulnérabilité exigé (toutes sévérités)
       - run: pnpm outdated -r    # échoue si une dépendance n'est pas en dernière stable
       - run: pnpm lint
-      - run: pnpm build        # invoice-core (tsc) puis apps/api (swc), ordre topologique pnpm
-      - run: pnpm typecheck     # apps/api résout @factelec/invoice-core via son dist/
-      - run: pnpm test          # invoice-core + apps/api (Testcontainers Postgres via Docker du runner)
+      - run: pnpm build        # invoice-core (tsc) → apps/api (swc) → apps/web (next build), ordre topologique pnpm
+      - run: pnpm typecheck     # apps/api + apps/web (tsc --noEmit tsgo ; next build fait autorité sur les types de routes)
+      - run: pnpm test          # invoice-core + apps/api (Docker/Testcontainers) + apps/web (jsdom, sans Docker)

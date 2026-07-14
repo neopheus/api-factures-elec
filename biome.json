@@ -6,7 +6,8 @@
       "!**/dist",
       "!**/.next",
       "!**/coverage",
-      "!**/*.sef.json"
+      "!**/*.sef.json",
+      "!**/next-env.d.ts"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
