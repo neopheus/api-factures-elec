@@ -1,6 +1,13 @@
 {
   "files": {
-    "includes": ["**", "!**/docs", "!**/dist", "!**/coverage", "!**/*.sef.json"]
+    "includes": [
+      "**",
+      "!**/docs",
+      "!**/dist",
+      "!**/.next",
+      "!**/coverage",
+      "!**/*.sef.json"
+    ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
   "linter": { "enabled": true, "rules": { "preset": "recommended" } },
@@ -13,7 +20,8 @@
       "includes": ["**/tests/**"],
       "linter": {
         "rules": {
-          "style": { "noNonNullAssertion": "off" }
+          "style": { "noNonNullAssertion": "off" },
+          "suspicious": { "noDocumentCookie": "off" }
         }
       }
     }
