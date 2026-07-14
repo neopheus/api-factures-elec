@@ -26,7 +26,7 @@ export class MaintenanceProcessor extends WorkerHost {
 
   async process(job: Job): Promise<void> {
     if (job.name === RECONCILE_INVOICES_JOB) {
-      const n = await this.reconciliation.sweepStuckReceived()
+      const n = await this.reconciliation.sweepStuckGeneration()
       this.logger.log(`reconciliation sweep: ${n} invoice(s) re-enqueued`)
       return
     }

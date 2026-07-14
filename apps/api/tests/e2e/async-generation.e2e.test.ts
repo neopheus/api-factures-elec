@@ -262,4 +262,94 @@ describe('asynchronous generation (e2e)', () => {
       await worker.close()
     }
   })
+
+  // Fix post-revue (Important) : le filet ne couvrait que `received`. Une
+  // facture peut aussi rester bloquée en `generating` si l'écriture finale
+  // du statut `failed` se perd dans la course décrite au rapport Task 3
+  // (`@OnWorkerEvent('failed')` non attendu par `Worker.close()`) — le job
+  // BullMQ est pourtant bien épuisé (`failed`, retenu 7 j par
+  // `removeOnFail`). Ce job résiduel BLOQUERAIT un simple ré-enfilement
+  // (dédup `jobId = invoiceId`) : le sweep doit d'abord l'évincer
+  // (`InvoiceGenerationQueue.removeJob`) avant de ré-enfiler.
+  it('the sweep evicts a residual failed job and regenerates an invoice stuck in `generating`', async () => {
+    const canonical = buildInvoice({
+      ...valid,
+      number: 'FA-ASYNC-STUCK-GENERATING',
+    })
+    const ins = await ownerPool.query(
+      `INSERT INTO invoices (tenant_id, number, type_code, issue_date, currency, status, canonical, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'generating', $6::jsonb, now() - interval '20 minutes', now() - interval '20 minutes')
+       RETURNING id`,
+      [
+        tenantId,
+        canonical.number,
+        canonical.typeCode,
+        canonical.issueDate,
+        canonical.currency,
+        JSON.stringify(canonical),
+      ],
+    )
+    const id = ins.rows[0].id
+
+    // Fabrique un job RÉSIDUEL `failed` sous le MÊME jobId (1 seule
+    // tentative pour échouer immédiatement, sans attendre le backoff) :
+    // simule ce que `removeOnFail` laisserait en Redis après épuisement réel
+    // des tentatives.
+    const failingQueue = new Queue(INVOICE_GENERATION_QUEUE, {
+      connection: { host: redis.host, port: redis.port },
+    })
+    const failingWorker = await createTestWorker(db.appUrl, redis, {
+      generator: { generate: () => Promise.reject(new Error('boom')) },
+    })
+    try {
+      await failingQueue.add(
+        GENERATE_JOB,
+        { tenantId, invoiceId: id },
+        { jobId: id, attempts: 1 },
+      )
+      await waitFor(async () => {
+        const job = await failingQueue.getJob(id)
+        if (!job) return false
+        return (await job.getState()) === 'failed'
+      })
+    } finally {
+      await failingWorker.close()
+    }
+
+    // Le worker qui vient d'échouer a, lui, correctement écrit `failed` (pas
+    // de course dans ce test synchrone) — on simule ICI la perte de cette
+    // écriture en reforçant `generating` avec un `updated_at` ancien, tout
+    // en laissant le job `failed` résiduel intact dans Redis.
+    await ownerPool.query(
+      `UPDATE invoices SET status = 'generating', updated_at = now() - interval '20 minutes' WHERE id = $1`,
+      [id],
+    )
+
+    const worker = await createTestWorker(db.appUrl, redis)
+    const maintQueue = new Queue(MAINTENANCE_QUEUE, {
+      connection: { host: redis.host, port: redis.port },
+    })
+    try {
+      await maintQueue.add(RECONCILE_INVOICES_JOB, {})
+      await waitFor(
+        async () => {
+          const r = await ownerPool.query(
+            'SELECT status FROM invoices WHERE id = $1',
+            [id],
+          )
+          return r.rows[0].status === 'generated'
+        },
+        { timeoutMs: 30_000 },
+      )
+      const formats = await ownerPool.query(
+        'SELECT count(*)::int AS n FROM invoice_formats WHERE invoice_id = $1',
+        [id],
+      )
+      expect(formats.rows[0].n).toBe(5)
+    } finally {
+      await maintQueue.close()
+      await worker.close()
+      await failingQueue.close()
+    }
+  })
 })

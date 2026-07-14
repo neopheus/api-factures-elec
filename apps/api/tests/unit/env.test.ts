@@ -112,4 +112,20 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/RECONCILIATION_STALE_MS/)
   })
+
+  it('applies a wider default staleness for stuck `generating` invoices (15 min)', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.RECONCILIATION_GENERATING_STALE_MS).toBe(900_000)
+  })
+
+  it('rejects a non-positive RECONCILIATION_GENERATING_STALE_MS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        RECONCILIATION_GENERATING_STALE_MS: '0',
+      }),
+    ).toThrow(/RECONCILIATION_GENERATING_STALE_MS/)
+  })
 })

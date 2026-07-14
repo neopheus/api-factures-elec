@@ -21,3 +21,28 @@ describe('InvoiceGenerationQueue.enqueue', () => {
     expect(Object.keys(payload).sort()).toEqual(['invoiceId', 'tenantId'])
   })
 })
+
+describe('InvoiceGenerationQueue.getJobState', () => {
+  it('returns undefined when no job exists for this id', async () => {
+    const getJob = vi.fn().mockResolvedValue(undefined)
+    const q = new InvoiceGenerationQueue({ getJob } as never)
+    expect(await q.getJobState('missing')).toBeUndefined()
+    expect(getJob).toHaveBeenCalledWith('missing')
+  })
+
+  it("returns the job's state when a job exists", async () => {
+    const getState = vi.fn().mockResolvedValue('failed')
+    const getJob = vi.fn().mockResolvedValue({ getState })
+    const q = new InvoiceGenerationQueue({ getJob } as never)
+    expect(await q.getJobState('i')).toBe('failed')
+  })
+})
+
+describe('InvoiceGenerationQueue.removeJob', () => {
+  it('removes the job by id (jobId = invoiceId)', async () => {
+    const remove = vi.fn().mockResolvedValue(undefined)
+    const q = new InvoiceGenerationQueue({ remove } as never)
+    await q.removeJob('i')
+    expect(remove).toHaveBeenCalledWith('i')
+  })
+})

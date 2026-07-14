@@ -70,6 +70,22 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(60_000),
+  // Ancienneté (ms) au-delà de laquelle une facture encore `generating` est
+  // considérée bloquée (le worker a probablement crashé/été tué entre le
+  // marquage `generating` et la complétion — cf. amendement A1, la fenêtre
+  // entre les deux transactions — sans qu'aucun retry BullMQ ne la
+  // rattrape : le job a pu être définitivement `failed` puis évincé de
+  // Redis par `removeOnFail`, ou l'écriture finale du statut `failed` a pu
+  // se perdre dans la course décrite au rapport Task 3). Seuil DÉLIBÉRÉMENT
+  // plus large que `RECONCILIATION_STALE_MS` (`received`) : une génération
+  // légitime (5 formats EN 16931) ne dure jamais 15 minutes — un seuil
+  // court risquerait de balayer une génération simplement lente/en file
+  // d'attente sous charge normale.
+  RECONCILIATION_GENERATING_STALE_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(900_000),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
