@@ -227,20 +227,28 @@ sources) : voir le README racine.
 | --- | --- | --- |
 | `GET /health` | Liveness (aucune dépendance externe) | 200 |
 | `GET /health/ready` | Readiness (ping Postgres via `@nestjs/terminus`) | 200, 503 |
-| `POST /invoices` | Ingestion : validation `invoice-core`, génération synchrone des 5 formats, persistance transactionnelle | 201, 401, 409, 422, 429 |
-| `GET /invoices` | Liste paginée (keyset), tenant-scopée | 200, 401, 429 |
-| `GET /invoices/:id` | Métadonnées d'une facture + formats disponibles | 200, 401, 404, 429 |
-| `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) | 200, 401, 404, 429 |
-| `POST /auth/signup` | Inscription self-service : crée le tenant **et** l'utilisateur `owner` de façon atomique (fonction `SECURITY DEFINER` `signup_tenant`), ouvre une session | 201, 409, 422, 429 |
-| `POST /auth/login` | Authentification utilisateur (email + mot de passe Argon2id), ouvre une session | 200, 401, 422, 429 |
+| `POST /invoices` | Ingestion : validation `invoice-core`, génération synchrone des 5 formats, persistance transactionnelle | 201, 401, 409, 422 |
+| `GET /invoices` | Liste paginée (keyset), tenant-scopée | 200, 401 |
+| `GET /invoices/:id` | Métadonnées d'une facture + formats disponibles | 200, 401, 404 |
+| `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) | 200, 401, 404 |
+| `POST /auth/signup` | Inscription self-service : crée le tenant **et** l'utilisateur `owner` de façon atomique (fonction `SECURITY DEFINER` `signup_tenant`), ouvre une session | 201, 409, 422 |
+| `POST /auth/login` | Authentification utilisateur (email + mot de passe Argon2id), ouvre une session | 200, 401, 422 |
 | `POST /auth/logout` | Révoque la session courante (cookie `factelec_session`) | 204, 401 |
 | `GET /auth/me` | Profil de l'utilisateur de la session courante | 200, 401 |
 | `POST /api-keys` | Création d'une clé API pour le tenant de la session (rôles `owner`/`admin` uniquement) ; secret **affiché une seule fois** | 201, 401, 403, 422 |
 | `GET /api-keys` | Liste des clés du tenant (préfixes uniquement, jamais le secret) — tout rôle utilisateur authentifié | 200, 401, 403 |
 | `DELETE /api-keys/:id` | Révocation immédiate d'une clé (rôles `owner`/`admin` uniquement) | 204, 401, 403, 404 |
-| `POST /admin/login` | Authentification super admin plateforme (`platform_admins`, Argon2id), ouvre une session admin | 200, 401, 422, 429 |
+| `POST /admin/login` | Authentification super admin plateforme (`platform_admins`, Argon2id), ouvre une session admin | 200, 401, 422 |
 | `POST /admin/logout` | Révoque la session admin courante | 204, 401, 403 |
 | `GET /admin/tenants` | Liste de tous les tenants (vue plateforme : nombre d'utilisateurs, de factures) | 200, 401, 403 |
+
+**Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
+route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
+(exemptées via `@SkipThrottle()` — jamais rate-limitées, interrogées à haute
+fréquence par l'orchestrateur). Seuils renforcés (`@Throttle`, en plus du
+défaut `RATE_LIMIT_TTL`/`RATE_LIMIT_LIMIT`) sur `POST /auth/signup` (5/h/IP),
+`POST /auth/login` (10/15 min/IP) et `POST /admin/login` (10/15 min/IP) —
+anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
 
 **Deux régimes d'authentification distincts, jamais interchangeables** :
 - **`POST /invoices`** (ingestion) reste **exclusivement machine** :
