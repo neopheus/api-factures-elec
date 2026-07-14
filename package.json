@@ -20,7 +20,13 @@
   },
   "pnpm": {
     "overrides": {
-      "@esbuild-kit/core-utils>esbuild": "^0.25.0"
+      "@esbuild-kit/core-utils>esbuild": "^0.25.0",
+      "postcss": "8.5.19"
+    },
+    "updateConfig": {
+      "ignoreDependencies": [
+        "typescript"
+      ]
     }
   }
 }
