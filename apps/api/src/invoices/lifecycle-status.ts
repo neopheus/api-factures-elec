@@ -71,7 +71,11 @@ export const TERMINAL_STATUSES: Set<LifecycleStatus> = new Set<LifecycleStatus>(
 const REASON_REQUIRED = new Set<LifecycleStatus>(['refusee', 'suspendue'])
 
 export function isLifecycleStatus(v: unknown): v is LifecycleStatus {
-  return typeof v === 'string' && v in STATUS_META
+  // Object.hasOwn (et non `v in STATUS_META`) : `in` traverse la chaîne de
+  // prototype et reconnaîtrait à tort 'toString'/'constructor'/etc. comme
+  // des slugs valides — inacceptable pour un garde de type sur une entrée
+  // non fiable (Tasks 5/6 : body de requête HTTP).
+  return typeof v === 'string' && Object.hasOwn(STATUS_META, v)
 }
 
 export function isTerminal(s: LifecycleStatus): boolean {

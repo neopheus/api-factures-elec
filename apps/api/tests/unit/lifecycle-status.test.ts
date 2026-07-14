@@ -84,6 +84,21 @@ describe('lifecycle-status (CDV state machine)', () => {
     expect(isLifecycleStatus('nope')).toBe(false)
   })
 
+  // isLifecycleStatus() garde une entrée NON FIABLE (utilisée en aval par
+  // Tasks 5/6 pour valider un statut reçu, ex. body de requête HTTP). `in`
+  // traverse la chaîne de prototype : sans garde dédiée, ces noms hérités
+  // d'Object.prototype seraient (à tort) reconnus comme des slugs valides,
+  // faussant silencieusement canTransition/statusByCode en aval
+  // (STATUS_META['toString'].code === undefined).
+  it.each([
+    'toString',
+    'constructor',
+    'hasOwnProperty',
+    'valueOf',
+  ])('rejects prototype-chain property %s as an unknown status', (name) => {
+    expect(isLifecycleStatus(name)).toBe(false)
+  })
+
   // A7 (amendement contrôleur) : le modèle monotone autorise explicitement
   // 212 (Encaissée) → 213 (Rejetée) — une facture encaissée peut être
   // ultérieurement rejetée (anomalie détectée après paiement). Cas
