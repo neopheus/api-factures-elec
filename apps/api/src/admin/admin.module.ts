@@ -5,7 +5,7 @@ import { AdminGuard } from './admin.guard.js'
 import { AdminService } from './admin.service.js'
 
 @Module({
-  imports: [UsersModule], // SessionService/SessionGuard/CsrfGuard
+  imports: [UsersModule], // SessionService/SessionGuard (CsrfGuard exporté par UsersModule, non utilisé ici : /admin/* n'a aucune route mutante protégée par double-submit CSRF)
   controllers: [AdminController],
   providers: [AdminService, AdminGuard],
 })

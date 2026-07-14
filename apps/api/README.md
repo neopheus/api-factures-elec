@@ -276,9 +276,13 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   `pnpm provision:tenant "Nom"` (rôle owner, hors chemin de requête,
   conservé pour le provisioning hors self-service).
 - **Super admins plateforme** : **CLI uniquement**, aucune inscription
-  self-service : `DATABASE_OWNER_URL=... pnpm provision:admin <email>
-  <password>` (`scripts/provision-admin.ts`, rôle owner, insère dans
-  `platform_admins`).
+  self-service : `DATABASE_OWNER_URL=... PROVISION_ADMIN_PASSWORD=... pnpm
+  provision:admin <email>` (`scripts/provision-admin.ts`, rôle owner, insère
+  dans `platform_admins`). Le mot de passe ne transite **jamais** par argv
+  (visible via `ps`/l'historique du shell) : il est lu depuis
+  `PROVISION_ADMIN_PASSWORD`, ou saisi de façon interactive sur stdin si la
+  variable est absente. Un email déjà provisionné (23505) renvoie un message
+  d'erreur clair, sans stack trace.
 
 ## Tests
 

@@ -261,6 +261,33 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
 > existant, sans changement du contrat `POST /invoices`. Puis **3.x** :
 > point d'accès Peppol interne.
 
+### Prérequis pré-production / pré-DGFiP
+
+Liste compacte consolidant des points déjà détaillés ci-dessous (dette
+reportée) ou dans `apps/api/README.md` : aucun ne bloque le passage en
+phase 2, mais **tous** doivent être traités avant une exposition réelle
+(immatriculation DGFiP, onboarding de tenants en production) :
+
+- **Journal d'audit des authentifications** (connexions, échecs, révocations
+  de session) — absent à ce jour, prévu horizon **2.x**.
+- **Vérification email** avant tout onboarding réel — colonne
+  `email_verified` prête en base, non contraignante aujourd'hui (rate
+  limiting strict sur `/auth/signup` en compensation provisoire).
+- **`TRUST_PROXY` + `SESSION_COOKIE_DOMAIN`** à configurer selon la topologie
+  réelle de déploiement (load balancer/reverse-proxy devant l'API, partage de
+  cookies cross-subdomain dashboard/API) — les défauts conviennent au dev
+  local uniquement.
+- **Durcissement de la session super admin** (MFA TOTP, allowlist IP, TTL
+  dédié réduit) — la session admin 1.4 réutilise le régime standard
+  (Argon2id, TTL absolu générique), sans contrôle additionnel → **phase 5**.
+- **Validation et unicité du SIREN (KYB)** — seul le format est vérifié (9
+  chiffres) ; ni la clé de contrôle (Luhn), ni l'existence, ni l'unicité
+  réelle de l'entreprise ne sont vérifiées à ce jour.
+- **`last_used_at` des clés API** — colonne présente, jamais mise à jour ;
+  décision à trancher en **phase 2** : l'écrire depuis la fonction
+  `SECURITY DEFINER` `authenticate_api_key` (seule exécutée avant le contexte
+  tenant) ou retirer la colonne.
+
 Dette explicitement reportée (aucune ne bloque le passage en phase 2) :
 
 - **Workers BullMQ** (génération asynchrone des formats) — actuellement

@@ -18,6 +18,33 @@ const ownerInput = {
   siren: '732829320',
 }
 
+// Seme un utilisateur d'un rôle donné dans le tenant du owner (invitation
+// différée en 1.4 → insertion directe), puis ouvre sa session.
+async function seedRoleSession(
+  app: INestApplication,
+  ownerPool: pg.Pool,
+  email: string,
+  password: string,
+  role: 'owner' | 'admin' | 'accountant' | 'viewer',
+): Promise<Session> {
+  const tenantRow = await ownerPool.query(
+    'SELECT tenant_id FROM authenticate_user($1)',
+    [ownerInput.email],
+  )
+  const tenantId = tenantRow.rows[0].tenant_id
+  const hash = await hashPassword(password)
+  await ownerPool.query(
+    'INSERT INTO users (tenant_id, email, password_hash, role) VALUES ($1, $2, $3, $4)',
+    [tenantId, email, hash, role],
+  )
+  const login = await request(app.getHttpServer())
+    .post('/auth/login')
+    .send({ email, password })
+    .expect(200)
+  const cookie = login.headers['set-cookie'] as unknown as string[]
+  return { cookie, csrf: extractCookie(cookie, 'factelec_csrf') }
+}
+
 describe('api keys management (e2e)', () => {
   let db: TestDb
   let app: INestApplication
@@ -63,6 +90,10 @@ describe('api keys management (e2e)', () => {
     expect(res.body).toMatchObject({ label: 'prod' })
     expect(res.body.prefix).toMatch(/^[0-9a-f]{24}$/)
     expect(res.body.token).toMatch(/^fk_[0-9a-f]{24}\./)
+    // Le hash du secret ne quitte jamais le serveur : seul le token clair
+    // (affiché une fois) sort dans la réponse de création.
+    expect(res.body).not.toHaveProperty('secretHash')
+    expect(res.body).not.toHaveProperty('secret_hash')
     // La clé fonctionne pour l'auth machine (bout en bout).
     await request(app.getHttpServer())
       .get('/invoices')
@@ -110,36 +141,85 @@ describe('api keys management (e2e)', () => {
       .expect(404)
   })
 
-  it('enforces roles: a viewer cannot create keys (403)', async () => {
-    // Semer un viewer dans le tenant A (invitation différée → insertion directe via owner).
-    const tenantRow = await ownerPool.query(
-      'SELECT tenant_id FROM authenticate_user($1)',
-      [ownerInput.email],
+  it('enforces roles: a viewer cannot create nor revoke keys (403)', async () => {
+    const viewer = await seedRoleSession(
+      app,
+      ownerPool,
+      'viewer@a.example',
+      'viewer-passphrase-123',
+      'viewer',
     )
-    const tenantId = tenantRow.rows[0].tenant_id
-    const hash = await hashPassword('viewer-passphrase-123')
-    await ownerPool.query(
-      "INSERT INTO users (tenant_id, email, password_hash, role) VALUES ($1, 'viewer@a.example', $2, 'viewer')",
-      [tenantId, hash],
-    )
-    const login = await request(app.getHttpServer())
-      .post('/auth/login')
-      .send({ email: 'viewer@a.example', password: 'viewer-passphrase-123' })
-      .expect(200)
-    const viewer = login.headers['set-cookie'] as unknown as string[]
-    const csrf = extractCookie(viewer, 'factelec_csrf')
     // Le viewer peut lister…
     await request(app.getHttpServer())
       .get('/api-keys')
-      .set('Cookie', viewer)
+      .set('Cookie', viewer.cookie)
       .expect(200)
     // …mais pas créer.
     await request(app.getHttpServer())
       .post('/api-keys')
-      .set('Cookie', viewer)
-      .set('X-CSRF-Token', csrf)
+      .set('Cookie', viewer.cookie)
+      .set('X-CSRF-Token', viewer.csrf)
       .send({ label: 'nope' })
       .expect(403)
+    // …ni révoquer une clé existante du tenant.
+    const created = await request(app.getHttpServer())
+      .post('/api-keys')
+      .set('Cookie', sess.cookie)
+      .set('X-CSRF-Token', sess.csrf)
+      .send({ label: 'viewer-cannot-revoke' })
+      .expect(201)
+    await request(app.getHttpServer())
+      .delete(`/api-keys/${created.body.id}`)
+      .set('Cookie', viewer.cookie)
+      .set('X-CSRF-Token', viewer.csrf)
+      .expect(403)
+  })
+
+  it('enforces roles: an accountant can list but neither create nor revoke keys (403)', async () => {
+    const accountant = await seedRoleSession(
+      app,
+      ownerPool,
+      'accountant@a.example',
+      'accountant-passphrase-123',
+      'accountant',
+    )
+    // L'accountant peut lister…
+    await request(app.getHttpServer())
+      .get('/api-keys')
+      .set('Cookie', accountant.cookie)
+      .expect(200)
+    // …mais pas créer.
+    await request(app.getHttpServer())
+      .post('/api-keys')
+      .set('Cookie', accountant.cookie)
+      .set('X-CSRF-Token', accountant.csrf)
+      .send({ label: 'nope' })
+      .expect(403)
+    // …ni révoquer une clé existante du tenant.
+    const created = await request(app.getHttpServer())
+      .post('/api-keys')
+      .set('Cookie', sess.cookie)
+      .set('X-CSRF-Token', sess.csrf)
+      .send({ label: 'accountant-cannot-revoke' })
+      .expect(201)
+    await request(app.getHttpServer())
+      .delete(`/api-keys/${created.body.id}`)
+      .set('Cookie', accountant.cookie)
+      .set('X-CSRF-Token', accountant.csrf)
+      .expect(403)
+  })
+
+  it('rejects an empty label on creation (422, zod schema contract)', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api-keys')
+      .set('Cookie', sess.cookie)
+      .set('X-CSRF-Token', sess.csrf)
+      .send({ label: '' })
+      .expect(422)
+    expect(res.body.type).toBe('urn:factelec:problem:validation-error')
+    expect(
+      res.body.errors.some((e: { path: string }) => e.path === 'label'),
+    ).toBe(true)
   })
 
   it('isolates tenants: B cannot see or revoke A keys', async () => {

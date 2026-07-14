@@ -104,16 +104,26 @@ describe('invoices read via session (e2e)', () => {
       .expect(401)
   })
 
-  it('isolates tenants: B cannot read A invoice (404)', async () => {
+  it('isolates tenants: B cannot read A invoice (404, byte-identical to a true not-found)', async () => {
     const sessB = await signupSession(app, {
       email: 'b@shop.example',
       password: 'passphrase-bbbbbb-1',
       organizationName: 'Shop B',
       siren: null,
     })
-    await request(app.getHttpServer())
-      .get(`/invoices/${invoiceA}`)
-      .set('Cookie', sessB.cookie)
-      .expect(404)
+    const [crossTenant, trueNotFound] = await Promise.all([
+      request(app.getHttpServer())
+        .get(`/invoices/${invoiceA}`)
+        .set('Cookie', sessB.cookie)
+        .expect(404),
+      request(app.getHttpServer())
+        .get('/invoices/22222222-2222-2222-2222-222222222222')
+        .set('Cookie', sessB.cookie)
+        .expect(404),
+    ])
+    // Le 404 pour une facture d'un autre tenant doit être structurellement
+    // identique à un vrai not-found (même corps problem) — aucune fuite
+    // distinguable (parité avec tenant-isolation.e2e.test.ts, régime clé API).
+    expect(crossTenant.body).toEqual(trueNotFound.body)
   })
 })
