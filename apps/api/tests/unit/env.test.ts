@@ -66,4 +66,33 @@ describe('validateEnv', () => {
       validateEnv(null as unknown as Record<string, unknown>),
     ).toThrowError(/\(root\)/)
   })
+
+  it('applies Redis defaults and coerces port', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.REDIS_HOST).toBe('localhost')
+    expect(env.REDIS_PORT).toBe(6379)
+    expect(env.REDIS_DB).toBe(0)
+    expect(env.REDIS_TLS).toBe(false)
+    expect(env.GENERATION_JOB_ATTEMPTS).toBe(3)
+  })
+
+  it('parses REDIS_TLS strictly (only "true"/"1" enable TLS)', () => {
+    const base = { DATABASE_URL: 'postgres://u:p@localhost:5432/db' }
+    expect(validateEnv({ ...base, REDIS_TLS: 'true' }).REDIS_TLS).toBe(true)
+    expect(validateEnv({ ...base, REDIS_TLS: '1' }).REDIS_TLS).toBe(true)
+    // Piège z.coerce.boolean (toute chaîne non vide → true) NEUTRALISÉ :
+    expect(validateEnv({ ...base, REDIS_TLS: 'false' }).REDIS_TLS).toBe(false)
+    expect(validateEnv({ ...base, REDIS_TLS: 'no' }).REDIS_TLS).toBe(false)
+  })
+
+  it('rejects a non-numeric REDIS_PORT', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        REDIS_PORT: 'abc',
+      }),
+    ).toThrow(/REDIS_PORT/)
+  })
 })

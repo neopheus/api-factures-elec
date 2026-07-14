@@ -7,6 +7,7 @@ import { DbModule } from './db/db.module.js'
 import { HealthModule } from './health/health.module.js'
 import { InvoicesModule } from './invoices/invoices.module.js'
 import { AppLoggerModule } from './logging/logger.module.js'
+import { QueueModule } from './queue/queue.module.js'
 import { UsersModule } from './users/users.module.js'
 
 @Module({
@@ -14,6 +15,7 @@ import { UsersModule } from './users/users.module.js'
     AppConfigModule,
     AppLoggerModule,
     DbModule,
+    QueueModule,
     AuthModule,
     HealthModule,
     InvoicesModule,

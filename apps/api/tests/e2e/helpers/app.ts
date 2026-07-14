@@ -5,6 +5,7 @@ import helmet from 'helmet'
 import { AppModule } from '../../../src/app.module.js'
 import { ProblemDetailsFilter } from '../../../src/common/http-exception.filter.js'
 import { APP_POOL, createPool } from '../../../src/db/client.js'
+import { REDIS_CONNECTION } from '../../../src/queue/redis-connection.module.js'
 
 // supertest, quand on lui passe un http.Server NON-écoutant, fait un
 // listen(0)/close() éphémère À CHAQUE requête (`request(app.getHttpServer())`
@@ -36,13 +37,37 @@ export function listenOnce(app: INestApplication): Promise<void> {
 // zod de ConfigModule : ConfigModule.forRoot() est appelée de façon eager, au
 // chargement du module (donc avant l'exécution de cette fonction) — les
 // valeurs par défaut réellement utilisées sont posées dans tests/setup.ts.
-export async function createTestApp(appUrl: string): Promise<INestApplication> {
+//
+// `redis` (optionnel) : override du provider REDIS_CONNECTION (token GLOBAL,
+// cf. queue/redis-connection.module.ts) avec les coordonnées d'un Redis de
+// test (Testcontainers, port dynamique) — même raison que ci-dessus pour
+// APP_POOL : ConfigService ne peut pas connaître ce port à l'avance. Vérifié
+// empiriquement : l'override par token se propage bien dans la factory de
+// `BullModule.forRootAsync` (injection par token, container Nest unifié) —
+// le repli statique `QueueModule.forRoot(connection)` évoqué au plan n'est
+// pas nécessaire. Sans ce paramètre, l'app pointe sur le Redis par défaut de
+// l'environnement (localhost:6379) — les tests qui n'exercent jamais Redis
+// (pas d'enfilement, pas de ping readiness) n'en pâtissent pas grâce à
+// `lazyConnect` + `skipWaitingForReady`/`skipVersionCheck` (cf.
+// queue.module.ts) : aucune connexion réelle n'est ouverte tant que rien ne
+// l'exige.
+export async function createTestApp(
+  appUrl: string,
+  redis?: { host: string; port: number },
+): Promise<INestApplication> {
   process.env.DATABASE_URL = appUrl
   process.env.LOG_LEVEL = 'silent'
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(APP_POOL)
     .useFactory({ factory: () => createPool(appUrl) })
-    .compile()
+  if (redis) {
+    builder.overrideProvider(REDIS_CONNECTION).useValue({
+      host: redis.host,
+      port: redis.port,
+      lazyConnect: true,
+    })
+  }
+  const moduleRef = await builder.compile()
   const app = moduleRef.createNestApplication({ bufferLogs: true })
   app.use(helmet())
   app.use(cookieParser())

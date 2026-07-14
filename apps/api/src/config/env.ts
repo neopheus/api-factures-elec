@@ -37,6 +37,27 @@ export const envSchema = z.object({
   // Domaine du cookie de session (ex: `.factelec.fr` en prod, pour partager le
   // cookie entre le dashboard et l'API sur des sous-domaines). Absent en dev.
   SESSION_COOKIE_DOMAIN: z.string().optional(),
+  // ── Redis / BullMQ (workers) ──────────────────────────────────────────────
+  REDIS_HOST: z.string().default('localhost'),
+  REDIS_PORT: z.coerce.number().int().positive().default(6379),
+  REDIS_DB: z.coerce.number().int().nonnegative().default(0),
+  REDIS_PASSWORD: z.string().optional(),
+  // TLS activé UNIQUEMENT sur "true"/"1" (managed Redis prod). z.coerce.boolean
+  // est PROSCRIT ici : il transforme toute chaîne non vide (dont "false") en
+  // true — piège classique. On parse explicitement.
+  REDIS_TLS: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  // Nombre de tentatives d'un job de génération avant passage en `failed`.
+  GENERATION_JOB_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10)
+    .default(3),
+  // Périodicité de la purge des sessions expirées (job répétable, Task 7).
+  SESSION_PURGE_EVERY_MS: z.coerce.number().int().positive().default(3_600_000),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
