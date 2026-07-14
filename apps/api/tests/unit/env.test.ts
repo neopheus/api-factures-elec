@@ -95,4 +95,21 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/REDIS_PORT/)
   })
+
+  it('applies reconciliation defaults (5 min staleness, 1 min sweep cadence)', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.RECONCILIATION_STALE_MS).toBe(300_000)
+    expect(env.RECONCILIATION_SWEEP_EVERY_MS).toBe(60_000)
+  })
+
+  it('rejects a non-positive RECONCILIATION_STALE_MS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        RECONCILIATION_STALE_MS: '0',
+      }),
+    ).toThrow(/RECONCILIATION_STALE_MS/)
+  })
 })

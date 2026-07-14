@@ -17,7 +17,6 @@ export async function seedGeneratedInvoice(
   const invoice = buildInvoice(input)
   const { id } = await repo.insertReceived(tenantId, invoice)
   const formats = await new FormatGenerationService().generate(invoice)
-  await repo.saveFormats(tenantId, id, formats)
-  await repo.markGenerationStatus(tenantId, id, 'generated')
+  await repo.completeGeneration(tenantId, id, formats)
   return id
 }

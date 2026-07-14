@@ -35,7 +35,12 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**/*.ts'],
       // Exclus : bootstrap et pur câblage DI (aucune logique à couvrir).
-      exclude: ['src/main.ts', '**/*.module.ts', 'src/db/migrations/**'],
+      exclude: [
+        'src/main.ts',
+        'src/worker-main.ts',
+        '**/*.module.ts',
+        'src/db/migrations/**',
+      ],
       thresholds: { lines: 90, functions: 90, statements: 90, branches: 90 },
     },
   },

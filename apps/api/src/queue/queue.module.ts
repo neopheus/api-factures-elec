@@ -1,6 +1,9 @@
 import { BullModule } from '@nestjs/bullmq'
 import { Module } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import type { ConnectionOptions } from 'bullmq'
+import type { EnvConfig } from '../config/env.js'
+import { invoiceGenerationJobOptions } from './invoice-generation.job-options.js'
 import { InvoiceGenerationQueue } from './invoice-generation.queue.js'
 import {
   INVOICE_GENERATION_QUEUE,
@@ -64,10 +67,22 @@ import {
         skipVersionCheck: true,
       }),
     }),
-    BullModule.registerQueue(
-      { name: INVOICE_GENERATION_QUEUE },
-      { name: MAINTENANCE_QUEUE },
-    ),
+    // `defaultJobOptions` (attempts/backoff/rétention) tiré de l'env — cf.
+    // `invoice-generation.job-options.ts` : SEULE source de vérité, partagée
+    // avec `WorkerQueueModule` (Task 3), pour que le producteur (ingestion)
+    // ET le consommateur (réconciliation, worker) appliquent EXACTEMENT la
+    // même politique de tentatives à la file `invoice-generation`.
+    BullModule.registerQueueAsync({
+      name: INVOICE_GENERATION_QUEUE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<EnvConfig, true>) => ({
+        defaultJobOptions: invoiceGenerationJobOptions(config),
+      }),
+    }),
+    // `maintenance` : pas de politique de job dédiée ici (les jobs de
+    // maintenance sont posés explicitement par leurs planificateurs, cf.
+    // worker/reconciliation.scheduler.ts et, à venir, Task 7).
+    BullModule.registerQueue({ name: MAINTENANCE_QUEUE }),
   ],
   providers: [InvoiceGenerationQueue],
   exports: [BullModule, InvoiceGenerationQueue],

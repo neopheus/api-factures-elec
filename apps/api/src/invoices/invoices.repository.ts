@@ -47,10 +47,17 @@ export class InvoicesRepository {
     })
   }
 
-  // Rejeu sûr : delete puis insert dans UNE transaction tenant. La contrainte
-  // unique(invoice_id, kind) interdit les doublons ; delete+insert fait qu'un
-  // retry après crash partiel converge vers exactement le même état.
-  async saveFormats(
+  // Amendement A1 (plan 2.1, Task 3, décision contrôleur) : succès de
+  // génération ATOMIQUE — delete+insert des formats ET passage du statut à
+  // `generated` dans UNE SEULE transaction tenant (remplace l'ancien couple
+  // saveFormats()+markGenerationStatus('generated') appelés séparément par le
+  // processor). Un crash entre les deux anciennes étapes laissait une fenêtre
+  // observable où les formats existaient déjà mais le statut restait
+  // `generating` ; ici c'est tout ou rien (COMMIT unique). Rejeu sûr
+  // identique à l'ex-saveFormats : delete puis insert, la contrainte
+  // unique(invoice_id, kind) interdit les doublons — un retry (ou un rejeu
+  // explicite de job) reconverge vers exactement le même état.
+  async completeGeneration(
     tenantId: string,
     invoiceId: string,
     formats: GeneratedFormat[],
@@ -72,6 +79,10 @@ export class InvoicesRepository {
           })),
         )
       }
+      await db
+        .update(invoices)
+        .set({ status: 'generated', updatedAt: new Date() })
+        .where(eq(invoices.id, invoiceId))
     })
   }
 
@@ -85,6 +96,23 @@ export class InvoicesRepository {
         .update(invoices)
         .set({ status, updatedAt: new Date() })
         .where(eq(invoices.id, invoiceId))
+    })
+  }
+
+  // Recharge le canonical pour le worker (payload de job = ids only, cf.
+  // invoice-generation.job.ts) — le contenu de la facture ne transite jamais
+  // par Redis, seul ce chargement sous RLS y accède.
+  async loadCanonical(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<Invoice | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ canonical: invoices.canonical })
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .limit(1)
+      return rows[0]?.canonical ?? null
     })
   }
 

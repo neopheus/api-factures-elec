@@ -58,6 +58,18 @@ export const envSchema = z.object({
     .default(3),
   // Périodicité de la purge des sessions expirées (job répétable, Task 7).
   SESSION_PURGE_EVERY_MS: z.coerce.number().int().positive().default(3_600_000),
+  // ── Réconciliation (Task 3, décision contrôleur — comble le trou "received"
+  // orpheline documenté au commentaire InvoicesService.ingest) ─────────────
+  // Ancienneté (ms) au-delà de laquelle une facture encore `received` est
+  // considérée orpheline (enfilement Redis probablement en échec après la
+  // persistance Postgres) et re-enfilée par le balayage périodique.
+  RECONCILIATION_STALE_MS: z.coerce.number().int().positive().default(300_000),
+  // Périodicité du balayage de réconciliation (job répétable, file `maintenance`).
+  RECONCILIATION_SWEEP_EVERY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60_000),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
