@@ -43,7 +43,7 @@ function bytes(
 }
 
 @Injectable()
-export class SynchronousFormatGenerator implements InvoiceFormatGenerator {
+export class FormatGenerationService implements InvoiceFormatGenerator {
   // eslint: méthode async pour respecter le port (future file BullMQ).
   async generate(invoice: Invoice): Promise<GeneratedFormat[]> {
     const formats: GeneratedFormat[] = [

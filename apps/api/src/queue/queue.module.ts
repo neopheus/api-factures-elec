@@ -1,6 +1,7 @@
 import { BullModule } from '@nestjs/bullmq'
 import { Module } from '@nestjs/common'
 import type { ConnectionOptions } from 'bullmq'
+import { InvoiceGenerationQueue } from './invoice-generation.queue.js'
 import {
   INVOICE_GENERATION_QUEUE,
   MAINTENANCE_QUEUE,
@@ -68,6 +69,7 @@ import {
       { name: MAINTENANCE_QUEUE },
     ),
   ],
-  exports: [BullModule],
+  providers: [InvoiceGenerationQueue],
+  exports: [BullModule, InvoiceGenerationQueue],
 })
 export class QueueModule {}

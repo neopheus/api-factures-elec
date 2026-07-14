@@ -6,17 +6,14 @@ import {
 } from '@factelec/invoice-core'
 import {
   ConflictException,
-  Inject,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common'
 import { ProblemType, problem } from '../common/problem.js'
-import {
-  type FormatKind,
-  INVOICE_FORMAT_GENERATOR,
-  type InvoiceFormatGenerator,
-} from './format-generator.port.js'
+// biome-ignore lint/style/useImportType: InvoiceGenerationQueue résolu par Nest via design:paramtypes.
+import { InvoiceGenerationQueue } from '../queue/invoice-generation.queue.js'
+import type { FormatKind } from './format-generator.port.js'
 import { isUuid } from './format-kind.js'
 import type { InvoiceSummary } from './invoices.repository.js'
 // biome-ignore lint/style/useImportType: InvoicesRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
@@ -79,8 +76,7 @@ function isUniqueViolation(e: unknown): boolean {
 export class InvoicesService {
   constructor(
     private readonly repo: InvoicesRepository,
-    @Inject(INVOICE_FORMAT_GENERATOR)
-    private readonly generator: InvoiceFormatGenerator,
+    private readonly queue: InvoiceGenerationQueue,
   ) {}
 
   async ingest(
@@ -117,13 +113,10 @@ export class InvoicesService {
       )
     }
 
-    // 3) Génération synchrone des formats du socle (port).
-    const formats = await this.generator.generate(invoice)
-
-    // 4) Persistance (idempotence : unique(tenant, number) → 409).
+    // 3) Persistance immédiate au statut `received` (idempotence 23505 → 409).
+    let id: string
     try {
-      const { id } = await this.repo.persist(tenantId, invoice, formats)
-      return { id, status: 'generated' }
+      ;({ id } = await this.repo.insertReceived(tenantId, invoice))
     } catch (e) {
       if (isUniqueViolation(e)) {
         throw new ConflictException(
@@ -134,6 +127,13 @@ export class InvoicesService {
       }
       throw e
     }
+
+    // 4) Enfilement de la génération (hors-bande). Payload minimal (ids only).
+    // Si Redis est indisponible, l'appel échoue (500) mais la facture reste
+    // persistée en `received` et re-traitable (réconciliation différée, notée
+    // au reprise) ; la readiness Redis prévient ce cas en amont.
+    await this.queue.enqueue(tenantId, id)
+    return { id, status: 'received' }
   }
 
   async get(

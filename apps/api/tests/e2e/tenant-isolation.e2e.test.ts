@@ -1,3 +1,4 @@
+import type { InvoiceInput } from '@factelec/invoice-core'
 import type { INestApplication } from '@nestjs/common'
 import pg from 'pg'
 import request from 'supertest'
@@ -5,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
 import { seedTenantWithKey } from './helpers/seed.js'
+import { seedGeneratedInvoice } from './helpers/seed-invoice.js'
 
-const invoice = (number: string) => ({
+const invoice = (number: string): InvoiceInput => ({
   number,
   issueDate: '2026-07-13',
   dueDate: '2026-08-12',
@@ -39,15 +41,18 @@ describe('cross-tenant isolation (e2e, MANDATORY)', () => {
   beforeAll(async () => {
     db = await startTestDb()
     ownerPool = new pg.Pool({ connectionString: db.ownerUrl })
-    ;({ token: tokenA } = await seedTenantWithKey(ownerPool, 'A'))
+    let tenantIdA: string
+    ;({ tenantId: tenantIdA, token: tokenA } = await seedTenantWithKey(
+      ownerPool,
+      'A',
+    ))
     ;({ token: tokenB } = await seedTenantWithKey(ownerPool, 'B'))
     app = await createTestApp(db.appUrl)
-    const res = await request(app.getHttpServer())
-      .post('/invoices')
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send(invoice('A-1'))
-      .expect(201)
-    invoiceIdA = res.body.id
+    invoiceIdA = await seedGeneratedInvoice(
+      ownerPool,
+      tenantIdA,
+      invoice('A-1'),
+    )
   })
   afterAll(async () => {
     await app.close()

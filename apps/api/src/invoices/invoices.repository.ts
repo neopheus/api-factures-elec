@@ -1,11 +1,13 @@
 import type { Invoice } from '@factelec/invoice-core'
 import { Injectable } from '@nestjs/common'
 import { and, desc, eq, lt, or, sql } from 'drizzle-orm'
-import { invoiceFormats, invoices } from '../db/schema.js'
+import { invoiceFormats, type invoiceStatus, invoices } from '../db/schema.js'
 // biome-ignore lint/style/useImportType: TenantContextService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { TenantContextService } from '../db/tenant-context.service.js'
 import { decodeCursor, encodeCursor } from './cursor.js'
 import type { FormatKind, GeneratedFormat } from './format-generator.port.js'
+
+export type GenerationStatus = (typeof invoiceStatus.enumValues)[number]
 
 export interface InvoiceSummary {
   id: string
@@ -21,14 +23,11 @@ export interface InvoiceSummary {
 export class InvoicesRepository {
   constructor(private readonly tenant: TenantContextService) {}
 
-  // Persiste la facture + tous ses formats dans UNE transaction tenant (RLS).
-  // Idempotence : PAS de existsByNumber ici (TOCTOU) — l'unicité repose sur la
-  // contrainte unique(tenant_id, number) en base ; le service catche l'erreur
-  // pg 23505 et la traduit en 409 (cf. InvoicesService.ingest). Cf. task-7-report.md (A3).
-  async persist(
+  // Persiste la SEULE ligne facture au statut de génération `received`.
+  // Idempotence (tenant, number) portée par la contrainte unique → 23505 → 409.
+  async insertReceived(
     tenantId: string,
     invoice: Invoice,
-    formats: GeneratedFormat[],
   ): Promise<{ id: string }> {
     return this.tenant.run(tenantId, async (db) => {
       const [row] = await db
@@ -39,26 +38,53 @@ export class InvoicesRepository {
           typeCode: invoice.typeCode,
           issueDate: invoice.issueDate,
           currency: invoice.currency,
-          status: 'generated',
+          status: 'received',
           canonical: invoice,
         })
         .returning({ id: invoices.id })
-      if (!row) {
-        throw new Error('insert into invoices returned no row')
+      if (!row) throw new Error('insert into invoices returned no row')
+      return { id: row.id }
+    })
+  }
+
+  // Rejeu sûr : delete puis insert dans UNE transaction tenant. La contrainte
+  // unique(invoice_id, kind) interdit les doublons ; delete+insert fait qu'un
+  // retry après crash partiel converge vers exactement le même état.
+  async saveFormats(
+    tenantId: string,
+    invoiceId: string,
+    formats: GeneratedFormat[],
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .delete(invoiceFormats)
+        .where(eq(invoiceFormats.invoiceId, invoiceId))
+      if (formats.length > 0) {
+        await db.insert(invoiceFormats).values(
+          formats.map((f) => ({
+            tenantId,
+            invoiceId,
+            kind: f.kind,
+            contentType: f.contentType,
+            bodyText: f.bodyText,
+            bodyBytes: f.bodyBytes,
+            byteSize: f.byteSize,
+          })),
+        )
       }
-      const invoiceId = row.id
-      await db.insert(invoiceFormats).values(
-        formats.map((f) => ({
-          tenantId,
-          invoiceId,
-          kind: f.kind,
-          contentType: f.contentType,
-          bodyText: f.bodyText,
-          bodyBytes: f.bodyBytes,
-          byteSize: f.byteSize,
-        })),
-      )
-      return { id: invoiceId }
+    })
+  }
+
+  async markGenerationStatus(
+    tenantId: string,
+    invoiceId: string,
+    status: GenerationStatus,
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .update(invoices)
+        .set({ status, updatedAt: new Date() })
+        .where(eq(invoices.id, invoiceId))
     })
   }
 

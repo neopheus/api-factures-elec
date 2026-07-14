@@ -29,6 +29,13 @@
       "when": 1783969124224,
       "tag": "0003_auth_rls_functions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784066113596,
+      "tag": "0004_generation_status",
+      "breakpoints": true
     }
   ]
 }

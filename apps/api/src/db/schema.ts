@@ -22,6 +22,7 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
 
 export const invoiceStatus = pgEnum('invoice_status', [
   'received',
+  'generating',
   'generated',
   'failed',
 ])

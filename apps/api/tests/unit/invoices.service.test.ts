@@ -25,11 +25,11 @@ const { UnprocessableEntityException, ConflictException } = await import(
   '@nestjs/common'
 )
 
-function fakeGenerator(formats: unknown[] = []) {
-  return { generate: vi.fn().mockResolvedValue(formats) }
-}
 function fakeRepo() {
-  return { persist: vi.fn() }
+  return { insertReceived: vi.fn() }
+}
+function fakeQueue() {
+  return { enqueue: vi.fn().mockResolvedValue(undefined) }
 }
 
 describe('InvoicesService.ingest', () => {
@@ -49,7 +49,7 @@ describe('InvoicesService.ingest', () => {
     })
     const service = new InvoicesService(
       fakeRepo() as never,
-      fakeGenerator() as never,
+      fakeQueue() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
@@ -71,7 +71,7 @@ describe('InvoicesService.ingest', () => {
     })
     const service = new InvoicesService(
       fakeRepo() as never,
-      fakeGenerator() as never,
+      fakeQueue() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toBe(
@@ -85,7 +85,7 @@ describe('InvoicesService.ingest', () => {
     })
     const service = new InvoicesService(
       fakeRepo() as never,
-      fakeGenerator() as never,
+      fakeQueue() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toThrow('boom')
@@ -97,7 +97,7 @@ describe('InvoicesService.ingest', () => {
     })
     const service = new InvoicesService(
       fakeRepo() as never,
-      fakeGenerator() as never,
+      fakeQueue() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toEqual({
@@ -114,7 +114,7 @@ describe('InvoicesService.ingest', () => {
     ])
     const service = new InvoicesService(
       fakeRepo() as never,
-      fakeGenerator() as never,
+      fakeQueue() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
@@ -128,35 +128,55 @@ describe('InvoicesService.ingest', () => {
     )
   })
 
-  it('generates formats then persists, returning { id, status } on success', async () => {
+  it('persists as received then enqueues, returning { id, status: received }', async () => {
     const invoice = { number: 'FA-1' }
     vi.mocked(parseInvoiceInput).mockReturnValue({} as never)
     vi.mocked(buildInvoice).mockReturnValue(invoice as never)
     vi.mocked(validateBusinessRules).mockReturnValue([])
-    const generator = fakeGenerator([{ kind: 'ubl' }])
     const repo = fakeRepo()
-    repo.persist.mockResolvedValue({ id: 'invoice-1' })
-    const service = new InvoicesService(repo as never, generator as never)
+    repo.insertReceived.mockResolvedValue({ id: 'invoice-1' })
+    const queue = fakeQueue()
+    const service = new InvoicesService(repo as never, queue as never)
 
     const result = await service.ingest('tenant-1', { number: 'FA-1' })
 
-    expect(generator.generate).toHaveBeenCalledWith(invoice)
-    expect(repo.persist).toHaveBeenCalledWith('tenant-1', invoice, [
-      { kind: 'ubl' },
-    ])
-    expect(result).toEqual({ id: 'invoice-1', status: 'generated' })
+    expect(repo.insertReceived).toHaveBeenCalledWith('tenant-1', invoice)
+    expect(queue.enqueue).toHaveBeenCalledWith('tenant-1', 'invoice-1')
+    expect(result).toEqual({ id: 'invoice-1', status: 'received' })
   })
 
-  it('translates a unique-violation pg error (23505) from persist into 409 conflict', async () => {
+  it('does NOT enqueue when insert fails with a duplicate (409)', async () => {
     vi.mocked(parseInvoiceInput).mockReturnValue({} as never)
     vi.mocked(buildInvoice).mockReturnValue({ number: 'FA-DUP' } as never)
     vi.mocked(validateBusinessRules).mockReturnValue([])
     const repo = fakeRepo()
-    repo.persist.mockRejectedValue({
+    repo.insertReceived.mockRejectedValue({
       code: '23505',
       constraint: 'invoices_tenant_number_unique',
     })
-    const service = new InvoicesService(repo as never, fakeGenerator() as never)
+    const queue = fakeQueue()
+    const service = new InvoicesService(repo as never, queue as never)
+    await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
+      new ConflictException(
+        expect.objectContaining({
+          status: 409,
+          type: 'urn:factelec:problem:conflict',
+        }),
+      ),
+    )
+    expect(queue.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('translates a unique-violation pg error (23505) from insertReceived into 409 conflict', async () => {
+    vi.mocked(parseInvoiceInput).mockReturnValue({} as never)
+    vi.mocked(buildInvoice).mockReturnValue({ number: 'FA-DUP' } as never)
+    vi.mocked(validateBusinessRules).mockReturnValue([])
+    const repo = fakeRepo()
+    repo.insertReceived.mockRejectedValue({
+      code: '23505',
+      constraint: 'invoices_tenant_number_unique',
+    })
+    const service = new InvoicesService(repo as never, fakeQueue() as never)
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
       new ConflictException(
@@ -181,8 +201,8 @@ describe('InvoicesService.ingest', () => {
       code: '23505',
       constraint: 'invoices_tenant_number_unique',
     }
-    repo.persist.mockRejectedValue(wrapped)
-    const service = new InvoicesService(repo as never, fakeGenerator() as never)
+    repo.insertReceived.mockRejectedValue(wrapped)
+    const service = new InvoicesService(repo as never, fakeQueue() as never)
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
       new ConflictException(
@@ -206,8 +226,8 @@ describe('InvoicesService.ingest', () => {
       code: '23505',
       constraint: 'invoice_formats_invoice_kind_unique',
     }
-    repo.persist.mockRejectedValue(otherConstraintError)
-    const service = new InvoicesService(repo as never, fakeGenerator() as never)
+    repo.insertReceived.mockRejectedValue(otherConstraintError)
+    const service = new InvoicesService(repo as never, fakeQueue() as never)
 
     await expect(service.ingest('tenant-1', {})).rejects.toBe(
       otherConstraintError,
@@ -220,8 +240,8 @@ describe('InvoicesService.ingest', () => {
     vi.mocked(validateBusinessRules).mockReturnValue([])
     const repo = fakeRepo()
     const dbError = new Error('connection reset')
-    repo.persist.mockRejectedValue(dbError)
-    const service = new InvoicesService(repo as never, fakeGenerator() as never)
+    repo.insertReceived.mockRejectedValue(dbError)
+    const service = new InvoicesService(repo as never, fakeQueue() as never)
 
     await expect(service.ingest('tenant-1', {})).rejects.toBe(dbError)
   })
