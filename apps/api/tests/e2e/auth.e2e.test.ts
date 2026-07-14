@@ -18,6 +18,7 @@ import { AppConfigModule } from '../../src/config/config.module.js'
 import { APP_POOL, createPool } from '../../src/db/client.js'
 import { DbModule } from '../../src/db/db.module.js'
 import { buildPinoHttpOptions } from '../../src/logging/logger.module.js'
+import { listenOnce } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
 import { seedTenantWithKey } from './helpers/seed.js'
 
@@ -62,6 +63,7 @@ describe('ApiKeyGuard (e2e)', () => {
       .compile()
     app = mod.createNestApplication()
     await app.init()
+    await listenOnce(app)
   })
   afterAll(async () => {
     await app.close()
@@ -179,6 +181,7 @@ describe('ApiKeyGuard — no secret leak in logs (e2e)', () => {
     app = mod.createNestApplication({ bufferLogs: true })
     app.useLogger(app.get(Logger))
     await app.init()
+    await listenOnce(app)
   })
   afterAll(async () => {
     await app.close()

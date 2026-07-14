@@ -8,7 +8,12 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     setupFiles: ['tests/setup.ts'],
     testTimeout: 60_000,
-    hookTimeout: 120_000,
+    // ≥ 150 s : le beforeAll de chaque fichier e2e démarre un conteneur
+    // Postgres (délai de démarrage porté à 120 s dans helpers/postgres.ts
+    // pour absorber la charge Docker sous forte concurrence) PUIS applique
+    // les rôles/migrations — le hook doit pouvoir dépasser les 120 s du seul
+    // démarrage du conteneur.
+    hookTimeout: 150_000,
     // Plafond de concurrence des e2e (Testcontainers) : chaque fichier e2e
     // démarre son propre conteneur Postgres réel ET son propre serveur HTTP
     // éphémère (supertest). Un parallélisme non borné (défaut : ~nombre de

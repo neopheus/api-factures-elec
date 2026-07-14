@@ -2,6 +2,7 @@ import { Controller, Get, type INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { listenOnce } from './helpers/app.js'
 
 @Controller('ping')
 class PingController {
@@ -30,6 +31,7 @@ describe('CORS allowlist (e2e)', () => {
       credentials: true,
     })
     await app.init()
+    await listenOnce(app)
   })
 
   afterAll(async () => {
