@@ -9,8 +9,8 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (13/07/2026) : plans 1.1, 1.2, 1.2bis et 1.3 terminés et
-> mergés ; dettes héritées soldées avant le début de 1.3.**
+> **État du projet (14/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3 et 1.4 terminés
+> et mergés ; dettes héritées soldées avant chaque plan suivant.**
 > `invoice-core` (v0.3.1 — patch BT-9) livre les **formats du socle** : UBL 2.1
 > Invoice **et** CreditNote (avoir), extraits de flux DGFiP F1 (facture et
 > avoir), CII D16B (avec échéance de paiement BT-9) et Factur-X PDF/A-3 (CII
@@ -34,16 +34,37 @@ API publique pour les systèmes custom.
 > keyset micro-précise, `GET /invoices/:id`, `GET
 > /invoices/:id/formats/:format` aux bons `Content-Type`) ; erreurs RFC 9457 ;
 > **isolation cross-tenant testée** (DB et HTTP, 404 byte-identique) ; rate
-> limiting par IP (429 réel, vérifié en e2e). 111 tests, ~98-99 % de
-> couverture (seuil 90 % bloquant). Détail complet, y compris les compromis
-> d'architecture (ESM + tsgo + SWC) : `apps/api/README.md`.
+> limiting par IP (429 réel, vérifié en e2e). Dettes 1.3 soldées en tout
+> début de plan 1.4 : `createDb` (piège hors-tenant) retiré, `z.url()` (zod
+> 4) remplace `z.string().url()` déprécié.
 >
-> **Reprise — prochaine étape : plan 1.4** (dashboard Next.js, self-service
-> tenants/clés). Aucune dette héritée hors périmètre 1.3 n'est identifiée à ce
-> jour (BT-9 et le canari Schematron CII, seules dettes invoice-core
-> recensées, sont soldés ci-dessus) ; la dette propre à `apps/api` (génération
-> asynchrone, throttle par tenant, `last_used_at`) est reportée explicitement
-> — voir Feuille de route.
+> **1.4 — authentification utilisateur, self-service et dashboard**
+> livre : **users tenant-scopés** (email global unique, rôles
+> `owner`/`admin`/`accountant`/`viewer`) et **sessions serveur httpOnly**
+> (jetons opaques 256 bits hash-only, RLS `FORCE` deny-all, expiration
+> **absolue** uniquement — pas de renouvellement glissant) avec **CSRF
+> double-submit** ; `POST /auth/signup` **self-service transactionnel**
+> (fonction `SECURITY DEFINER` unique, création tenant + owner atomique) ;
+> `POST/GET /auth/login|me`, `POST /auth/logout` ; **gestion des clés API
+> par session** (`POST/GET/DELETE /api-keys`, secret affiché une seule
+> fois, révocation immédiate) ; **super admin plateforme minimal**
+> (`POST /admin/login`, `GET /admin/tenants`, provisioning **CLI
+> uniquement** `pnpm provision:admin`, isolation admin↔tenant prouvée dans
+> les deux sens) ; **lecture des factures en dual-auth** (`GET /invoices*`
+> accepte clé API **ou** session utilisateur du même tenant — l'ingestion
+> `POST /invoices` reste exclusivement clé API) ; **`apps/web`** (Next.js
+> 16 App Router, SPA authentifiée par cookie httpOnly, dashboard
+> factures/clés API + espace super admin). **414 tests** au total
+> (`invoice-core` 129 100 % · `apps/api` 237 ≥ 90 % · `apps/web` 48
+> ≥ 90 % sur les 4 métriques). Détail complet : `apps/api/README.md`,
+> `apps/web/README.md`.
+>
+> **Reprise — prochaine étape : phase 2** (Cœur réglementaire — cycle de
+> vie des statuts, scellement/archivage à valeur probante, e-reporting
+> DGFiP, adaptateur `QueuedFormatGenerator` derrière le port BullMQ). Les
+> reports explicites de 1.4 (Stripe, vérification email, memberships M:N,
+> Playwright e2e, super admin complet MFA/impersonation → **phase 5** ;
+> BullMQ → **phase 2**) sont détaillés en Feuille de route ci-dessous.
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
 
@@ -51,8 +72,11 @@ API publique pour les systèmes custom.
 
 ```
 apps/
-  api/              API REST NestJS (ingestion/lecture des factures, phase 1.3) :
-                    auth multi-tenant, Postgres RLS, génération synchrone des formats
+  api/              API REST NestJS (ingestion/lecture des factures, auth utilisateur
+                    + clés API + super admin, phases 1.3/1.4) : multi-tenant Postgres
+                    RLS, sessions httpOnly + CSRF, génération synchrone des formats
+  web/              Dashboard Next.js 16 (phase 1.4) : SPA authentifiée par session
+                    serveur, factures/clés API, espace super admin minimal
 packages/
   invoice-core/     Bibliothèque pure (sans I/O) : modèle canonique EN 16931,
                     calculs TVA/totaux, règles de cohérence, génération UBL 2.1
@@ -109,31 +133,50 @@ fichiers (hors tests).
 
 ## `@factelec/api`
 
-API REST NestJS 11 (ESM), phase **1.3** : ingestion et lecture des factures,
-consommant `@factelec/invoice-core`. Multi-tenant Postgres avec Row-Level
-Security **`ENABLE` + `FORCE`**, authentification par clés API Argon2id,
-génération **synchrone** des formats du socle (UBL, CII, Factur-X, extraits de
-flux) derrière un port dédié (`InvoiceFormatGenerator`, remplaçable par des
-workers BullMQ en 1.4/2.x sans toucher l'ingestion). Documentation complète —
+API REST NestJS 11 (ESM), phases **1.3 + 1.4** : ingestion et lecture des
+factures (consommant `@factelec/invoice-core`), authentification utilisateur
+(sessions httpOnly + CSRF), signup self-service transactionnel, gestion des
+clés API par session et super admin plateforme minimal. Multi-tenant Postgres
+avec Row-Level Security **`ENABLE` + `FORCE`**, double régime d'auth (clés API
+Argon2id pour l'ingestion machine, sessions Argon2id pour le dashboard —
+lecture des factures acceptant l'un ou l'autre du même tenant), génération
+**synchrone** des formats du socle (UBL, CII, Factur-X, extraits de flux)
+derrière un port dédié (`InvoiceFormatGenerator`, remplaçable par des workers
+BullMQ en **phase 2** sans toucher l'ingestion). Documentation complète —
 architecture & compromis (ESM + typecheck tsgo + émission SWC), sécurité
-multi-tenant détaillée, variables d'environnement, endpoints, tests,
+multi-tenant et auth détaillées, variables d'environnement, endpoints, tests,
 limites v1 — dans [`apps/api/README.md`](apps/api/README.md).
+
+## `@factelec/web`
+
+Dashboard Next.js 16 (App Router, ESM), phase **1.4** : SPA authentifiée par
+session serveur httpOnly (cookie posé par `apps/api`, CSRF double-submit),
+consommant `@factelec/api`. Pages factures (pagination keyset, détail,
+téléchargement des formats), gestion des clés API (secret affiché une seule
+fois), espace super admin minimal (liste des tenants). Aucun SSR/RSC des
+données métier, aucune création de facture via l'UI (ingestion = API, clé
+API uniquement). Stack pinnée, modèle d'auth, tests & couverture, verdict
+tsgo/Next — dans [`apps/web/README.md`](apps/web/README.md).
 
 ## Développement
 
 Prérequis : Node.js ≥ 22 (`.nvmrc`), pnpm 10, `xmllint` (libxml2) pour la
 validation XSD dans les tests, et Docker (Postgres de dev/tests `apps/api`,
-via Testcontainers pour les e2e). Le Schematron EN 16931 officiel s'exécute en
+via Testcontainers pour les e2e — **non requis** pour `apps/web`, dont les
+tests tournent en jsdom pur). Le Schematron EN 16931 officiel s'exécute en
 **Node pur** (saxon-js, `xslt3`), sans JVM ; le premier `pnpm test` compile le
 SEF (~10-20 s), mis en cache ensuite (répertoire git-ignoré).
 
 ```sh
 pnpm install
-pnpm lint        # Biome (lint + format check)
-pnpm build       # Compilation dist/ — DOIT précéder typecheck (apps/api résout
-                 # @factelec/invoice-core via son dist/, pas ses sources)
-pnpm typecheck   # tsc --noEmit sur tous les packages (invoice-core : tsc ; apps/api : tsgo)
-pnpm test        # Vitest avec couverture (seuil bloquant : 90 %)
+pnpm lint        # Biome (lint + format check) — scaffolding Next (.next/, next-env.d.ts) exclu
+pnpm build       # Compilation — DOIT précéder typecheck : invoice-core (tsc) → apps/api
+                 # (swc, résout @factelec/invoice-core via son dist/) → apps/web (next build,
+                 # génère next-env.d.ts requis par son propre typecheck)
+pnpm typecheck   # tsc --noEmit sur tous les packages (invoice-core + apps/api : tsgo ; apps/web :
+                 # repli typescript@5.9.x local, cf. apps/web/README.md — verdict D6)
+pnpm test        # Vitest avec couverture (seuil bloquant : 90 %) — invoice-core + apps/api
+                 # (Testcontainers, Docker requis) + apps/web (jsdom, sans Docker)
 ```
 
 Base de données locale d'`apps/api` (Postgres + rôles + RLS) :
@@ -142,8 +185,16 @@ Base de données locale d'`apps/api` (Postgres + rôles + RLS) :
 cd apps/api && docker compose up -d
 ```
 
+Dashboard en développement (après l'API) :
+
+```sh
+pnpm --filter @factelec/web dev   # http://localhost:3001
+```
+
 Voir [`apps/api/README.md`](apps/api/README.md) pour les migrations, le
-provisioning de tenant et le détail des variables d'environnement.
+provisioning (tenant self-service ou CLI, super admin CLI uniquement) et le
+détail des variables d'environnement ; [`apps/web/README.md`](apps/web/README.md)
+pour le modèle d'auth et la stack du dashboard.
 
 Conventions du projet :
 
@@ -157,12 +208,21 @@ Conventions du projet :
   `pnpm outdated -r` doit rester vierge et `pnpm audit` ne doit remonter
   **aucune** vulnérabilité (toutes sévérités) — les deux sont des étapes
   **bloquantes** de la CI (`.github/workflows/ci.yml`), au même titre que
-  lint/build/typecheck/test. Le seul override toléré à ce jour :
-  `@esbuild-kit/core-utils>esbuild` épinglé à `^0.25.0` (`pnpm.overrides`
-  racine), nécessaire à la chaîne de dépendances de `drizzle-kit`.
-- CI GitHub Actions bloquante : `pnpm audit`, `pnpm outdated -r`, lint, build,
-  typecheck, tests (invoice-core + `apps/api`, ce dernier via Testcontainers
-  Postgres — Docker natif du runner, aucun service container additionnel).
+  lint/build/typecheck/test. Deux overrides tolérés à ce jour
+  (`pnpm.overrides` racine) : `@esbuild-kit/core-utils>esbuild` épinglé à
+  `^0.25.0`, nécessaire à la chaîne de dépendances de `drizzle-kit` ; et
+  `postcss` épinglé à `8.5.19` (CVE-2026-41305, `next@16.2.10` épingle en
+  interne une version vulnérable de `postcss`) — **provisoire**, à retirer
+  dès qu'une release de `next` absorbe nativement le correctif (vérifier via
+  `pnpm why postcss -r` après tout bump de `next`). Un faux-positif de
+  `pnpm outdated -r` sur le repli `typescript@5.9.x` volontaire d'`apps/web`
+  (verdict D6, cf. `apps/web/README.md`) est neutralisé par
+  `pnpm.updateConfig.ignoreDependencies: ["typescript"]` — le pin racine
+  `typescript@7.0.2` (tsgo) n'est, lui, jamais ignoré.
+- CI GitHub Actions bloquante : `pnpm audit`, `pnpm outdated -r`, lint,
+  build, typecheck, tests — `invoice-core` + `apps/api` (ce dernier via
+  Testcontainers Postgres, Docker natif du runner) + `apps/web` (jsdom, sans
+  Docker), les trois balayés par `pnpm -r`.
 
 ## Documentation réglementaire
 
@@ -187,20 +247,75 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       NestJS 11 ESM, Postgres multi-tenant RLS `FORCE`, auth clés API
       Argon2id, `POST /invoices` (génération synchrone), lecture paginée,
       isolation cross-tenant testée. Détail : `apps/api/README.md`.
+- [x] **1.4 — Auth utilisateur, self-service, dashboard** (terminé) :
+      users tenant-scopés + sessions serveur httpOnly + CSRF double-submit
+      (expiration absolue), signup self-service transactionnel, gestion des
+      clés API par session, super admin plateforme minimal, lecture des
+      factures en dual-auth (clé API ou session), dashboard Next.js 16.
+      Détail : `apps/api/README.md`, `apps/web/README.md`.
 
-> **Point de reprise → plan 1.4** : dashboard Next.js + **self-service**
-> tenants/clés (remplace le provisioning CLI comme seul chemin de
-> création). Puis **2.x** : cycle de vie des statuts (accusés de réception,
-> scellement/archivage à valeur probante), e-reporting DGFiP. Puis **3.x** :
+> **Point de reprise → phase 2** (Cœur réglementaire) : cycle de vie des
+> statuts (accusés de réception, transmission), scellement/archivage à
+> valeur probante, e-reporting DGFiP — ainsi que l'adaptateur
+> `QueuedFormatGenerator` (BullMQ) derrière le port `InvoiceFormatGenerator`
+> existant, sans changement du contrat `POST /invoices`. Puis **3.x** :
 > point d'accès Peppol interne.
 
-Dette explicitement reportée (aucune ne bloque 1.4) :
+### Prérequis pré-production / pré-DGFiP
+
+Liste compacte consolidant des points déjà détaillés ci-dessous (dette
+reportée) ou dans `apps/api/README.md` : aucun ne bloque le passage en
+phase 2, mais **tous** doivent être traités avant une exposition réelle
+(immatriculation DGFiP, onboarding de tenants en production) :
+
+- **Journal d'audit des authentifications** (connexions, échecs, révocations
+  de session) — absent à ce jour, prévu horizon **2.x**.
+- **Vérification email** avant tout onboarding réel — colonne
+  `email_verified` prête en base, non contraignante aujourd'hui (rate
+  limiting strict sur `/auth/signup` en compensation provisoire).
+- **`TRUST_PROXY` + `SESSION_COOKIE_DOMAIN`** à configurer selon la topologie
+  réelle de déploiement (load balancer/reverse-proxy devant l'API, partage de
+  cookies cross-subdomain dashboard/API) — les défauts conviennent au dev
+  local uniquement.
+- **Durcissement de la session super admin** (MFA TOTP, allowlist IP, TTL
+  dédié réduit) — la session admin 1.4 réutilise le régime standard
+  (Argon2id, TTL absolu générique), sans contrôle additionnel → **phase 5**.
+- **Validation et unicité du SIREN (KYB)** — seul le format est vérifié (9
+  chiffres) ; ni la clé de contrôle (Luhn), ni l'existence, ni l'unicité
+  réelle de l'entreprise ne sont vérifiées à ce jour.
+- **`last_used_at` des clés API** — colonne présente, jamais mise à jour ;
+  décision à trancher en **phase 2** : l'écrire depuis la fonction
+  `SECURITY DEFINER` `authenticate_api_key` (seule exécutée avant le contexte
+  tenant) ou retirer la colonne.
+
+Dette explicitement reportée (aucune ne bloque le passage en phase 2) :
 
 - **Workers BullMQ** (génération asynchrone des formats) — actuellement
-  synchrone, derrière le port `InvoiceFormatGenerator` (`apps/api`).
+  synchrone, derrière le port `InvoiceFormatGenerator` (`apps/api`) →
+  **phase 2** ; aucune transmission/cycle de vie en 1.4, donc aucune file
+  n'était nécessaire à ce stade.
+- **Stripe / abonnements** (modèle commercial self-service, spec §2/§8) →
+  **phase 5** (Commercialisation).
+- **Vérification email** différée : fournisseur transactionnel non
+  provisionné ; colonne `email_verified` prête en base, non contraignante
+  aujourd'hui — rate limiting strict sur `/auth/signup` en compensation.
+- **Invitation de membres + appartenance multi-tenant** (table `memberships`
+  M:N) différées : les users sont mono-tenant en 1.4 (un `owner` par
+  signup).
+- **Playwright (e2e navigateur)** → **phase 5** (coût CI).
+- **Super admin complet** (impersonation tracée, feature flags, MFA TOTP +
+  allowlist IP, supervision des files/transmissions) → **phase 5** (spec
+  §6/§8) ; le super admin livré en 1.4 est volontairement minimal (login +
+  liste des tenants).
+- **Pré-prod** : configurer `SESSION_COOKIE_DOMAIN` + `TRUST_PROXY` selon la
+  topologie réelle (load balancer / reverse-proxy) ; vérifier `SameSite` et
+  le partage de cookies cross-subdomain dashboard/API.
 - **Throttle par tenant** (rate limiting actuellement par IP uniquement,
-  `apps/api`).
-- **`last_used_at`** des clés API non mis à jour (`apps/api`).
+  `apps/api`) — non planifié à ce jour.
+- **`last_used_at`** des clés API non mis à jour (`apps/api`) — décision à
+  trancher (écrire ou retirer la colonne).
+- **Horizon 2.x** : journal d'audit persistant à valeur probante (rappel
+  1.3, toujours hors périmètre).
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan
   1.2bis) : le socle cible D16B (Factur-X ≤ 1.07.3) par cohérence avec le
   Schematron EN 16931 CII `validation-1.3.16`, lui-même D16B ; Factur-X

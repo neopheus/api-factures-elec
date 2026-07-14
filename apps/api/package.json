@@ -1,6 +1,6 @@
 {
   "name": "@factelec/api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "./dist/main.js",
@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --import tsx scripts/migrate.ts",
-    "provision:tenant": "node --import tsx scripts/provision-tenant.ts"
+    "provision:tenant": "node --import tsx scripts/provision-tenant.ts",
+    "provision:admin": "node --import tsx scripts/provision-admin.ts"
   },
   "dependencies": {
     "@factelec/invoice-core": "workspace:*",
@@ -24,6 +25,7 @@
     "@nestjs/terminus": "11.1.1",
     "@nestjs/throttler": "6.5.0",
     "@node-rs/argon2": "2.0.2",
+    "cookie-parser": "1.4.7",
     "drizzle-orm": "0.45.2",
     "helmet": "8.3.0",
     "nestjs-pino": "4.6.1",
@@ -38,9 +40,10 @@
     "@swc/cli": "0.8.1",
     "@swc/core": "1.15.43",
     "@testcontainers/postgresql": "12.0.4",
+    "@types/cookie-parser": "1.4.10",
     "@types/express": "5.0.6",
     "@types/pg": "8.20.0",
-    "@types/supertest": "7.2.0",
+    "@types/supertest": "7.2.1",
     "@vitest/coverage-v8": "4.1.10",
     "drizzle-kit": "0.31.10",
     "supertest": "7.2.2",

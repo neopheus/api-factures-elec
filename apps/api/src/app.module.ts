@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common'
+import { AdminModule } from './admin/admin.module.js'
+import { ApiKeysModule } from './api-keys/api-keys.module.js'
 import { AuthModule } from './auth/auth.module.js'
 import { AppConfigModule } from './config/config.module.js'
 import { DbModule } from './db/db.module.js'
 import { HealthModule } from './health/health.module.js'
 import { InvoicesModule } from './invoices/invoices.module.js'
 import { AppLoggerModule } from './logging/logger.module.js'
+import { UsersModule } from './users/users.module.js'
 
 @Module({
   imports: [
@@ -14,6 +17,9 @@ import { AppLoggerModule } from './logging/logger.module.js'
     AuthModule,
     HealthModule,
     InvoicesModule,
+    UsersModule,
+    ApiKeysModule,
+    AdminModule,
   ],
 })
 export class AppModule {}

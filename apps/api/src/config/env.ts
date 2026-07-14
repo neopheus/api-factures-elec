@@ -20,7 +20,7 @@ export const envSchema = z.object({
     .default('info'),
   // Rôle applicatif UNIQUEMENT (soumis à la RLS). L'URL du rôle owner n'est
   // jamais chargée par le process API (elle sert aux scripts migration/provision).
-  DATABASE_URL: z.string().url(),
+  DATABASE_URL: z.url(),
   CORS_ALLOWED_ORIGINS: csv,
   RATE_LIMIT_TTL: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(120),
@@ -31,6 +31,12 @@ export const envSchema = z.object({
   // seul un entier ≥ 0 est accepté (nombre de sauts de proxy à faire
   // confiance, cf. doc Express `trust proxy`).
   TRUST_PROXY: z.coerce.number().int().nonnegative().default(0),
+  // Durée de vie ABSOLUE de la session (aucun renouvellement glissant à la
+  // lecture) : cf. session.service.ts / session.guard.ts.
+  SESSION_TTL_HOURS: z.coerce.number().int().positive().max(720).default(12),
+  // Domaine du cookie de session (ex: `.factelec.fr` en prod, pour partager le
+  // cookie entre le dashboard et l'API sur des sous-domaines). Absent en dev.
+  SESSION_COOKIE_DOMAIN: z.string().optional(),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

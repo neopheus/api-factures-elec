@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ProblemDetailsFilter } from '../../src/common/http-exception.filter.js'
+import { listenOnce } from './helpers/app.js'
 
 @Controller('boom')
 class BoomController {
@@ -23,6 +24,7 @@ describe('security + problem filter (e2e)', () => {
     app.use(helmet())
     app.useGlobalFilters(new ProblemDetailsFilter())
     await app.init()
+    await listenOnce(app)
   })
   afterAll(async () => {
     await app.close()

@@ -1,5 +1,8 @@
 import type { Invoice } from '@factelec/invoice-core'
+import { sql } from 'drizzle-orm'
 import {
+  boolean,
+  check,
   customType,
   index,
   integer,
@@ -109,5 +112,80 @@ export const invoiceFormats = pgTable(
   (t) => [
     uniqueIndex('invoice_formats_invoice_kind_unique').on(t.invoiceId, t.kind),
     index('invoice_formats_tenant_idx').on(t.tenantId),
+  ],
+)
+
+export const userRole = pgEnum('user_role', [
+  'owner',
+  'admin',
+  'accountant',
+  'viewer',
+])
+
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    passwordHash: text('password_hash').notNull(),
+    role: userRole('role').notNull().default('owner'),
+    emailVerified: boolean('email_verified').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('users_email_unique').on(sql`lower(${t.email})`),
+    index('users_tenant_idx').on(t.tenantId),
+  ],
+)
+
+export const platformAdmins = pgTable(
+  'platform_admins',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').notNull(),
+    passwordHash: text('password_hash').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('platform_admins_email_unique').on(sql`lower(${t.email})`),
+  ],
+)
+
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    adminId: uuid('admin_id').references(() => platformAdmins.id, {
+      onDelete: 'cascade',
+    }),
+    tenantId: uuid('tenant_id').references(() => tenants.id, {
+      onDelete: 'cascade',
+    }),
+    tokenHash: text('token_hash').notNull(),
+    csrfHash: text('csrf_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('sessions_token_hash_unique').on(t.tokenHash),
+    index('sessions_expires_idx').on(t.expiresAt),
+    check(
+      'sessions_subject_xor',
+      sql`(${t.userId} IS NULL) <> (${t.adminId} IS NULL)`,
+    ),
+    check(
+      'sessions_admin_no_tenant',
+      sql`${t.adminId} IS NULL OR ${t.tenantId} IS NULL`,
+    ),
   ],
 )

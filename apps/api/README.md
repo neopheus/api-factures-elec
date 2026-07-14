@@ -1,9 +1,18 @@
 # `@factelec/api`
 
 API REST NestJS d'ingestion et de lecture des factures électroniques
-(phase **1.3**). Consomme `@factelec/invoice-core` (validation, calculs,
-génération des formats du socle) et l'expose derrière une couche
-d'authentification et d'isolation multi-tenant Postgres.
+(phase **1.3**), étendue en **1.4** avec l'authentification utilisateur
+(sessions httpOnly + CSRF), le signup self-service transactionnel, la
+gestion des clés API par session et un super admin plateforme minimal.
+Consomme `@factelec/invoice-core` (validation, calculs, génération des
+formats du socle) et expose l'ensemble derrière une couche d'authentification
+et d'isolation multi-tenant Postgres.
+
+> **Dettes 1.3 soldées** (plan 1.4, task 1) : `createDb` (piège hors-tenant,
+> jamais appelé en production) retiré de `src/db/client.ts` ; `DATABASE_URL`
+> migré de `z.string().url()` (déprécié) vers `z.url()` (zod 4). Aucun
+> changement de comportement — refactor mécanique couvert par la suite
+> existante.
 
 ## Architecture & compromis
 
@@ -173,11 +182,14 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `RATE_LIMIT_TTL` | Fenêtre du rate limit (secondes) | `60` |
 | `RATE_LIMIT_LIMIT` | Requêtes max par fenêtre et par IP | `120` |
 | `TRUST_PROXY` | Nombre de proxys de confiance devant l'API (`app.set('trust proxy', n)`) | `0` (aucun) |
+| `SESSION_TTL_HOURS` | Durée de vie **absolue** d'une session (utilisateur ou admin) — aucun renouvellement glissant (D1 amendé, plan 1.4) | `12` |
+| `SESSION_COOKIE_DOMAIN` | Domaine des cookies `factelec_session`/`factelec_csrf` — requis en prod pour un partage same-site dashboard/API (ex. `.factelec.fr`) ; absent en dev (localhost) | — (absent = cookie scopé à l'hôte courant) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
-`scripts/migrate.ts` et `scripts/provision-tenant.ts`, tous deux exécutés
-hors du chemin de requête HTTP.
+`scripts/migrate.ts`, `scripts/provision-tenant.ts` et
+`scripts/provision-admin.ts`, tous trois exécutés hors du chemin de requête
+HTTP.
 
 **`TRUST_PROXY` — topologie réseau.** Le rate limiting par IP
 (`ThrottlerGuard`) lit `req.ip`, qu'Express calcule à partir de
@@ -215,13 +227,62 @@ sources) : voir le README racine.
 | --- | --- | --- |
 | `GET /health` | Liveness (aucune dépendance externe) | 200 |
 | `GET /health/ready` | Readiness (ping Postgres via `@nestjs/terminus`) | 200, 503 |
-| `POST /invoices` | Ingestion : validation `invoice-core`, génération synchrone des 5 formats, persistance transactionnelle | 201, 401, 409, 422, 429 |
-| `GET /invoices` | Liste paginée (keyset), tenant-scopée | 200, 401, 429 |
-| `GET /invoices/:id` | Métadonnées d'une facture + formats disponibles | 200, 401, 404, 429 |
-| `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) | 200, 401, 404, 429 |
+| `POST /invoices` | Ingestion : validation `invoice-core`, génération synchrone des 5 formats, persistance transactionnelle | 201, 401, 409, 422 |
+| `GET /invoices` | Liste paginée (keyset), tenant-scopée | 200, 401 |
+| `GET /invoices/:id` | Métadonnées d'une facture + formats disponibles | 200, 401, 404 |
+| `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) | 200, 401, 404 |
+| `POST /auth/signup` | Inscription self-service : crée le tenant **et** l'utilisateur `owner` de façon atomique (fonction `SECURITY DEFINER` `signup_tenant`), ouvre une session | 201, 409, 422 |
+| `POST /auth/login` | Authentification utilisateur (email + mot de passe Argon2id), ouvre une session | 200, 401, 422 |
+| `POST /auth/logout` | Révoque la session courante (cookie `factelec_session`) | 204, 401 |
+| `GET /auth/me` | Profil de l'utilisateur de la session courante | 200, 401 |
+| `POST /api-keys` | Création d'une clé API pour le tenant de la session (rôles `owner`/`admin` uniquement) ; secret **affiché une seule fois** | 201, 401, 403, 422 |
+| `GET /api-keys` | Liste des clés du tenant (préfixes uniquement, jamais le secret) — tout rôle utilisateur authentifié | 200, 401, 403 |
+| `DELETE /api-keys/:id` | Révocation immédiate d'une clé (rôles `owner`/`admin` uniquement) | 204, 401, 403, 404 |
+| `POST /admin/login` | Authentification super admin plateforme (`platform_admins`, Argon2id), ouvre une session admin | 200, 401, 422 |
+| `POST /admin/logout` | Révoque la session admin courante | 204, 401, 403 |
+| `GET /admin/tenants` | Liste de tous les tenants (vue plateforme : nombre d'utilisateurs, de factures) | 200, 401, 403 |
 
-Toutes les routes (hors `/health`) exigent `Authorization: Bearer
-fk_<prefix>.<secret>`.
+**Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
+route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
+(exemptées via `@SkipThrottle()` — jamais rate-limitées, interrogées à haute
+fréquence par l'orchestrateur). Seuils renforcés (`@Throttle`, en plus du
+défaut `RATE_LIMIT_TTL`/`RATE_LIMIT_LIMIT`) sur `POST /auth/signup` (5/h/IP),
+`POST /auth/login` (10/15 min/IP) et `POST /admin/login` (10/15 min/IP) —
+anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
+
+**Deux régimes d'authentification distincts, jamais interchangeables** :
+- **`POST /invoices`** (ingestion) reste **exclusivement machine** :
+  `Authorization: Bearer fk_<prefix>.<secret>`, sans repli possible.
+- **`GET /invoices`, `GET /invoices/:id`, `GET /invoices/:id/formats/:format`**
+  (lecture) acceptent **soit une clé API, soit une session utilisateur** du
+  même tenant (`TenantAuthGuard`, dual-auth) — jamais une session **admin**
+  plateforme, refusée par ce guard. Un en-tête `Authorization: Bearer`
+  présent est **toujours** résolu en priorité (même invalide) : un client
+  machine ne retombe jamais silencieusement sur un cookie de session qui
+  traînerait dans la même requête.
+- **`/auth/*`, `/api-keys/*`, `/admin/*`** sont exclusivement pilotés par
+  **session serveur httpOnly** (cookie `factelec_session`) + **CSRF
+  double-submit** (`X-CSRF-Token` face au cookie lisible `factelec_csrf`) sur
+  toute mutation — jamais par clé API. Détail complet (Argon2id partagé,
+  jetons opaques 256 bits hash-only, RLS `FORCE` sur `users`/`sessions`,
+  `platform_admins` isolé des tenants) : voir `docs/superpowers/` (plan 1.4)
+  et les commentaires des guards (`src/auth/session.guard.ts`,
+  `src/auth/tenant-auth.guard.ts`, `src/admin/admin.guard.ts`).
+
+## Provisioning
+
+- **Tenants** : self-service via `POST /auth/signup` (transactionnel,
+  fonction `SECURITY DEFINER` `signup_tenant`) **ou** CLI
+  `pnpm provision:tenant "Nom"` (rôle owner, hors chemin de requête,
+  conservé pour le provisioning hors self-service).
+- **Super admins plateforme** : **CLI uniquement**, aucune inscription
+  self-service : `DATABASE_OWNER_URL=... PROVISION_ADMIN_PASSWORD=... pnpm
+  provision:admin <email>` (`scripts/provision-admin.ts`, rôle owner, insère
+  dans `platform_admins`). Le mot de passe ne transite **jamais** par argv
+  (visible via `ps`/l'historique du shell) : il est lu depuis
+  `PROVISION_ADMIN_PASSWORD`, ou saisi de façon interactive sur stdin si la
+  variable est absente. Un email déjà provisionné (23505) renvoie un message
+  d'erreur clair, sans stack trace.
 
 ## Tests
 
@@ -242,10 +303,15 @@ fk_<prefix>.<secret>`.
   recollé par un client, tronqué, etc.) ne renvoie jamais une erreur 400 —
   `decodeCursor` renvoie `null`, silencieusement traité comme « pas de
   curseur » (redémarrage en première page).
+- **Isolation admin↔tenant** vérifiée dans les deux sens (`admin.e2e.test.ts`) :
+  une session admin plateforme ne peut ni lire `/api-keys` ni la lecture des
+  factures (`TenantAuthGuard` la refuse explicitement) ; une session tenant
+  ne peut pas accéder à `/admin/tenants` (403).
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
-  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 111
-  tests, ~98-99 % de couverture réelle sur les quatre métriques.
+  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 50
+  fichiers, **237 tests**, couverture **98.31 / 97.07 / 97.14 / 98.64 %**
+  (statements/branches/functions/lines).
 
 ```sh
 pnpm test          # apps/api : Vitest + Testcontainers (Docker requis)
@@ -254,13 +320,30 @@ pnpm test          # apps/api : Vitest + Testcontainers (Docker requis)
 ## Limites v1 / TODO
 
 - **Génération synchrone** — pas de file d'attente ; passage à des workers
-  BullMQ prévu en **1.4/2.x** derrière le port `InvoiceFormatGenerator`
-  existant, sans changement du contrat `POST /invoices`.
-- **`last_used_at`** (table `api_keys`) n'est **pas** mis à jour à chaque
-  authentification (reporté, « best effort » explicitement différé).
-- **Rate limiting par IP**, pas encore par tenant/clé — raffinement prévu en
-  **1.4**.
-- **Pas de self-service** tenant/clé : le provisioning passe uniquement par
-  le script CLI `pnpm provision:tenant` (rôle owner, hors chemin de
-  requête). Le dashboard Next.js de la phase **1.4** exposera un
-  provisioning self-service.
+  BullMQ prévu en **phase 2** (Cœur réglementaire — cycle de vie/transmission)
+  derrière le port `InvoiceFormatGenerator` existant, sans changement du
+  contrat `POST /invoices`. Aucune transmission/cycle de vie en 1.4, donc
+  aucune file n'est nécessaire à ce stade.
+- **`last_used_at`** (table `api_keys`) demeure une colonne morte, jamais
+  écrite (reporté — décision à trancher : l'alimenter à chaque
+  authentification ou la retirer).
+- **Rate limiting par IP uniquement**, pas encore par tenant/clé — non
+  planifié à ce jour.
+- **Expiration glissante des sessions** différée : seule l'expiration
+  **absolue** (`SESSION_TTL_HOURS`) est implémentée (D1 amendé, plan 1.4) ;
+  pas de renouvellement à l'usage.
+- **Purge périodique des sessions expirées** différée (pas de job de
+  ménage ; les lignes expirées restent en base, simplement inertes côté
+  authentification).
+- **Durcissement de la session admin** (TTL réduit spécifique, distinct de
+  `SESSION_TTL_HOURS`) différé — la session super admin partage aujourd'hui
+  la même durée de vie absolue que les sessions utilisateur.
+- **`Content-Disposition`** absent sur les téléchargements de formats
+  (`GET /invoices/:id/formats/:format`) : le fichier s'ouvre dans l'onglet
+  plutôt que de déclencher un téléchargement nommé — raffinement différé.
+- **Garde anti-double-clic** absente côté client sur les mutations
+  (création de clé API, ingestion) — différée.
+- Provisioning tenant : **self-service** via `POST /auth/signup` (plan 1.4)
+  **et** CLI `pnpm provision:tenant` (conservé). Provisioning **super
+  admin** : **CLI exclusivement** (`pnpm provision:admin`), aucune
+  inscription self-service — décision assumée, pas une limitation à lever.

@@ -1,0 +1,28 @@
+{
+  // D6 (plan 1.4) : le pin racine `typescript@7.0.2` (tsgo) type-check `tsc --noEmit` sans
+  // erreur pour ce workspace (vérifié empiriquement), MAIS l'étape interne "Running
+  // TypeScript ..." de `next build` (Next.js 16.2.10, Turbopack) plante avec tsgo 7.0.2 :
+  // `The id argument must be of type string. Received undefined` (crash reproductible même
+  // avec tsgo résolvable localement, donc incompatibilité tsgo↔Next, pas un souci de
+  // résolution pnpm). Repli documenté appliqué : `typescript@5.9.3` (dernier patch stable
+  // 5.9.x) épinglé en devDependency EXACTE, LOCALE à apps/web uniquement — le pin racine
+  // 7.0.2 est inchangé (apps/api et packages/invoice-core continuent d'utiliser tsgo). Ce
+  // pin local est utilisé par `next build` (résolution require() scoping stricte pnpm) ET
+  // par le script `typecheck` de ce workspace (PATH `.bin` walk-up : le tsc le plus proche,
+  // celui d'apps/web, prime désormais sur celui de la racine). `next build` reste l'autorité
+  // de typage des routes Next (`.next/types`).
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "noEmit": true,
+    "allowJs": true,
+    "incremental": true,
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "plugins": [{ "name": "next" }],
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["next-env.d.ts", "src/**/*", "tests/**/*", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", ".next"]
+}

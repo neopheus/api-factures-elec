@@ -18,6 +18,12 @@ export async function startTestDb(): Promise<TestDb> {
     .withDatabase('factelec')
     .withUsername('postgres')
     .withPassword('postgres')
+    // Défaut testcontainers (10-60 s selon le wait strategy) trop juste sous
+    // exécution concurrente de plusieurs fichiers e2e (chacun démarre son
+    // propre conteneur) : un délai plus long ne change rien au déterminisme
+    // (un conteneur réellement cassé échoue quand même, juste plus tard) mais
+    // absorbe la lenteur de démarrage sous forte charge Docker.
+    .withStartupTimeout(120_000)
     .start()
 
   const host = container.getHost()

@@ -2,6 +2,7 @@ import { Controller, Get, type INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { listenOnce } from './helpers/app.js'
 
 @Controller('ping')
 class PingController {
@@ -11,8 +12,9 @@ class PingController {
   }
 }
 
-// Reproduit le câblage CORS de main.ts (allowlist stricte, pas de credentials)
-// sans dépendre de la config globale.
+// Reproduit le câblage CORS de main.ts (allowlist stricte, credentials activés
+// pour le cookie de session cross-subdomain — Task 4) sans dépendre de la
+// config globale.
 describe('CORS allowlist (e2e)', () => {
   let app: INestApplication
   const allowedOrigins = ['http://a.example']
@@ -24,10 +26,12 @@ describe('CORS allowlist (e2e)', () => {
     app = mod.createNestApplication()
     app.enableCors({
       origin: allowedOrigins,
-      methods: ['GET', 'POST'],
-      credentials: false,
+      methods: ['GET', 'POST', 'DELETE'],
+      allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+      credentials: true,
     })
     await app.init()
+    await listenOnce(app)
   })
 
   afterAll(async () => {
@@ -50,11 +54,24 @@ describe('CORS allowlist (e2e)', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined()
   })
 
-  it('never sets Access-Control-Allow-Credentials (credentials: false)', async () => {
+  it('sets Access-Control-Allow-Credentials: true (cookies de session cross-subdomain)', async () => {
     const res = await request(app.getHttpServer())
       .get('/ping')
       .set('Origin', 'http://a.example')
 
-    expect(res.headers['access-control-allow-credentials']).toBeUndefined()
+    expect(res.headers['access-control-allow-credentials']).toBe('true')
+  })
+
+  it('allows DELETE (logout) and the X-CSRF-Token header on preflight', async () => {
+    const res = await request(app.getHttpServer())
+      .options('/ping')
+      .set('Origin', 'http://a.example')
+      .set('Access-Control-Request-Method', 'DELETE')
+      .set('Access-Control-Request-Headers', 'content-type,x-csrf-token')
+
+    expect(res.headers['access-control-allow-methods']).toContain('DELETE')
+    expect(res.headers['access-control-allow-headers']).toContain(
+      'X-CSRF-Token',
+    )
   })
 })
