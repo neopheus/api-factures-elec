@@ -38,6 +38,14 @@ describe('invoice_status_events sealing (e2e)', () => {
     db = await startTestDb()
     ownerPool = new pg.Pool({ connectionString: db.ownerUrl })
     appPool = new pg.Pool({ connectionString: db.appUrl })
+    // pg recommande TOUJOURS un écouteur `error` sur un Pool : sans lui, une
+    // erreur sur un client IDLE (p. ex. 57P01 « connexion terminée » quand le
+    // conteneur s'arrête au teardown, une socket résiduelle survivant au
+    // `.end()`) est RELANCÉE et fait planter le process (exit non-zéro, gate
+    // rouge intermittente — revue T8). Ceci ne masque PAS les erreurs de
+    // requête (renvoyées par la promesse), seulement le bruit d'arrêt.
+    ownerPool.on('error', () => {})
+    appPool.on('error', () => {})
     repo = new InvoicesRepository(new TenantContextService(appPool as never))
     const a = await ownerPool.query(
       "INSERT INTO tenants (name) VALUES ('A') RETURNING id",
