@@ -168,11 +168,11 @@ Deux axes de statut **distincts**, à ne jamais confondre :
 **Nomenclature DGFiP** — 14 statuts (codes 200-213, source Dossier général
 v3.2 §3.6.4 Tableau 8 + Annexe 7 règle G7.44 pour le socle obligatoire
 `{200 Déposée, 210 Refusée, 212 Encaissée, 213 Rejetée}`) ; les 10 statuts
-restants sont facultatifs (`deposee`/`emise`/`recue`/
+restants sont facultatifs (`emise`/`recue`/
 `mise_a_disposition`/`prise_en_charge`/`approuvee`/
 `approuvee_partiellement`/`en_litige`/`suspendue`/`completee`/
-`paiement_transmis`). Chaque facture démarre à `deposee` (200) à
-l'ingestion (événement initial inscrit dans le journal, cf. ci-dessous).
+`paiement_transmis`). Chaque facture démarre à `deposee` (200, **obligatoire**)
+à l'ingestion (événement initial inscrit dans le journal, cf. ci-dessous).
 
 **Machine à états** (`src/invoices/lifecycle-status.ts`) — chronologie
 monotone : une transition `from → to` n'est valide que si `to` a un code
@@ -197,7 +197,7 @@ strictement supérieur à `from`, et si `from` n'est pas terminal (`refusee`
 
 - `POST /invoices/:id/status` — transition (`{ toStatus, reason? }`), session
   **owner/admin/accountant** + CSRF (jamais clé API : l'apposition
-  automatique par un connecteur/la plateforme est différée, phase 4).
+  automatique par un connecteur/la plateforme est différée, phase 3).
   **CAS anti-race** : l'`UPDATE` conditionne sur le statut courant lu juste
   avant (`WHERE lifecycle_status = from`) — 0 ligne affectée ⇒ **409**
   (changement concurrent, à réessayer) plutôt qu'un écrasement silencieux.
@@ -458,7 +458,7 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   (`SessionGuard`/`RolesGuard`/`CsrfGuard`) — un `viewer` est refusé (403),
   une clé API n'ouvre pas cette route (`SessionGuard` → 401, pas de cookie).
   L'apposition automatique par un connecteur/le réseau Peppol est différée
-  (phase 4).
+  (phase 3).
 - **`/auth/*`, `/api-keys/*`, `/admin/*`** sont exclusivement pilotés par
   **session serveur httpOnly** (cookie `factelec_session`) + **CSRF
   double-submit** (`X-CSRF-Token` face au cookie lisible `factelec_csrf`) sur

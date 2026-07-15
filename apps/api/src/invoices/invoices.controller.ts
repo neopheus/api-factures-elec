@@ -100,7 +100,7 @@ export class InvoicesController {
 
   // Mutation métier : session (owner/admin/accountant) + CSRF. Un viewer est
   // refusé (403) ; une clé API n'ouvre pas cette route (SessionGuard → 401,
-  // pas de cookie). L'apposition machine (connecteurs) est différée (phase 4).
+  // pas de cookie). L'apposition machine (connecteurs) est différée (phase 3).
   @Post(':id/status')
   @HttpCode(201)
   @UseGuards(SessionGuard, RolesGuard, CsrfGuard)
