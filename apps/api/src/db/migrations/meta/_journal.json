@@ -71,6 +71,13 @@
       "when": 1784074000000,
       "tag": "0009_last_used_and_purge",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784102784846,
+      "tag": "0010_ledger_fk_restrict",
+      "breakpoints": true
     }
   ]
 }

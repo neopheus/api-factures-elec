@@ -150,7 +150,14 @@ export const invoiceStatusEvents = pgTable(
       .references(() => tenants.id, { onDelete: 'cascade' }),
     invoiceId: uuid('invoice_id')
       .notNull()
-      .references(() => invoices.id, { onDelete: 'cascade' }),
+      // Journal probatoire : une facture munie d'événements NE PEUT PLUS être
+      // supprimée (le journal ne se supprime pas avec sa facture — dette 2.1,
+      // D4). Corollaire : supprimer un TENANT possédant des événements scellés
+      // est désormais BLOQUÉ (23503 via ce RESTRICT enfant) plutôt que
+      // cascadé — plus protecteur. La FK tenant_id reste `cascade` (la
+      // suppression d'un tenant relève d'une procédure RGPD dédiée, hors
+      // périmètre 2.2).
+      .references(() => invoices.id, { onDelete: 'restrict' }),
     // NULL pour l'événement initial (dépôt) ; sinon statut de départ.
     fromStatus: invoiceLifecycleStatus('from_status'),
     toStatus: invoiceLifecycleStatus('to_status').notNull(),
