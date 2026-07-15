@@ -46,6 +46,7 @@ const BULK_ENDPOINT =
   'https://registry.npmjs.org/-/npm/v1/security/advisories/bulk'
 const CHUNK_SIZE = 150 // validé empiriquement (754 paquets → 6 lots, tous 200 OK)
 const MAX_ATTEMPTS = 3
+const REQUEST_TIMEOUT_MS = 30_000 // évite qu'une socket suspendue bloque la CI indéfiniment
 
 function logInfo(message) {
   console.log(message)
@@ -116,6 +117,11 @@ async function fetchJsonWithRetry(url, body) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
+        // Sans timeout, une socket suspendue bloquerait l'étape CI jusqu'au
+        // timeout du job entier. Un AbortError ici tombe dans le catch
+        // ci-dessous comme n'importe quelle autre erreur réseau : retry puis,
+        // en dernier recours, échec fermé (exit non nul, jamais exit 0).
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       })
       if (!res.ok) {
         throw new Error(
