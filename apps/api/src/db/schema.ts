@@ -1,6 +1,7 @@
 import type { Invoice } from '@factelec/invoice-core'
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
   boolean,
   check,
   customType,
@@ -11,6 +12,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
@@ -36,6 +38,17 @@ export const formatKind = pgEnum('format_kind', [
 
 // Cycle de vie CDV — nomenclature DGFiP (cf. src/invoices/lifecycle-status.ts,
 // STATUS_META, source de vérité de l'ordre/labels/codes).
+// Statut d'archivage probatoire (Task 6, 2.2) : `pending` tant que le job de
+// génération n'a pas encore tenté l'archivage best-effort ; `archived` une
+// fois le bundle écrit en WORM (Task 5) ; `failed` si l'écriture a échoué
+// (ré-essayé par la réconciliation, Task 8 — jamais bloquant pour la
+// génération, qui reste `generated`).
+export const archiveStatus = pgEnum('archive_status', [
+  'pending',
+  'archived',
+  'failed',
+])
+
 export const invoiceLifecycleStatus = pgEnum('invoice_lifecycle_status', [
   'deposee',
   'emise',
@@ -99,6 +112,17 @@ export const invoices = pgTable(
     lifecycleStatus: invoiceLifecycleStatus('lifecycle_status')
       .notNull()
       .default('deposee'),
+    // Archivage probatoire best-effort (Task 6) : découplé du statut de
+    // génération ci-dessus — un archivage `failed` ne dégrade jamais une
+    // génération `generated` (formats déjà servis).
+    archiveStatus: archiveStatus('archive_status').notNull().default('pending'),
+    archiveLocation: text('archive_location'),
+    archiveHash: text('archive_hash'),
+    // Compteur de ré-enfilements par la réconciliation (Task 8) : borne le
+    // nombre de tentatives d'une facture bloquée avant neutralisation en DLQ
+    // (facture « poison »). Jamais remis à 0 sur succès — sans impact (une
+    // facture `generated` sort de find_stuck_* et n'est plus jamais re-swept).
+    reconcileAttempts: integer('reconcile_attempts').notNull().default(0),
     canonical: jsonb('canonical').$type<Invoice>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -150,7 +174,14 @@ export const invoiceStatusEvents = pgTable(
       .references(() => tenants.id, { onDelete: 'cascade' }),
     invoiceId: uuid('invoice_id')
       .notNull()
-      .references(() => invoices.id, { onDelete: 'cascade' }),
+      // Journal probatoire : une facture munie d'événements NE PEUT PLUS être
+      // supprimée (le journal ne se supprime pas avec sa facture — dette 2.1,
+      // D4). Corollaire : supprimer un TENANT possédant des événements scellés
+      // est désormais BLOQUÉ (23503 via ce RESTRICT enfant) plutôt que
+      // cascadé — plus protecteur. La FK tenant_id reste `cascade` (la
+      // suppression d'un tenant relève d'une procédure RGPD dédiée, hors
+      // périmètre 2.2).
+      .references(() => invoices.id, { onDelete: 'restrict' }),
     // NULL pour l'événement initial (dépôt) ; sinon statut de départ.
     fromStatus: invoiceLifecycleStatus('from_status'),
     toStatus: invoiceLifecycleStatus('to_status').notNull(),
@@ -160,11 +191,41 @@ export const invoiceStatusEvents = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // ── Scellement chaîné (imposé par le trigger seal_status_event, D1/D2) ──
+    // Les défauts ci-dessous sont des PLACEHOLDERS : le trigger BEFORE INSERT
+    // recalcule TOUJOURS seq/prev_hash/hash. Ils existent uniquement pour rendre
+    // ces colonnes NOT NULL optionnelles à l'insert (repository inchangé).
+    seq: bigint('seq', { mode: 'number' }).notNull().default(0),
+    prevHash: bytea('prev_hash').notNull().default(sql`'\\x'::bytea`),
+    hash: bytea('hash').notNull().default(sql`'\\x'::bytea`),
   },
   (t) => [
     index('invoice_status_events_invoice_idx').on(t.invoiceId, t.createdAt),
     index('invoice_status_events_tenant_idx').on(t.tenantId),
+    unique('invoice_status_events_tenant_seq_unique').on(t.tenantId, t.seq),
+    unique('invoice_status_events_tenant_hash_unique').on(t.tenantId, t.hash),
   ],
+)
+
+// DLQ des factures « poison » : génération en échec récurrent, neutralisées par
+// la réconciliation (cap). Append-only (grants SELECT/INSERT, migration 0015).
+export const invoiceDeadLetters = pgTable(
+  'invoice_dead_letters',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoices.id, { onDelete: 'restrict' }),
+    reason: text('reason').notNull(),
+    attempts: integer('attempts').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('invoice_dead_letters_tenant_idx').on(t.tenantId)],
 )
 
 export const userRole = pgEnum('user_role', [

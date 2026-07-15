@@ -8,11 +8,15 @@ function build() {
   const sessionMaintenance = {
     purgeExpiredSessions: vi.fn().mockResolvedValue(2),
   }
+  const archiveRetry = {
+    sweepFailedArchives: vi.fn().mockResolvedValue(1),
+  }
   const processor = new MaintenanceProcessor(
     reconciliation as never,
     sessionMaintenance as never,
+    archiveRetry as never,
   )
-  return { processor, reconciliation, sessionMaintenance }
+  return { processor, reconciliation, sessionMaintenance, archiveRetry }
 }
 
 describe('MaintenanceProcessor.process', () => {
@@ -34,13 +38,26 @@ describe('MaintenanceProcessor.process', () => {
     expect(reconciliation.sweepStuckGeneration).not.toHaveBeenCalled()
   })
 
+  it('dispatches archive-retry jobs to the archive retry service (Task 8)', async () => {
+    const { processor, reconciliation, sessionMaintenance, archiveRetry } =
+      build()
+
+    await processor.process({ name: 'archive-retry' } as never)
+
+    expect(archiveRetry.sweepFailedArchives).toHaveBeenCalledTimes(1)
+    expect(reconciliation.sweepStuckGeneration).not.toHaveBeenCalled()
+    expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
+  })
+
   it('ignores a genuinely unknown job name without throwing (forward-compat)', async () => {
-    const { processor, reconciliation, sessionMaintenance } = build()
+    const { processor, reconciliation, sessionMaintenance, archiveRetry } =
+      build()
 
     await expect(
       processor.process({ name: 'some-future-job' } as never),
     ).resolves.toBeUndefined()
     expect(reconciliation.sweepStuckGeneration).not.toHaveBeenCalled()
     expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
+    expect(archiveRetry.sweepFailedArchives).not.toHaveBeenCalled()
   })
 })

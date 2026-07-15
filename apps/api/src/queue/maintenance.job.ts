@@ -7,3 +7,8 @@ export const RECONCILE_INVOICES_JOB = 'reconcile-invoices'
 // Dispatché par MaintenanceProcessor (branche dédiée), planifié par
 // SessionPurgeScheduler (worker/session-purge.scheduler.ts).
 export const PURGE_SESSIONS_JOB = 'purge-sessions'
+// ARCHIVE_RETRY_JOB : reprise d'archivage best-effort (Task 8) — rejoue
+// `archiveInvoice` sur les factures dont l'archivage a échoué (ou est resté
+// figé en `pending`). Dispatché par MaintenanceProcessor (branche dédiée),
+// planifié par ArchiveRetryScheduler (worker/archive-retry.scheduler.ts).
+export const ARCHIVE_RETRY_JOB = 'archive-retry'

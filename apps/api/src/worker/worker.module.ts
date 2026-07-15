@@ -1,9 +1,13 @@
 import { Module } from '@nestjs/common'
+import { ArchiveModule } from '../archive/archive.module.js'
+import { ArchiveService } from '../archive/archive.service.js'
 import { AppConfigModule } from '../config/config.module.js'
 import { DbModule } from '../db/db.module.js'
 import { FormatGenerationService } from '../invoices/format-generation.service.js'
 import { INVOICE_FORMAT_GENERATOR } from '../invoices/format-generator.port.js'
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
+import { ArchiveRetryScheduler } from './archive-retry.scheduler.js'
+import { ArchiveRetryService } from './archive-retry.service.js'
 import { InvoiceGenerationProcessor } from './invoice-generation.processor.js'
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
 import { MaintenanceProcessor } from './maintenance.processor.js'
@@ -19,16 +23,19 @@ import { WorkerQueueModule } from './worker-queue.module.js'
 // fichier et dans queue.module.ts — le worker possède sa PROPRE connexion
 // BullMQ eager, sans les flags skip* du producteur HTTP.
 @Module({
-  imports: [AppConfigModule, DbModule, WorkerQueueModule],
+  imports: [AppConfigModule, DbModule, WorkerQueueModule, ArchiveModule],
   providers: [
     InvoicesRepository,
     { provide: INVOICE_FORMAT_GENERATOR, useClass: FormatGenerationService },
+    ArchiveService,
     InvoiceGenerationProcessor,
     InvoiceReconciliationService,
     MaintenanceProcessor,
     ReconciliationScheduler,
     SessionMaintenanceService,
     SessionPurgeScheduler,
+    ArchiveRetryService,
+    ArchiveRetryScheduler,
   ],
 })
 export class WorkerModule {}

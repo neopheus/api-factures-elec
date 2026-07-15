@@ -2,6 +2,7 @@ import type { Invoice } from '@factelec/invoice-core'
 import { Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm'
 import {
+  invoiceDeadLetters,
   invoiceFormats,
   type invoiceStatus,
   invoiceStatusEvents,
@@ -32,6 +33,23 @@ export interface StatusEvent {
   actor: string
   reason: string | null
   createdAt: Date
+}
+
+// Événement SCELLÉ (Task 4) — miroir des colonnes de scellement chaîné
+// (seal_status_event, migration 0012) : consommé par LedgerVerificationService
+// pour recalculer/comparer la chaîne. Identité probative = (tenant_id, seq) ;
+// `id` (PK surrogate) reste hors périmètre probatoire, volontairement absent
+// d'ici (les appelants ne doivent jamais référencer un événement par `id`).
+export interface SealedEvent {
+  seq: number
+  invoiceId: string
+  fromStatus: string | null
+  toStatus: string
+  actor: string
+  reason: string | null
+  createdAt: Date
+  prevHash: Buffer
+  hash: Buffer
 }
 
 @Injectable()
@@ -225,6 +243,61 @@ export class InvoicesRepository {
     })
   }
 
+  // Lecture sous RLS des événements scellés d'UNE facture, triés par seq
+  // croissant — support du self-check par-facture (LedgerVerificationService
+  // .verifyInvoiceEvents). `prev_hash`/`hash` (bytea) reviennent en `Buffer`
+  // via pg (customType `bytea`) ; `seq` (bigint mode `number`) revient en
+  // `number`.
+  async loadSealedEventsByInvoice(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<SealedEvent[]> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          seq: invoiceStatusEvents.seq,
+          invoiceId: invoiceStatusEvents.invoiceId,
+          fromStatus: invoiceStatusEvents.fromStatus,
+          toStatus: invoiceStatusEvents.toStatus,
+          actor: invoiceStatusEvents.actor,
+          reason: invoiceStatusEvents.reason,
+          createdAt: invoiceStatusEvents.createdAt,
+          prevHash: invoiceStatusEvents.prevHash,
+          hash: invoiceStatusEvents.hash,
+        })
+        .from(invoiceStatusEvents)
+        .where(eq(invoiceStatusEvents.invoiceId, invoiceId))
+        .orderBy(asc(invoiceStatusEvents.seq))
+      return rows as SealedEvent[]
+    })
+  }
+
+  // Lecture sous RLS de TOUS les événements scellés du tenant, triés par seq
+  // croissant — support de la vérification de chaîne complète
+  // (LedgerVerificationService.verifyTenantChain : genesis, contiguïté,
+  // linkage, hash). O(n) sur le nombre d'événements du tenant ; acceptable
+  // pour un endpoint d'audit (pas un hot path) — une pagination/borne pourra
+  // être ajoutée si un tenant devient très volumineux (différé).
+  async loadSealedEventsByTenant(tenantId: string): Promise<SealedEvent[]> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          seq: invoiceStatusEvents.seq,
+          invoiceId: invoiceStatusEvents.invoiceId,
+          fromStatus: invoiceStatusEvents.fromStatus,
+          toStatus: invoiceStatusEvents.toStatus,
+          actor: invoiceStatusEvents.actor,
+          reason: invoiceStatusEvents.reason,
+          createdAt: invoiceStatusEvents.createdAt,
+          prevHash: invoiceStatusEvents.prevHash,
+          hash: invoiceStatusEvents.hash,
+        })
+        .from(invoiceStatusEvents)
+        .orderBy(asc(invoiceStatusEvents.seq))
+      return rows as SealedEvent[]
+    })
+  }
+
   async listFormatKinds(
     tenantId: string,
     invoiceId: string,
@@ -301,6 +374,117 @@ export class InvoicesRepository {
         ({ createdAtRaw: _createdAtRaw, ...rest }) => rest,
       )
       return { items, nextCursor }
+    })
+  }
+
+  // Recharge les 5 formats persistés (Task 6, archivage) — support du bundle
+  // probatoire (ArchiveService), qui embarque le contenu intégral de chaque
+  // format généré.
+  async loadAllFormats(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<
+    {
+      kind: string
+      contentType: string
+      bodyText: string | null
+      bodyBytes: Buffer | null
+      byteSize: number
+    }[]
+  > {
+    return this.tenant.run(tenantId, async (db) => {
+      return db
+        .select({
+          kind: invoiceFormats.kind,
+          contentType: invoiceFormats.contentType,
+          bodyText: invoiceFormats.bodyText,
+          bodyBytes: invoiceFormats.bodyBytes,
+          byteSize: invoiceFormats.byteSize,
+        })
+        .from(invoiceFormats)
+        .where(eq(invoiceFormats.invoiceId, invoiceId))
+    })
+  }
+
+  // Marque le résultat de l'archivage best-effort (Task 6). `location`/`hash`
+  // omis (ex. passage à `failed`) → effacés (pas d'empreinte stale d'une
+  // tentative précédente).
+  async markArchiveStatus(
+    tenantId: string,
+    invoiceId: string,
+    status: 'pending' | 'archived' | 'failed',
+    location?: string,
+    hash?: string,
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .update(invoices)
+        .set({
+          archiveStatus: status,
+          archiveLocation: location ?? null,
+          archiveHash: hash ?? null,
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, invoiceId))
+    })
+  }
+
+  async findArchiveState(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<{
+    status: string
+    location: string | null
+    hash: string | null
+  } | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          status: invoices.archiveStatus,
+          location: invoices.archiveLocation,
+          hash: invoices.archiveHash,
+        })
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .limit(1)
+      return rows[0] ?? null
+    })
+  }
+
+  // Compteur de ré-enfilements (Task 8, cap réconciliation → DLQ). Incrémente
+  // ATOMIQUEMENT (SQL `+ 1`, pas de lecture-puis-écriture) et retourne la
+  // nouvelle valeur, seule source de vérité pour la comparaison au cap
+  // (InvoiceReconciliationService.sweepStuckGeneration).
+  async bumpReconcileAttempts(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<number> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .update(invoices)
+        .set({
+          reconcileAttempts: sql`${invoices.reconcileAttempts} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, invoiceId))
+        .returning({ n: invoices.reconcileAttempts })
+      return rows[0]?.n ?? 0
+    })
+  }
+
+  // Neutralise DÉFINITIVEMENT une facture « poison » (cap de ré-enfilements
+  // dépassé) : entrée append-only dans la DLQ (migration 0015 — grants
+  // SELECT/INSERT seulement pour factelec_app).
+  async recordDeadLetter(
+    tenantId: string,
+    invoiceId: string,
+    reason: string,
+    attempts: number,
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .insert(invoiceDeadLetters)
+        .values({ tenantId, invoiceId, reason, attempts })
     })
   }
 

@@ -1,6 +1,8 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq'
 import { Inject, Logger } from '@nestjs/common'
 import type { Job } from 'bullmq'
+// biome-ignore lint/style/useImportType: ArchiveService résolu par Nest via design:paramtypes.
+import { ArchiveService } from '../archive/archive.service.js'
 import {
   INVOICE_FORMAT_GENERATOR,
   type InvoiceFormatGenerator,
@@ -18,6 +20,7 @@ export class InvoiceGenerationProcessor extends WorkerHost {
     private readonly repo: InvoicesRepository,
     @Inject(INVOICE_FORMAT_GENERATOR)
     private readonly generator: InvoiceFormatGenerator,
+    private readonly archive: ArchiveService,
   ) {
     super()
   }
@@ -44,6 +47,10 @@ export class InvoiceGenerationProcessor extends WorkerHost {
     // a eu le temps de s'exécuter), et un retry rejoue le même travail dans
     // les deux cas, sans conséquence observable.
     await this.repo.completeGeneration(tenantId, invoiceId, formats)
+    // Archivage à valeur probante (best-effort, découplé de la génération, D6) :
+    // les formats sont déjà `generated` et servis ; un échec d'archive laisse
+    // archive_status='failed', ré-essayé par la réconciliation (Task 8).
+    await this.archive.archiveInvoice(tenantId, invoiceId)
   }
 
   // `failed` est émis à CHAQUE tentative échouée ; on ne bascule en `failed`
