@@ -3,6 +3,7 @@
 // cf. le commentaire de ce fichier pour la raison de ne jamais en créer un
 // second).
 export const RECONCILE_INVOICES_JOB = 'reconcile-invoices'
-// PURGE_SESSIONS_JOB : ajouté par Task 7 (purge des sessions expirées) —
-// AJOUTER une branche à MaintenanceProcessor.process, ne pas créer un second
-// @Processor sur la même file.
+// PURGE_SESSIONS_JOB : purge des sessions expirées (Task 7, dette 1.4).
+// Dispatché par MaintenanceProcessor (branche dédiée), planifié par
+// SessionPurgeScheduler (worker/session-purge.scheduler.ts).
+export const PURGE_SESSIONS_JOB = 'purge-sessions'

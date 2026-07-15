@@ -8,6 +8,8 @@ import { InvoiceGenerationProcessor } from './invoice-generation.processor.js'
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
 import { MaintenanceProcessor } from './maintenance.processor.js'
 import { ReconciliationScheduler } from './reconciliation.scheduler.js'
+import { SessionMaintenanceService } from './session-maintenance.service.js'
+import { SessionPurgeScheduler } from './session-purge.scheduler.js'
 import { WorkerQueueModule } from './worker-queue.module.js'
 
 // Côté CONSOMMATEUR : fournit les @Processor (invoice-generation +
@@ -25,6 +27,8 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     InvoiceReconciliationService,
     MaintenanceProcessor,
     ReconciliationScheduler,
+    SessionMaintenanceService,
+    SessionPurgeScheduler,
   ],
 })
 export class WorkerModule {}

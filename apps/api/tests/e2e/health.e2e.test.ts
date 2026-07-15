@@ -118,3 +118,48 @@ describe('health (e2e) — Redis down', () => {
       .expect({ status: 'ok' })
   })
 })
+
+// Cas « down » : DB injoignable (mandat contrôleur Task 1 → dette reportée à
+// Task 7). Même motif que le cas Redis ci-dessus (`127.0.0.1:1`, port
+// réservé jamais attribuable → ECONNREFUSED rapide et déterministe). Un
+// Redis de test réel est démarré et branché pour isoler la panne : sans
+// override Redis, le check Redis échouerait aussi (contre le Redis par
+// défaut localhost:6379, absent en CI) et masquerait ce qu'on veut vérifier
+// ici — que le check DB, seul en échec, produit bien 503 (pas 500).
+describe('health (e2e) — DB down', () => {
+  let redis: TestRedis
+  let app: INestApplication
+
+  beforeAll(async () => {
+    redis = await startTestRedis()
+    app = await createTestApp(
+      'postgres://factelec_app:app_pw@127.0.0.1:1/factelec',
+      {
+        host: redis.host,
+        port: redis.port,
+      },
+    )
+  })
+
+  afterAll(async () => {
+    await Promise.race([
+      app.close(),
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ])
+    await redis.stop()
+  })
+
+  it('GET /health/ready fails fast (503) — not a hang, not a 500 — when the DB is unreachable', async () => {
+    const res = await request(app.getHttpServer()).get('/health/ready')
+    expect(res.status).toBe(503)
+    expect(res.body.status).toBe(503)
+    expect(res.type).toBe('application/problem+json')
+  }, 10_000)
+
+  it('GET /health stays trivial (liveness, aucune dépendance DB)', async () => {
+    await request(app.getHttpServer())
+      .get('/health')
+      .expect(200)
+      .expect({ status: 'ok' })
+  })
+})
