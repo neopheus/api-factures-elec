@@ -11,13 +11,28 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import type { Response } from 'express'
+import { z } from 'zod'
 import { ApiKeyGuard } from '../auth/api-key.guard.js'
+import type { AuthenticatedUser } from '../auth/auth.types.js'
+import { CsrfGuard } from '../auth/csrf.guard.js'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
+import { CurrentUser } from '../auth/current-user.decorator.js'
+import { Roles, RolesGuard } from '../auth/roles.guard.js'
+import { SessionGuard } from '../auth/session.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
+import { parseBody } from '../common/validation.js'
 import { parseFormatKind } from './format-kind.js'
 // biome-ignore lint/style/useImportType: InvoicesService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { InvoicesService } from './invoices.service.js'
+// biome-ignore lint/style/useImportType: LifecycleService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
+import { LifecycleService } from './lifecycle.service.js'
+import { isLifecycleStatus, type LifecycleStatus } from './lifecycle-status.js'
+
+const transitionSchema = z.object({
+  toStatus: z.string().refine(isLifecycleStatus, 'unknown lifecycle status'),
+  reason: z.string().min(1).max(1000).optional(),
+})
 
 // Guards posés PAR MÉTHODE (pas de classe) : l'ingestion (POST) reste
 // exclusivement machine (ApiKeyGuard, pas de CSRF — pas de cookie côté
@@ -25,7 +40,10 @@ import { InvoicesService } from './invoices.service.js'
 // tenant (TenantAuthGuard) — jamais une session admin (refusée par ce guard).
 @Controller('invoices')
 export class InvoicesController {
-  constructor(private readonly invoices: InvoicesService) {}
+  constructor(
+    private readonly invoices: InvoicesService,
+    private readonly lifecycle: LifecycleService,
+  ) {}
 
   @Post()
   @HttpCode(201)
@@ -78,5 +96,34 @@ export class InvoicesController {
     const f = await this.invoices.getFormat(tenantId, id, kind)
     res.type(f.contentType)
     res.send(f.bodyBytes ?? f.bodyText)
+  }
+
+  // Mutation métier : session (owner/admin/accountant) + CSRF. Un viewer est
+  // refusé (403) ; une clé API n'ouvre pas cette route (SessionGuard → 401,
+  // pas de cookie). L'apposition machine (connecteurs) est différée (phase 4).
+  @Post(':id/status')
+  @HttpCode(201)
+  @UseGuards(SessionGuard, RolesGuard, CsrfGuard)
+  @Roles('owner', 'admin', 'accountant')
+  recordStatus(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<{ status: LifecycleStatus }> {
+    const { toStatus, reason } = parseBody(transitionSchema, body)
+    return this.lifecycle.transition(
+      tenantId,
+      id,
+      toStatus as LifecycleStatus,
+      `user:${user.userId}`,
+      reason,
+    )
+  }
+
+  @Get(':id/status')
+  @UseGuards(TenantAuthGuard)
+  getStatus(@CurrentTenant() tenantId: string, @Param('id') id: string) {
+    return this.lifecycle.history(tenantId, id)
   }
 }

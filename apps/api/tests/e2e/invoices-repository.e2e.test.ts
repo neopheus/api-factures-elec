@@ -108,4 +108,101 @@ describe('InvoicesRepository (e2e, Postgres réel)', () => {
     )
     expect(formats.rows[0].n).toBe(1)
   })
+
+  it('getLifecycleStatus reads the current status, and null for an unknown id', async () => {
+    const invoice = buildInvoice({ ...input, number: 'FA-REPO-LC-1' })
+    const { id } = await repo.insertReceived(tenantId, invoice)
+
+    expect(await repo.getLifecycleStatus(tenantId, id)).toBe('deposee')
+    expect(
+      await repo.getLifecycleStatus(
+        tenantId,
+        '00000000-0000-0000-0000-000000000000',
+      ),
+    ).toBeNull()
+  })
+
+  // Preuve directe du CAS (anti-race) de recordTransition, sans dépendre
+  // d'une vraie concurrence (non-déterministe) : deux appels séquentiels avec
+  // le MÊME `from` (désormais périmé après le premier) reproduisent
+  // exactement ce qu'observerait une transition concurrente perdante — 0
+  // ligne mise à jour, aucun événement inséré, état inchangé.
+  it('recordTransition is a genuine CAS: succeeds once, then a stale `from` is rejected (no partial write)', async () => {
+    const invoice = buildInvoice({ ...input, number: 'FA-REPO-CAS' })
+    const { id } = await repo.insertReceived(tenantId, invoice)
+
+    const first = await repo.recordTransition(
+      tenantId,
+      id,
+      'deposee',
+      'approuvee',
+      'user:1',
+      undefined,
+    )
+    expect(first).toBe(true)
+
+    // `from: 'deposee'` est maintenant périmé (l'état réel est `approuvee`).
+    const second = await repo.recordTransition(
+      tenantId,
+      id,
+      'deposee',
+      'approuvee_partiellement',
+      'user:1',
+      undefined,
+    )
+    expect(second).toBe(false)
+
+    expect(await repo.getLifecycleStatus(tenantId, id)).toBe('approuvee')
+    const events = await repo.listStatusEvents(tenantId, id)
+    // Le journal ne contient QUE le dépôt initial + la transition réussie —
+    // la tentative périmée n'a inséré aucun événement.
+    expect(events.map((e) => e.toStatus)).toEqual(['deposee', 'approuvee'])
+  })
+
+  it('listStatusEvents returns the append-only journal in chronological order', async () => {
+    const invoice = buildInvoice({ ...input, number: 'FA-REPO-EVENTS' })
+    const { id } = await repo.insertReceived(tenantId, invoice)
+    await repo.recordTransition(
+      tenantId,
+      id,
+      'deposee',
+      'approuvee',
+      'user:1',
+      undefined,
+    )
+    await repo.recordTransition(
+      tenantId,
+      id,
+      'approuvee',
+      'encaissee',
+      'user:1',
+      undefined,
+    )
+
+    const events = await repo.listStatusEvents(tenantId, id)
+
+    expect(events).toEqual([
+      {
+        fromStatus: null,
+        toStatus: 'deposee',
+        actor: 'platform',
+        reason: null,
+        createdAt: expect.any(Date),
+      },
+      {
+        fromStatus: 'deposee',
+        toStatus: 'approuvee',
+        actor: 'user:1',
+        reason: null,
+        createdAt: expect.any(Date),
+      },
+      {
+        fromStatus: 'approuvee',
+        toStatus: 'encaissee',
+        actor: 'user:1',
+        reason: null,
+        createdAt: expect.any(Date),
+      },
+    ])
+  })
 })

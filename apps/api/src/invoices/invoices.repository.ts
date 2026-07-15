@@ -1,6 +1,6 @@
 import type { Invoice } from '@factelec/invoice-core'
 import { Injectable } from '@nestjs/common'
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm'
 import {
   invoiceFormats,
   type invoiceStatus,
@@ -11,6 +11,7 @@ import {
 import { TenantContextService } from '../db/tenant-context.service.js'
 import { decodeCursor, encodeCursor } from './cursor.js'
 import type { FormatKind, GeneratedFormat } from './format-generator.port.js'
+import type { LifecycleStatus } from './lifecycle-status.js'
 
 export type GenerationStatus = (typeof invoiceStatus.enumValues)[number]
 
@@ -21,6 +22,15 @@ export interface InvoiceSummary {
   issueDate: string
   currency: string
   status: string
+  lifecycleStatus: string
+  createdAt: Date
+}
+
+export interface StatusEvent {
+  fromStatus: string | null
+  toStatus: string
+  actor: string
+  reason: string | null
   createdAt: Date
 }
 
@@ -140,12 +150,78 @@ export class InvoicesRepository {
           issueDate: invoices.issueDate,
           currency: invoices.currency,
           status: invoices.status,
+          lifecycleStatus: invoices.lifecycleStatus,
           createdAt: invoices.createdAt,
         })
         .from(invoices)
         .where(eq(invoices.id, id))
         .limit(1)
       return rows[0] ?? null
+    })
+  }
+
+  async getLifecycleStatus(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<LifecycleStatus | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ lifecycleStatus: invoices.lifecycleStatus })
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .limit(1)
+      return (rows[0]?.lifecycleStatus as LifecycleStatus | undefined) ?? null
+    })
+  }
+
+  // Optimiste (anti-race) : n'écrit QUE si le statut courant est toujours
+  // `from`. Retourne false si 0 ligne mise à jour (transition concurrente) →
+  // le service traduit en 409. Événement inscrit dans la MÊME transaction.
+  async recordTransition(
+    tenantId: string,
+    invoiceId: string,
+    from: LifecycleStatus,
+    to: LifecycleStatus,
+    actor: string,
+    reason: string | undefined,
+  ): Promise<boolean> {
+    return this.tenant.run(tenantId, async (db) => {
+      const updated = await db
+        .update(invoices)
+        .set({ lifecycleStatus: to, updatedAt: new Date() })
+        .where(
+          and(eq(invoices.id, invoiceId), eq(invoices.lifecycleStatus, from)),
+        )
+        .returning({ id: invoices.id })
+      if (updated.length === 0) return false
+      await db.insert(invoiceStatusEvents).values({
+        tenantId,
+        invoiceId,
+        fromStatus: from,
+        toStatus: to,
+        actor,
+        reason: reason ?? null,
+      })
+      return true
+    })
+  }
+
+  async listStatusEvents(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<StatusEvent[]> {
+    return this.tenant.run(tenantId, async (db) => {
+      return db
+        .select({
+          fromStatus: invoiceStatusEvents.fromStatus,
+          toStatus: invoiceStatusEvents.toStatus,
+          actor: invoiceStatusEvents.actor,
+          reason: invoiceStatusEvents.reason,
+          createdAt: invoiceStatusEvents.createdAt,
+        })
+        .from(invoiceStatusEvents)
+        .where(eq(invoiceStatusEvents.invoiceId, invoiceId))
+        .orderBy(asc(invoiceStatusEvents.createdAt))
     })
   }
 
@@ -208,6 +284,7 @@ export class InvoicesRepository {
           issueDate: invoices.issueDate,
           currency: invoices.currency,
           status: invoices.status,
+          lifecycleStatus: invoices.lifecycleStatus,
           createdAt: invoices.createdAt,
           createdAtRaw,
         })

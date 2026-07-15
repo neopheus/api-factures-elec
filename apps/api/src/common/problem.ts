@@ -14,6 +14,7 @@ export const ProblemType = {
   forbidden: `${BASE}:forbidden`,
   notFound: `${BASE}:not-found`,
   conflict: `${BASE}:conflict`,
+  invalidTransition: `${BASE}:invalid-status-transition`,
   rateLimited: `${BASE}:rate-limited`,
   internal: `${BASE}:internal-error`,
 } as const
