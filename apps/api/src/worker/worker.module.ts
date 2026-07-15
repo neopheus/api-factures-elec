@@ -8,6 +8,8 @@ import { INVOICE_FORMAT_GENERATOR } from '../invoices/format-generator.port.js'
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
 import { ArchiveRetryScheduler } from './archive-retry.scheduler.js'
 import { ArchiveRetryService } from './archive-retry.service.js'
+import { EreportingScheduler } from './ereporting.scheduler.js'
+import { EreportingSweepService } from './ereporting-sweep.service.js'
 import { InvoiceGenerationProcessor } from './invoice-generation.processor.js'
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
 import { MaintenanceProcessor } from './maintenance.processor.js'
@@ -36,6 +38,8 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     SessionPurgeScheduler,
     ArchiveRetryService,
     ArchiveRetryScheduler,
+    EreportingSweepService,
+    EreportingScheduler,
   ],
 })
 export class WorkerModule {}
