@@ -12,7 +12,12 @@ tenant **imposée par la base**, non contournable par l'application), la
 **vérification d'intégrité** indépendante (recompute TypeScript pur), l'
 **archivage à valeur probante** (port `ArchiveStore` write-once + implémentation
 locale testable, adaptateur S3 object-lock différé au déploiement), l'export de
-la **Piste d'Audit Fiable (PAF)** et le **DLQ** des factures « poison ». Consomme
+la **Piste d'Audit Fiable (PAF)** et le **DLQ** des factures « poison », puis
+en **2.3** avec l'**e-reporting DGFiP (Flux 10)** — transmission au PPF de
+**données d'opérations** (agrégats), **distincte** de l'e-invoicing ci-dessus :
+sous-flux **10.3 (B2C domestique) livré de bout en bout**, machine à états
+**300/301** propre (distincte du CDV), cadence par régime TVA, port de
+transmission différé au déploiement. Consomme
 `@factelec/invoice-core` (validation, calculs, génération des formats du socle)
 et expose l'ensemble derrière une couche d'authentification et d'isolation
 multi-tenant Postgres.
@@ -407,6 +412,314 @@ table **append-only** (`SELECT`+`INSERT` seulement pour `factelec_app`, RLS
 l'horodatage. Sans ce cap, une facture poison boucle indéfiniment dans la
 file de réconciliation (dette 2.1 tracée, désormais soldée).
 
+## E-reporting DGFiP (Flux 10) — 2.3
+
+Le **Flux 10** transmet au PPF (Portail Public de Facturation, DGFiP)
+des **données d'opérations** agrégées — un concept **distinct** de
+l'e-invoicing (Flux 1-9 ci-dessus, qui transmet des factures individuelles).
+Sous-domaine `apps/api/src/ereporting/*` : nomenclatures et modèle purs
+(`nomenclature.ts`, `flux10-model.ts`), génération/validation XML
+(`flux10-xml.ts`, `ereporting-xsd-validator.ts`), agrégation
+(`flux10-aggregate.ts`), machine à états (`ereporting-lifecycle.ts`),
+persistance (`ereporting.repository.ts`), port de transmission
+(`flux10-transmission.port.ts`), cadence (`period.ts`), services applicatifs
+(`ereporting-generation.service.ts`, `ereporting-status.service.ts`) et
+endpoints (`ereporting.controller.ts`).
+
+### Périmètre livré et honnêteté — lecture obligatoire
+
+**LIVRÉ de bout en bout : le sous-flux 10.3 (B2C domestique), transactions
+(TB-2)**, de la classification par facture jusqu'à l'acquittement PPF et la
+consultation. **DIFFÉRÉS EXPLICITES — ne pas surpromettre « B2B international
+livré »** :
+
+- **10.1/10.2 (B2Bi, transactions internationales)** — `classifyEreportingOperation`
+  (`flux10-aggregate.ts`) **classifie** correctement une opération
+  transfrontalière en `'10.1'`, mais aucune agrégation ni émission n'en est
+  faite : `aggregateTransactions` ne retient que la classe `'10.3'`. Le mapping
+  par facture (`TransactionsReport.invoices`, TG-8) reste une infrastructure
+  de type non câblée (toujours `[]` en sortie).
+- **TB-3 (paiements, 10.2/10.4)** — aucun modèle de capture des encaissements
+  n'existe dans `@factelec/invoice-core` ; `Flux10Report.payments` est
+  systématiquement `null` (XOR par construction, jamais les deux blocs à la
+  fois).
+- **Cadres de facturation MIXTES M1/M2/M4** — le modèle `Invoice` n'a **aucun
+  discriminant biens/services au niveau ligne** (`vatBreakdown` est groupé par
+  taux, pas par nature de ligne). Une ventilation forcée entre TLB1
+  (livraisons) et TPS1 (prestations) aurait **doublé** la base et la TVA
+  déclarées (un cadre M1 à 1000,00 €/200,00 € aurait été déclaré
+  2000,00 €/400,00 €). Décision : les factures à cadre mixte sont **exclues**
+  de l'agrégation (différées, comme 10.1/TB-3) plutôt que de fabriquer une
+  ventilation incorrecte — une période dont les seules factures 10.3 sont à
+  cadre mixte part donc à blanc.
+- **Adaptateurs de transport réels** (`sftp`/`as2`/`as4`/`api`) — `EreportingTransmissionModule`
+  lève une erreur explicite et testée tant qu'un de ces drivers est
+  sélectionné sans implémentation ; seul `local` (write-once testable) est
+  câblé en 2.3. Activation **au déploiement**.
+- **Push/acquittement PPF réel** — `EreportingStatusService.recordPpfStatus`
+  est la **frontière** qu'un futur adaptateur webhook/annuaire appliquera ;
+  elle est exercée **directement par les e2e** (aucune route HTTP entrante
+  n'existe pour recevoir un acquittement PPF push dans ce plan).
+- **Schematron / contrôles sémantiques Annexe 7** — non implémentés ; seule la
+  validation **structurelle** XSD est faite (voir plus bas).
+- **Chemin RE (rectificatif)** — le type `RE` (`TRANSMISSION_TYPES`) est
+  modélisé et n'entre jamais en conflit avec l'index unique `IN`, mais aucun
+  flux applicatif ne produit de rectificatif dans ce plan (voir aussi le
+  runbook du slot A2 ci-dessous).
+- **Provisioning des déclarants** — `EreportingRepository.upsertDeclarant`
+  existe et est testé, mais **aucun endpoint HTTP ni script CLI** ne l'expose
+  (contrairement à `pnpm provision:tenant`) : à ce jour, une ligne
+  `ereporting_declarants` ne peut être créée qu'en insérant directement en
+  base ou via un futur endpoint d'administration — non fourni dans ce plan.
+
+**Aucun scellement ni signature au niveau message** (contraste explicite avec
+2.2) : le XSD `ereporting.xsd` DGFiP ne porte aucun élément de signature —
+l'authentification est assurée au niveau **transport** (SFTP/AS2/AS4 X.509,
+API OAuth2), responsabilité de la Plateforme Agréée. Le scellement/PAF livré
+en 2.2 pour le journal CDV **ne s'applique pas** au Flux 10 : le journal
+`ereporting_status_events` est **append-only** (grants `SELECT`+`INSERT`
+seulement, comme `invoice_status_events`) mais **non scellé** — comportement
+correct, pas un oubli : rien dans la spec externe v3.2 n'exige un hash-chain
+sur ce journal, contrairement à l'obligation CGI qui a motivé le scellement du
+CDV.
+
+### Machine à états 300/301 (distincte du CDV)
+
+Cycle de vie **propre à l'e-reporting**, indépendant du CDV facture
+(`ereporting-lifecycle.ts`) :
+
+```
+prepared → transmitted → { deposee (300) | rejetee (301) }
+```
+
+- **`prepared`/`transmitted`** sont des états **internes** à la Plateforme
+  Agréée, antérieurs à toute transmission réelle au PPF — ils ne portent
+  **aucun code DGFiP** (`code: null`, jamais un faux `0`/`1` qui laisserait
+  croire à un code réglementaire).
+- **`deposee` (300)** et **`rejetee` (301)** sont les deux seuls états
+  **terminaux**, portant les codes DGFiP réels (Tableaux 5/6, §3.7.10). Un
+  rejet (`rejetee`) **exige** un motif `REJ_SEMAN`/`REJ_UNI`/`REJ_COH`/`REJ_PER`
+  (`motifRequired`) ; toute transition invalide (chronologie, motif manquant)
+  est refusée par `assertTransition`/`InvalidEreportingTransitionError`.
+- Le modèle **binaire** (un seul aller-retour transmitted→terminal, sans état
+  intermédiaire de type « en cours de contrôle ») est une **interprétation
+  projet** : la Figure 59 du Dossier général (visuel du cycle de vie e-reporting)
+  n'est pas extractible en règles machine — seul le texte §3.7.9 est
+  disponible, et il ne contredit pas ce modèle, mais ne le prouve pas non plus
+  formellement. **À confirmer au go-live.**
+
+**Deux origines distinctes pour `rejetee`, désambiguïsées** (`deriveRejectOrigin`,
+`ereporting.controller.ts`, exposé en `rejectOrigin` sur les endpoints de
+consultation) :
+
+- **`rejectOrigin: 'local'`** — rejet **pré-transmission** (`fromStatus: null`,
+  `actor: 'platform'`) : le worker de génération a produit un XML **non
+  XSD-valide** et l'a rejeté lui-même (motif `REJ_SEMAN`) **avant tout appel
+  au port de transmission** — le PPF n'a jamais vu ce document. C'est la
+  transmission qui **naît directement `rejetee`** (« born-rejetee », voir le
+  runbook ci-dessous), pas une transition `prepared`→`rejetee` (interdite par
+  la machine à états : seul `transmitted`→`rejetee` est un 301 officiel).
+- **`rejectOrigin: 'ppf'`** — rejet **réel** notifié par le PPF
+  (`fromStatus: 'transmitted'`, `actor: 'ppf'`), appliqué via
+  `EreportingStatusService.recordPpfStatus`.
+
+### Agrégation et classification (10.3)
+
+`classifyEreportingOperation(invoice)` (pure) classe chaque facture en
+`'10.1'` (transfrontalière — différée), `'10.3'` (acheteur français **et**
+non-assujetti — agrégée) ou `'out'` (acheteur français **et** assujetti —
+relève de l'e-invoicing, exclue de l'e-reporting). `aggregateTransactions`
+regroupe les factures `'10.3'` éligibles d'une période par (date ‖ devise ‖
+catégorie TLB1/TPS1), sommant les montants en `big.js` (BT→TT). **Transmission
+à blanc optionnelle** (§2.3.3) : si aucune facture n'est éligible sur la
+période (ou si les seules factures 10.3 sont à cadre mixte, différées
+ci-dessus), `aggregateTransactions` renvoie `null` et **aucune écriture, aucun
+appel au port de transmission** n'a lieu — pas de « transmission vide »
+générée pour le principe.
+
+**`invoiceCount` — métadonnée indicative, pas une source de vérité** : ce
+compteur (persisté sur `ereporting_transmissions`) compte **toutes** les
+factures classées `'10.3'` sur la période, y compris celles à cadre mixte
+finalement **exclues** de l'agrégation — il peut donc **sur-compter** par
+rapport au nombre réel de factures reflétées dans les montants du XML. Les
+**montants déclarés au PPF restent exacts** (aucune facture à cadre mixte
+n'entre dans les sommes) ; seul ce compteur est une approximation à ne pas
+utiliser comme preuve d'exhaustivité.
+
+### Génération et validation XML
+
+`generateEreportingXml` (`flux10-xml.ts`, `xmlbuilder2` — dépendance déjà
+vendorisée par `invoice-core`, pas un ajout) assemble `ReportDocument` (TB-1,
+métadonnées émetteur PA + déclarant) et `TransactionsReport` (TB-2). Le worker
+**valide** systématiquement le XML produit contre `ereporting.xsd` DGFiP via
+`xmllint` (`ereporting-xsd-validator.ts`, `execFile`) **avant** tout envoi.
+
+> ⚠️ **Validation STRUCTURELLE uniquement — pas une conformité sémantique
+> PPF.** Un document XSD-valide respecte la grammaire du format, mais le PPF
+> applique en plus des **contrôles sémantiques** (schematron, règles de
+> cohérence Annexe 7) **non implémentés ici** — un flux structurellement
+> valide peut donc légitimement être rejeté par un **301 réel** (`REJ_SEMAN`/
+> `REJ_UNI`/`REJ_COH`/`REJ_PER`) après transmission. La validation XSD locale
+> protège uniquement contre l'émission d'un document **malformé** ; elle ne
+> garantit pas son acceptation par le PPF.
+
+### Cadence de transmission par régime TVA (Tableau 13 §3.7.7, verbatim)
+
+`period.ts` calcule les périodes dues, **data-driven par régime** (aucune
+branche `switch`/`if` sur le régime dans la logique de calcul) :
+
+| Régime TVA | Cadence | Échéance (Tableau 13, verbatim) |
+| --- | --- | --- |
+| `reel_normal_mensuel` | **Décadaire** (01-10 / 11-20 / 21-fin de mois) | 21 du mois / 1er du mois suivant / 11 du mois suivant, à 8h00 |
+| `reel_normal_trimestriel` | Mensuelle (mois civil) | 1er du mois **suivant** la période, à 8h00 |
+| `simplifie` | Mensuelle (mois civil) | 1er du **2e** mois suivant la période, à 8h00 |
+| `franchise` | Bimestrielle (bimestres civils jan-fév…nov-déc) | 1er du **2e** mois suivant la fin du bimestre, à 8h00 |
+
+> Ce tableau a été **exhumé verbatim** de la spec externe v3.2 lors de la
+> revue de la Task 7 (il n'était pas, contrairement à une hypothèse initiale
+> du plan, seulement « partiellement extractible ») — les échéances
+> `simplifie`/`franchise` initialement codées un mois trop tôt (mois+1 au lieu
+> de mois+2) ont été corrigées suite à cette revue.
+
+**Interprétations projet résiduelles, à confirmer au go-live** :
+
+- Les « 8h00 » du Tableau 13 sont modélisées en **08:00 UTC** (≈ 09h/10h heure
+  de Paris) — la période devient due **après** l'échéance réelle Paris (côté
+  sûr : toutes les données du déclarant sont arrivées), tout en restant
+  largement dans la fenêtre de remise PPF de 8h.
+- Fenêtre de rattrapage **bornée** (`MAX_DUE_PERIODS=2`) : le balayage renvoie
+  au plus les 2 périodes les plus récemment échues. Un rattrapage plus long
+  (déclarant resté inactif longtemps) est un **processus d'exploitation**
+  (ré-émission manuelle/ciblée), pas la responsabilité du balayage horaire
+  automatique.
+- Heuristique d'assujettissement de l'acheteur : présence d'un SIREN/SIRET
+  (BT-47) **ou** d'un numéro de TVA intracommunautaire (BT-48) — faute de
+  champ booléen dédié dans le modèle `Invoice`.
+- TT-77 (date de transaction) = `issueDate` (BT-2) de la facture.
+- SIREN/SIRET porté sous `schemeId` **`0002`** (TT-12/13/33-1).
+- Catégorie par défaut **TLB1** (livraison de biens) si le cadre BT-23 est
+  absent de la facture.
+- Modèle **binaire** du cycle de vie 300/301 (Figure 59 non extractible, voir
+  § Machine à états ci-dessus).
+
+### Ordonnancement et anti double-envoi (3 couches)
+
+`EreportingSweepService` (job répétable `EREPORTING_SWEEP_JOB`, périodicité
+`EREPORTING_SWEEP_EVERY_MS`) énumère les déclarants actifs de **tous les
+tenants** via la fonction `SECURITY DEFINER` `find_ereporting_declarants_due()`
+(hors contexte tenant, miroir de `find_failed_archives` 2.2), calcule pour
+chacun les périodes dues (`computeDuePeriods`) et enfile un job
+`ereporting-generate` par couple (déclarant, période due). **Trois couches de
+défense, aucune suffisante seule** :
+
+1. **Fenêtre bornée** (`MAX_DUE_PERIODS`, `period.ts`) — le balayage ne peut
+   jamais ré-enfiler un historique entier.
+2. **`jobId` déterministe** `${declarantId}:${fluxKind}:${periodStart}` —
+   BullMQ déduplique tant que le job existe encore dans Redis.
+3. **Backstop base de données** — l'index unique partiel `WHERE type='IN'`
+   (migration `0016`) + `insertTransmission` idempotent (`created: false` →
+   le worker relit le statut et saute la période déjà traitée au lieu de la
+   ré-émettre au PPF).
+
+Le sweep n'enfile que des transactions **initiales** (`fluxKind='transactions'`,
+`type='IN'`) — les paiements (`payments`, différé D10) et les rectificatifs
+(`RE`) ne sont jamais enfilés automatiquement.
+
+### Port de transmission
+
+`Flux10TransmissionPort` (`transmit`/`status`) est implémenté en 2.3 par
+`LocalFilesystemTransmissionStore` (write-once, `EREPORTING_TRANSMISSION_DRIVER=local`,
+défaut) — écriture atomique, `trackingId` déterministe (`sha256(xml)`).
+`EREPORTING_TRANSMISSION_DRIVER` accepte aussi `sftp`/`as2`/`as4`/`api`, tous
+**activés au déploiement** (lèvent une erreur explicite tant que
+l'implémentation réelle n'est pas fournie — même motif que l'adaptateur S3
+object-lock de 2.2).
+
+### Persistance
+
+Trois tables tenant-scopées sous RLS **`ENABLE`+`FORCE`** (migrations `0016`
+Drizzle / `0017` hand) : `ereporting_declarants` (config CRUD par déclarant :
+SIREN, rôle, régime TVA), `ereporting_transmissions` (sans `DELETE`), et
+`ereporting_status_events` (journal **append-only**, `SELECT`+`INSERT`
+seulement). L'index unique partiel `ereporting_transmissions_declarant_flux_period_in_unique`
+(`declarant_id, flux_kind, period_start` **où** `type='IN'`) porte l'A2
+(anti double-envoi, voir ci-dessus **et** le runbook ci-dessous — c'est aussi
+la cause du deadlock du slot A2).
+
+## Runbook opérationnel — e-reporting Flux 10
+
+Section dédiée aux **dettes opérationnelles** identifiées en revue (Tasks 5 et
+8), à connaître **avant** toute exploitation réelle.
+
+### Deadlock du slot A2 (MEDIUM, fail-safe — procédure manuelle requise)
+
+**Symptôme.** Une transmission `IN` née `rejetee` (rejet **local**
+`REJ_SEMAN`, XML non XSD-valide produit par une donnée source incohérente)
+occupe **définitivement** le slot unique (déclarant × flux × période **où**
+`type='IN'`) : `rejetee` est un statut **terminal** (§ Machine à états
+ci-dessus). Une fois la donnée source corrigée en amont, le balayage suivant
+tente de régénérer la période, mais `insertTransmission` retombe sur le
+conflit d'index existant (`created: false`), recharge la ligne `rejetee`
+existante, et le worker constate un statut **non-`prepared`** → il **ne fait
+rien** (`return` silencieux, § `ereporting-generation.service.ts`). **La
+période ne peut plus jamais être transmise en `IN` sans intervention.**
+
+**Pourquoi ce n'est PAS un bug à corriger en excluant `rejetee` de l'index.**
+L'index unique partiel `WHERE type='IN'` (sans filtre sur le statut) est ce
+qui garantit l'**idempotence anti double-envoi** entre `insertTransmission` et
+`markTransmitted` (couche 3 de la défense en profondeur ci-dessus) : si un
+crash survient entre l'insertion et la transmission effective, le rejeu du
+balayage doit retomber sur la **même** ligne, quel que soit son statut, plutôt
+que d'en créer une seconde qui serait transmise deux fois au PPF. **Retirer
+`rejetee` de cet index rouvrirait cette fenêtre de double-envoi sur crash** —
+ne jamais le faire pour « corriger » le deadlock.
+
+**Procédure manuelle (jusqu'à un chantier RE/libération de slot dédié)** :
+
+1. Identifier la transmission bloquée : `GET /ereporting/transmissions` (ou
+   requête directe), filtrer `status='rejetee'` et `rejectOrigin='local'`
+   (`fromStatus IS NULL` en base) — **ne pas confondre** avec un rejet PPF
+   réel (`rejectOrigin='ppf'`), qui lui est un 301 légitime, pas un deadlock.
+2. Consulter le motif exact (`GET /ereporting/transmissions/:id/events`) pour
+   comprendre l'incohérence source (typiquement une donnée de facturation
+   invalide au regard du XSD e-reporting).
+3. Corriger la donnée source (facture concernée) dans le système amont.
+4. Débloquer le slot par **une** de ces deux voies :
+   - **(a)** Supprimer manuellement la ligne `ereporting_transmissions`
+     rejetée localement (accès DB direct, rôle propriétaire) — le prochain
+     balayage régénérera une transmission `IN` propre pour la période ;
+   - **(b)** Attendre un futur chantier **RE/rectificatif** ou de
+     **libération de slot** dédié (non livré dans ce plan — `type='RE'` est
+     modélisé mais aucun flux applicatif ne le produit à ce jour).
+5. Vérifier après re-balayage que la nouvelle transmission `IN` passe bien
+   `prepared → transmitted → deposee`.
+
+### `libxml2`/`xmllint` — prérequis de l'hôte du **worker**
+
+Contrairement à `invoice-core`, où `xmllint` n'est requis **qu'en test**
+(Schematron/XSD EN 16931), le worker e-reporting invoque `xmllint` **en
+runtime**, à **chaque génération de transmission** (`ereporting-xsd-validator.ts`,
+`execFile`). Si l'outil est absent de l'hôte d'exécution du worker en
+production, la validation échoue avec une erreur **opérationnelle** (pas un
+rejet sémantique) — le job est rejoué selon `EREPORTING_GENERATION_JOB_ATTEMPTS`
+puis marqué `failed` après épuisement, **aucune transmission n'est jamais
+émise** tant que l'outil manque. **À ajouter aux prérequis d'image/hôte de
+déploiement du worker**, à côté de `pgcrypto` (2.2), du bucket S3 (2.2) et de
+`TRUST_PROXY` (1.4).
+
+### Durcissement du rôle SD cross-tenant (dette sécurité, revue Task 5)
+
+`find_ereporting_declarants_due()` (fonction `SECURITY DEFINER`) expose, au
+rôle applicatif `factelec_app` (partagé API + worker), les colonnes
+`(tenant_id, siren, name)` de **tous les tenants** — plus large que le
+périmètre RLS habituel d'un rôle applicatif, mais **nécessaire** tant que le
+worker et l'API partagent le même rôle Postgres (aucun privilège
+supplémentaire réel n'est accessible depuis l'API HTTP aujourd'hui, puisque
+c'est le **même** rôle). **À durcir au déploiement** en retirant l'`EXECUTE`
+au rôle utilisé par le process API HTTP lors d'un futur split du rôle worker
+(API ↔ worker sur deux rôles Postgres distincts, avec des grants différenciés)
+— non fait dans ce plan.
+
 ## Sécurité / multi-tenant
 
 Cette section documente les mécanismes de sécurité destinés à figurer au
@@ -559,6 +872,13 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `ARCHIVE_LOCAL_DIR` | Répertoire local du driver `local` | `./var/archive` |
 | `GENERATION_MAX_ATTEMPTS_CAP` | Cap de ré-enfilements par la réconciliation avant DLQ (`invoice_dead_letters`) — facture « poison » | `5` |
 | `ARCHIVE_RETRY_EVERY_MS` | Périodicité (ms) du balayage de reprise d'archivage (`archive_status='failed'` ou `pending` bloqué > 15 min) | `300000` (5 min) |
+| `EREPORTING_TRANSMISSION_DRIVER` | Adaptateur de transmission Flux 10 : `local` (`LocalFilesystemTransmissionStore`, testable) \| `sftp`\|`as2`\|`as4`\|`api` (auth transport réelle, **activés au déploiement**, lèvent une erreur explicite tant que non fournis) | `local` |
+| `EREPORTING_LOCAL_DIR` | Répertoire local du driver `local` | `./var/ereporting` |
+| `EREPORTING_PA_ID` | Matricule émetteur de la Plateforme Agréée (TT-8, TB-1) | `PA00` |
+| `EREPORTING_PA_SCHEME_ID` | Schéma d'identifiant de la PA (TT-7, ICD) | `0238` |
+| `EREPORTING_PA_NAME` | Raison sociale de la PA (TT-9) | `Factelec PA` |
+| `EREPORTING_SWEEP_EVERY_MS` | Périodicité (ms) du job répétable d'ordonnancement e-reporting (`EreportingSweepService`) | `3600000` (1 h) |
+| `EREPORTING_GENERATION_JOB_ATTEMPTS` | Tentatives max d'un job de génération e-reporting avant `failed` — distingue une erreur **opérationnelle** (`xmllint` absent, DB/port transitoire) d'un rejet sémantique `REJ_SEMAN` (qui n'est jamais rejoué, il ne throw pas) | `3` |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -628,6 +948,9 @@ README racine.
 | `POST /admin/login` | Authentification super admin plateforme (`platform_admins`, Argon2id), ouvre une session admin | 200, 401, 422 |
 | `POST /admin/logout` | Révoque la session admin courante | 204, 401, 403 |
 | `GET /admin/tenants` | Liste de tous les tenants (vue plateforme : nombre d'utilisateurs, de factures) | 200, 401, 403 |
+| `GET /ereporting/transmissions` | Liste des transmissions e-reporting Flux 10 du tenant (résumés — **sans** le XML), `rejectOrigin` (`local`\|`ppf`\|`null`) dérivé pour les rejets | 200, 401 |
+| `GET /ereporting/transmissions/:id/xml` | XML de la transmission (`text/xml`) — 404 si absente ou d'un autre tenant | 200, 401, 404 |
+| `GET /ereporting/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
 
 **Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
 route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
@@ -642,9 +965,10 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   `Authorization: Bearer fk_<prefix>.<secret>`, sans repli possible.
 - **`GET /invoices`, `GET /invoices/:id`, `GET /invoices/:id/formats/:format`,
   `GET /invoices/:id/status`, `GET /invoices/:id/ledger`, `GET
-  /invoices/:id/paf`** (lecture) acceptent **soit une clé API, soit
-  une session utilisateur** du même tenant (`TenantAuthGuard`, dual-auth) —
-  jamais une session **admin** plateforme, refusée par ce guard. Un en-tête
+  /invoices/:id/paf`, `GET /ereporting/transmissions*`** (lecture) acceptent
+  **soit une clé API, soit une session utilisateur** du même tenant
+  (`TenantAuthGuard`, dual-auth) — jamais une session **admin** plateforme,
+  refusée par ce guard. Un en-tête
   `Authorization: Bearer` présent est **toujours** résolu en priorité (même
   invalide) : un client machine ne retombe jamais silencieusement sur un
   cookie de session qui traînerait dans la même requête.
@@ -725,6 +1049,22 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   timestamp identique à la microseconde ; non observé en pratique (chaque
   transition est sa propre transaction), à muscler (tri secondaire explicite)
   si la suite devenait flaky.
+- **E-reporting Flux 10** (plan 2.3) : validation XSD **réelle** (`xmllint`
+  exécuté, pas simulé) contre `ereporting.xsd` DGFiP, y compris un test négatif
+  prouvant le rejet local `REJ_SEMAN` sur une donnée réellement invalide
+  (pas un stub) ; agrégation testée avec assertions de **montants exacts**
+  (pas seulement de structure) sur les cadres simples et l'exclusion des
+  cadres mixtes ; machine à états 300/301 et désambiguïsation
+  `rejectOrigin` ; A2 (index unique partiel `IN`) prouvé au niveau SQL réel
+  (deux insertions concurrentes → une seule ligne, zéro événement dupliqué) ;
+  ordonnanceur testé en e2e (déduplication `jobId`, fenêtre bornée) ; worker
+  bouclé en-process (`createTestWorker`) exerçant le pipeline complet
+  période→agrégat→XML→validation→persistance→transmission, y compris la
+  transmission à blanc (aucune écriture, aucun appel au port). **Dette de
+  test acceptée** (revue Task 9) : la course 300/301 concurrente est prouvée
+  par le CAS SQL (`UPDATE ... WHERE status='transmitted'`), pas par un e2e
+  concurrent explicite (deux requêtes HTTP simultanées) — jugé suffisant, le
+  CAS étant la garantie réelle, pas une simulation de test.
 - **Scellement/hash couverts par des vecteurs déterministes** (Task 3) : un
   vecteur canonique **constant** (genesis + événement entièrement spécifié →
   SHA-256 attendu hardcodé) verrouille la canonicalisation contre toute
@@ -735,8 +1075,8 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   simulée.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
-  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 85
-  fichiers, **440 tests**, couverture **98.11 / 95.1 / 96.09 / 98.48 %**
+  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 102
+  fichiers, **568 tests**, couverture **97.87 / 94.25 / 95.73 / 98.31 %**
   (statements/branches/functions/lines).
 
 ```sh
@@ -813,12 +1153,42 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   **et** CLI `pnpm provision:tenant` (conservé). Provisioning **super
   admin** : **CLI exclusivement** (`pnpm provision:admin`), aucune
   inscription self-service — décision assumée, pas une limitation à lever.
+- **Résolu en 2.3** : e-reporting DGFiP Flux 10, sous-flux **10.3 (B2C
+  domestique)** de bout en bout — classification par facture, agrégation
+  BT→TT, génération/validation XSD, machine à états 300/301, cadence par
+  régime TVA, transmission (port différé au déploiement), acquittements et
+  endpoints de consultation. Voir §§ E-reporting / Runbook opérationnel
+  ci-dessus pour le détail complet et les différés.
+- **Validation XSD e-reporting = structurelle uniquement** (2.3, honnêteté) —
+  aucun schematron/contrôle sémantique Annexe 7 implémenté ; un flux
+  XSD-valide peut être rejeté 301 par le PPF pour un motif sémantique. Voir
+  § Génération et validation XML.
+- **Deadlock du slot A2** (2.3, MEDIUM, fail-safe, non résolu) — une
+  transmission `IN` rejetée localement occupe définitivement son slot ;
+  procédure manuelle documentée, pas d'automatisation de libération de slot
+  à ce jour. Voir § Runbook opérationnel.
+- **`invoiceCount` sur-compte les factures 10.3 à cadre mixte différées**
+  (2.3) — métadonnée indicative uniquement ; les montants déclarés restent
+  exacts. Voir § Agrégation et classification.
+- **Rôle SD `find_ereporting_declarants_due` cross-tenant** (2.3, dette
+  sécurité) — expose `(tenant_id, siren, name)` de tous les tenants au rôle
+  applicatif partagé API/worker ; à durcir au split du rôle worker au
+  déploiement. Voir § Runbook opérationnel.
+- **Aucun endpoint/CLI de provisioning des déclarants e-reporting** (2.3) —
+  `EreportingRepository.upsertDeclarant` existe et est testé mais n'est
+  exposé par aucune route HTTP ni script CLI à ce jour.
 
-### Différé explicitement 2.3+ (hors périmètre 2.2)
+### Différé explicitement 2.4+ (hors périmètre 2.3)
 
-- **E-reporting DGFiP** (Flux 10, plan 2.3) et **annuaire central** (Flux
-  13/14, plan 2.4) — aucune transmission ni consultation d'annuaire à ce
-  jour.
+- **E-reporting DGFiP au-delà du 10.3** (Flux 10, plan 2.3) : 10.1/10.2 B2Bi
+  (classifiées mais non émises), TB-3 paiements (10.2/10.4, aucun modèle de
+  capture des encaissements), cadres de facturation mixtes M1/M2/M4 (aucun
+  discriminant biens/services par ligne dans le modèle `Invoice`),
+  adaptateurs de transport réels (sftp/as2/as4/api), push/acquittement PPF
+  réel (webhook), schematron/contrôles sémantiques Annexe 7, chemin
+  RE/rectificatif — voir § E-reporting pour le détail de chaque point.
+- **Annuaire central** (Flux 13/14, plan 2.4) — aucune consultation
+  d'annuaire à ce jour.
 - **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway
   Object Storage, mode `COMPLIANCE`, rétention 10 ans) — **spécifié** (même
   contrat que `ArchiveStore`) mais **non écrit** en 2.2 : infra à la main de
@@ -836,7 +1206,8 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   2.1 sont exclusivement pilotées par session utilisateur.
 - **Remplacement de la matrice de transitions CDV** contre la norme **AFNOR
   XP Z12-012** (payante, hors dépôt) → **phase 3**, **bloqueur go-live PDP**
-  (D7) — la matrice monotone 2.1 reste une interprétation projet documentée.
+  (D7) — la matrice monotone 2.1 reste une interprétation projet documentée ;
+  ce même bloqueur couvre l'immatriculation PDP côté e-reporting (2.3).
 - **Journal d'audit des authentifications** (connexions, échecs,
   révocations de session — distinct du journal CDV 2.1) → **horizon 2.x**.
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan
