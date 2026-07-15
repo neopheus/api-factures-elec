@@ -13,6 +13,7 @@ describe('db schema (Drizzle)', () => {
   it('declares the invoice_status and format_kind enums used by the tables', () => {
     expect(invoiceStatus.enumValues).toEqual([
       'received',
+      'generating',
       'generated',
       'failed',
     ])

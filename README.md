@@ -9,8 +9,8 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (14/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3 et 1.4 terminés
-> et mergés ; dettes héritées soldées avant chaque plan suivant.**
+> **État du projet (15/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4 et 2.1
+> terminés et mergés ; dettes héritées soldées avant chaque plan suivant.**
 > `invoice-core` (v0.3.1 — patch BT-9) livre les **formats du socle** : UBL 2.1
 > Invoice **et** CreditNote (avoir), extraits de flux DGFiP F1 (facture et
 > avoir), CII D16B (avec échéance de paiement BT-9) et Factur-X PDF/A-3 (CII
@@ -59,12 +59,45 @@ API publique pour les systèmes custom.
 > ≥ 90 % sur les 4 métriques). Détail complet : `apps/api/README.md`,
 > `apps/web/README.md`.
 >
-> **Reprise — prochaine étape : phase 2** (Cœur réglementaire — cycle de
-> vie des statuts, scellement/archivage à valeur probante, e-reporting
-> DGFiP, adaptateur `QueuedFormatGenerator` derrière le port BullMQ). Les
-> reports explicites de 1.4 (Stripe, vérification email, memberships M:N,
-> Playwright e2e, super admin complet MFA/impersonation → **phase 5** ;
-> BullMQ → **phase 2**) sont détaillés en Feuille de route ci-dessous.
+> **2.1 — Workers BullMQ et cycle de vie des statuts (CDV)** livre : **infra
+> Redis/BullMQ** (`QueueModule` producteur, connexion paresseuse ; sonde de
+> readiness Redis bornée 2 s, `HealthCheckError` propre) ; **ingestion
+> asynchrone** — **changement de contrat** vis-à-vis de 1.x :
+> `POST /invoices` répond désormais **`201 { status: 'received' }`**
+> (enfilement d'un job minimal `{tenantId, invoiceId}`, `jobId = invoiceId`
+> pour l'idempotence — **aucun contenu de facture ne transite par Redis**),
+> génération **asynchrone** des 5 formats du socle par un **worker BullMQ**
+> séparé (`apps/api/src/worker-main.ts`, processus dédié `pnpm start:worker`,
+> retries/backoff configurables, statut `generating → generated|failed`) ;
+> **réconciliation auto-cicatrisante** (balayage périodique des factures
+> `received`/`generating` orphelines, éviction des jobs `failed` épuisés) —
+> une fenêtre résiduelle bornée (~15 min, `RECONCILIATION_GENERATING_STALE_MS`)
+> subsiste en cas de `SIGTERM` du worker exactement entre marquage
+> `generating` et complétion, rattrapée par le balayage suivant ; **cycle de
+> vie des statuts CDV** — nomenclature DGFiP 14 statuts (200-213, socle
+> obligatoire {200,210,212,213}), machine à états à chronologie monotone
+> (**interprétation projet, à durcir contre la norme AFNOR XP Z12-012**,
+> aucune matrice de transitions n'étant publiée par la DGFiP), motif
+> obligatoire pour `refusee`/`suspendue`, endpoints
+> `POST/GET /invoices/:id/status` (rôles `owner`/`admin`/`accountant` + CSRF,
+> CAS anti-race → 409 sur changement concurrent, 422 transition invalide) et
+> **journal `invoice_status_events` append-only** (immuable par grants
+> Postgres — substrat du futur journal à valeur probante, 2.2). Dettes 1.4
+> soldées : `last_used_at` des clés API (écrit à l'authentification) et
+> purge des sessions expirées (job BullMQ répétable). **512 tests** au total
+> (`invoice-core` 129 100 % · `apps/api` 335 à 98.02/94.64/95.91/98.53 %
+> (statements/branches/fonctions/lignes) · `apps/web` 48 à
+> 100/96.66/100/100 %). Détail complet : `apps/api/README.md`.
+>
+> **Reprise — prochaine étape : phase 2.2** (Cœur réglementaire, suite) —
+> e-reporting DGFiP (Flux 10), annuaire central (Flux 13/14),
+> scellement/archivage à valeur probante (WORM ; le journal append-only 2.1
+> en est le substrat direct — revoir à cette occasion le `ON DELETE CASCADE`
+> d'`invoice_status_events` vers `invoices` : un journal à valeur probante ne
+> doit pas disparaître avec sa facture). Puis **phase 3** : transmission
+> Peppol des statuts CDV, point d'accès Peppol interne. **Horizon 2.x** :
+> journal d'audit des authentifications (distinct du journal CDV). Reports
+> explicites détaillés en Feuille de route ci-dessous.
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
 
@@ -74,7 +107,8 @@ API publique pour les systèmes custom.
 apps/
   api/              API REST NestJS (ingestion/lecture des factures, auth utilisateur
                     + clés API + super admin, phases 1.3/1.4) : multi-tenant Postgres
-                    RLS, sessions httpOnly + CSRF, génération synchrone des formats
+                    RLS, sessions httpOnly + CSRF ; workers BullMQ (génération
+                    asynchrone) + cycle de vie des statuts CDV (phase 2.1)
   web/              Dashboard Next.js 16 (phase 1.4) : SPA authentifiée par session
                     serveur, factures/clés API, espace super admin minimal
 packages/
@@ -133,19 +167,25 @@ fichiers (hors tests).
 
 ## `@factelec/api`
 
-API REST NestJS 11 (ESM), phases **1.3 + 1.4** : ingestion et lecture des
-factures (consommant `@factelec/invoice-core`), authentification utilisateur
-(sessions httpOnly + CSRF), signup self-service transactionnel, gestion des
-clés API par session et super admin plateforme minimal. Multi-tenant Postgres
-avec Row-Level Security **`ENABLE` + `FORCE`**, double régime d'auth (clés API
-Argon2id pour l'ingestion machine, sessions Argon2id pour le dashboard —
-lecture des factures acceptant l'un ou l'autre du même tenant), génération
-**synchrone** des formats du socle (UBL, CII, Factur-X, extraits de flux)
-derrière un port dédié (`InvoiceFormatGenerator`, remplaçable par des workers
-BullMQ en **phase 2** sans toucher l'ingestion). Documentation complète —
-architecture & compromis (ESM + typecheck tsgo + émission SWC), sécurité
-multi-tenant et auth détaillées, variables d'environnement, endpoints, tests,
-limites v1 — dans [`apps/api/README.md`](apps/api/README.md).
+API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1** : ingestion et lecture
+des factures (consommant `@factelec/invoice-core`), authentification
+utilisateur (sessions httpOnly + CSRF), signup self-service transactionnel,
+gestion des clés API par session, super admin plateforme minimal, **workers
+BullMQ de génération asynchrone** et **cycle de vie des statuts CDV**.
+Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
+régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
+pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
+tenant). Génération **asynchrone** des formats du socle (UBL, CII, Factur-X,
+extraits de flux) : `POST /invoices` enfile un job minimal (ids only) derrière
+le port `InvoiceFormatGenerator` et répond `201 { status: 'received' }` ;
+un **worker** (processus séparé, `apps/api/src/worker-main.ts`) le consomme,
+génère les formats et persiste, avec retries/backoff et réconciliation
+auto-cicatrisante des orphelins. Cycle de vie métier CDV (nomenclature DGFiP
+14 statuts, machine à états, journal append-only) distinct du statut de
+génération. Documentation complète — architecture & compromis (ESM +
+typecheck tsgo + émission SWC), workers, sécurité multi-tenant et auth
+détaillées, variables d'environnement, endpoints, tests, limites — dans
+[`apps/api/README.md`](apps/api/README.md).
 
 ## `@factelec/web`
 
@@ -161,28 +201,39 @@ tsgo/Next — dans [`apps/web/README.md`](apps/web/README.md).
 ## Développement
 
 Prérequis : Node.js ≥ 22 (`.nvmrc`), pnpm 10, `xmllint` (libxml2) pour la
-validation XSD dans les tests, et Docker (Postgres de dev/tests `apps/api`,
-via Testcontainers pour les e2e — **non requis** pour `apps/web`, dont les
-tests tournent en jsdom pur). Le Schematron EN 16931 officiel s'exécute en
-**Node pur** (saxon-js, `xslt3`), sans JVM ; le premier `pnpm test` compile le
-SEF (~10-20 s), mis en cache ensuite (répertoire git-ignoré).
+validation XSD dans les tests, et Docker (Postgres **et Redis** de dev/tests
+`apps/api`, via Testcontainers pour les e2e — **non requis** pour `apps/web`,
+dont les tests tournent en jsdom pur). Le Schematron EN 16931 officiel
+s'exécute en **Node pur** (saxon-js, `xslt3`), sans JVM ; le premier
+`pnpm test` compile le SEF (~10-20 s), mis en cache ensuite (répertoire
+git-ignoré).
 
 ```sh
 pnpm install
 pnpm lint        # Biome (lint + format check) — scaffolding Next (.next/, next-env.d.ts) exclu
 pnpm build       # Compilation — DOIT précéder typecheck : invoice-core (tsc) → apps/api
-                 # (swc, résout @factelec/invoice-core via son dist/) → apps/web (next build,
-                 # génère next-env.d.ts requis par son propre typecheck)
+                 # (swc, résout @factelec/invoice-core via son dist/, compile aussi
+                 # worker-main.ts) → apps/web (next build, génère next-env.d.ts requis
+                 # par son propre typecheck)
 pnpm typecheck   # tsc --noEmit sur tous les packages (invoice-core + apps/api : tsgo ; apps/web :
                  # repli typescript@5.9.x local, cf. apps/web/README.md — verdict D6)
 pnpm test        # Vitest avec couverture (seuil bloquant : 90 %) — invoice-core + apps/api
-                 # (Testcontainers, Docker requis) + apps/web (jsdom, sans Docker)
+                 # (Testcontainers Postgres + Redis, Docker requis, worker bouclé en
+                 # process via createTestWorker) + apps/web (jsdom, sans Docker)
 ```
 
-Base de données locale d'`apps/api` (Postgres + rôles + RLS) :
+Base de données **et file** locales d'`apps/api` (Postgres + rôles + RLS,
+Redis) :
 
 ```sh
-cd apps/api && docker compose up -d
+cd apps/api && docker compose up -d   # démarre Postgres ET Redis
+```
+
+Worker de génération (processus séparé, après l'API — cf.
+[`apps/api/README.md`](apps/api/README.md) pour l'architecture producteur/consommateur) :
+
+```sh
+pnpm --filter @factelec/api start:worker   # build, ou worker:dev pour le watch mode
 ```
 
 Dashboard en développement (après l'API) :
@@ -192,9 +243,10 @@ pnpm --filter @factelec/web dev   # http://localhost:3001
 ```
 
 Voir [`apps/api/README.md`](apps/api/README.md) pour les migrations, le
-provisioning (tenant self-service ou CLI, super admin CLI uniquement) et le
-détail des variables d'environnement ; [`apps/web/README.md`](apps/web/README.md)
-pour le modèle d'auth et la stack du dashboard.
+provisioning (tenant self-service ou CLI, super admin CLI uniquement), les
+workers BullMQ et le détail des variables d'environnement ;
+[`apps/web/README.md`](apps/web/README.md) pour le modèle d'auth et la stack
+du dashboard.
 
 Conventions du projet :
 
@@ -205,10 +257,18 @@ Conventions du projet :
   `"1000.00"`).
 - Identifiants de code en anglais, messages de commit en français.
 - **Dépendances toujours en dernière version stable, 0 vulnérabilité** :
-  `pnpm outdated -r` doit rester vierge et `pnpm audit` ne doit remonter
-  **aucune** vulnérabilité (toutes sévérités) — les deux sont des étapes
-  **bloquantes** de la CI (`.github/workflows/ci.yml`), au même titre que
-  lint/build/typecheck/test. Deux overrides tolérés à ce jour
+  `pnpm outdated -r` doit rester vierge et `pnpm run audit:ci` ne doit
+  remonter **aucune** vulnérabilité applicable (toutes sévérités) — les deux
+  sont des étapes **bloquantes** de la CI (`.github/workflows/ci.yml`), au
+  même titre que lint/build/typecheck/test. `audit:ci` (`scripts/audit.mjs`)
+  remplace `pnpm audit` : ce dernier interroge l'ancien endpoint npm
+  `/-/npm/v1/security/audits`, **retiré** par npm (l'outil est cassé, pas nos
+  dépendances) — sur pnpm 10.12.1 comme sur pnpm 11.x. Le script interroge
+  directement le nouvel endpoint officiel `POST
+  /-/npm/v1/security/advisories/bulk` sur l'arbre de dépendances résolu
+  (`pnpm ls -r --depth Infinity --json`, transitives comprises), donc les
+  overrides `pnpm.overrides` ci-dessous sont naturellement pris en compte.
+  Deux overrides tolérés à ce jour
   (`pnpm.overrides` racine) : `@esbuild-kit/core-utils>esbuild` épinglé à
   `^0.25.0`, nécessaire à la chaîne de dépendances de `drizzle-kit` ; et
   `postcss` épinglé à `8.5.19` (CVE-2026-41305, `next@16.2.10` épingle en
@@ -219,10 +279,11 @@ Conventions du projet :
   (verdict D6, cf. `apps/web/README.md`) est neutralisé par
   `pnpm.updateConfig.ignoreDependencies: ["typescript"]` — le pin racine
   `typescript@7.0.2` (tsgo) n'est, lui, jamais ignoré.
-- CI GitHub Actions bloquante : `pnpm audit`, `pnpm outdated -r`, lint,
+- CI GitHub Actions bloquante : `pnpm run audit:ci`, `pnpm outdated -r`, lint,
   build, typecheck, tests — `invoice-core` + `apps/api` (ce dernier via
-  Testcontainers Postgres, Docker natif du runner) + `apps/web` (jsdom, sans
-  Docker), les trois balayés par `pnpm -r`.
+  Testcontainers Postgres **et Redis**, Docker natif du runner, aucun service
+  `redis:`/`postgres:` de job requis) + `apps/web` (jsdom, sans Docker), les
+  trois balayés par `pnpm -r`.
 
 ## Documentation réglementaire
 
@@ -231,7 +292,7 @@ v3.2 avec XSD et Schematron, onboarding Peppol) sont archivés dans
 [`docs/reglementaire/`](docs/reglementaire/README.md). Les XSD et l'OpenAPI de
 l'annuaire y font foi — ne pas en télécharger d'autres versions.
 
-## Feuille de route (phase 1)
+## Feuille de route
 
 - [x] **1.1 — Socle monorepo + invoice-core** (terminé) : modèle canonique,
       calculs, UBL 2.1 validé XSD.
@@ -245,31 +306,44 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       VATEX (BT-121) et ProfileID BT-23 sur les documents commerciaux.
 - [x] **1.3 — API NestJS, auth multi-tenant, ingestion** (terminé) : socle
       NestJS 11 ESM, Postgres multi-tenant RLS `FORCE`, auth clés API
-      Argon2id, `POST /invoices` (génération synchrone), lecture paginée,
-      isolation cross-tenant testée. Détail : `apps/api/README.md`.
+      Argon2id, `POST /invoices` (génération synchrone — **remplacée en
+      2.1**), lecture paginée, isolation cross-tenant testée. Détail :
+      `apps/api/README.md`.
 - [x] **1.4 — Auth utilisateur, self-service, dashboard** (terminé) :
       users tenant-scopés + sessions serveur httpOnly + CSRF double-submit
       (expiration absolue), signup self-service transactionnel, gestion des
       clés API par session, super admin plateforme minimal, lecture des
       factures en dual-auth (clé API ou session), dashboard Next.js 16.
       Détail : `apps/api/README.md`, `apps/web/README.md`.
+- [x] **2.1 — Workers BullMQ, ingestion asynchrone, cycle de vie CDV**
+      (terminé) : infra Redis/BullMQ, ingestion asynchrone (`POST /invoices`
+      → `201 { status: 'received' }`, **changement de contrat** vs 1.x),
+      worker de génération dédié (idempotence, retries/backoff,
+      réconciliation auto-cicatrisante), machine à états du cycle de vie CDV
+      (nomenclature DGFiP 14 statuts, interprétation projet à durcir contre
+      AFNOR XP Z12-012), endpoints de transition/historique, journal
+      `invoice_status_events` append-only (substrat valeur probante),
+      dettes 1.3/1.4 soldées (`last_used_at`, purge des sessions expirées).
+      Détail : `apps/api/README.md`.
 
-> **Point de reprise → phase 2** (Cœur réglementaire) : cycle de vie des
-> statuts (accusés de réception, transmission), scellement/archivage à
-> valeur probante, e-reporting DGFiP — ainsi que l'adaptateur
-> `QueuedFormatGenerator` (BullMQ) derrière le port `InvoiceFormatGenerator`
-> existant, sans changement du contrat `POST /invoices`. Puis **3.x** :
-> point d'accès Peppol interne.
+> **Point de reprise → phase 2.2** (Cœur réglementaire, suite) : e-reporting
+> DGFiP (Flux 10), annuaire central (Flux 13/14), scellement/archivage à
+> valeur probante (WORM — le journal `invoice_status_events` append-only 2.1
+> en est le substrat ; revoir à cette occasion son `ON DELETE CASCADE` vers
+> `invoices`, qu'un journal probant ne devrait pas hériter). Puis
+> **phase 3** : transmission Peppol des statuts CDV, point d'accès Peppol
+> interne.
 
 ### Prérequis pré-production / pré-DGFiP
 
 Liste compacte consolidant des points déjà détaillés ci-dessous (dette
 reportée) ou dans `apps/api/README.md` : aucun ne bloque le passage en
-phase 2, mais **tous** doivent être traités avant une exposition réelle
+phase 2.2, mais **tous** doivent être traités avant une exposition réelle
 (immatriculation DGFiP, onboarding de tenants en production) :
 
 - **Journal d'audit des authentifications** (connexions, échecs, révocations
-  de session) — absent à ce jour, prévu horizon **2.x**.
+  de session — distinct du journal CDV livré en 2.1) — absent à ce jour,
+  prévu horizon **2.x**.
 - **Vérification email** avant tout onboarding réel — colonne
   `email_verified` prête en base, non contraignante aujourd'hui (rate
   limiting strict sur `/auth/signup` en compensation provisoire).
@@ -283,17 +357,13 @@ phase 2, mais **tous** doivent être traités avant une exposition réelle
 - **Validation et unicité du SIREN (KYB)** — seul le format est vérifié (9
   chiffres) ; ni la clé de contrôle (Luhn), ni l'existence, ni l'unicité
   réelle de l'entreprise ne sont vérifiées à ce jour.
-- **`last_used_at` des clés API** — colonne présente, jamais mise à jour ;
-  décision à trancher en **phase 2** : l'écrire depuis la fonction
-  `SECURITY DEFINER` `authenticate_api_key` (seule exécutée avant le contexte
-  tenant) ou retirer la colonne.
+- **Machine à états CDV = interprétation projet** (2.1) — à durcir contre la
+  norme AFNOR XP Z12-012 avant mise en production réelle (aucune matrice de
+  transitions formelle publiée par la DGFiP dans le dépôt). Détail :
+  `apps/api/README.md`.
 
-Dette explicitement reportée (aucune ne bloque le passage en phase 2) :
+Dette explicitement reportée (aucune ne bloque le passage en phase 2.2) :
 
-- **Workers BullMQ** (génération asynchrone des formats) — actuellement
-  synchrone, derrière le port `InvoiceFormatGenerator` (`apps/api`) →
-  **phase 2** ; aucune transmission/cycle de vie en 1.4, donc aucune file
-  n'était nécessaire à ce stade.
 - **Stripe / abonnements** (modèle commercial self-service, spec §2/§8) →
   **phase 5** (Commercialisation).
 - **Vérification email** différée : fournisseur transactionnel non
@@ -312,10 +382,17 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 2) :
   le partage de cookies cross-subdomain dashboard/API.
 - **Throttle par tenant** (rate limiting actuellement par IP uniquement,
   `apps/api`) — non planifié à ce jour.
-- **`last_used_at`** des clés API non mis à jour (`apps/api`) — décision à
-  trancher (écrire ou retirer la colonne).
-- **Horizon 2.x** : journal d'audit persistant à valeur probante (rappel
-  1.3, toujours hors périmètre).
+- **E-reporting DGFiP** (Flux 10) et **annuaire central** (Flux 13/14) →
+  **phase 2.2** — aucune transmission ni consultation d'annuaire à ce jour.
+- **Scellement / archivage à valeur probante** (WORM, 10 ans) → **phase
+  2.2** — le journal `invoice_status_events` append-only (2.1) en est le
+  substrat direct (immuabilité par grants Postgres), non scellé
+  cryptographiquement à ce stade.
+- **Transmission Peppol des statuts CDV** et apposition automatique des
+  transitions par un connecteur/le réseau → **phase 3** (les transitions
+  2.1 sont exclusivement pilotées par session utilisateur).
+- **Horizon 2.x** : journal d'audit persistant des **authentifications**
+  (distinct du journal CDV à valeur probante, livré en substrat par 2.1).
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan
   1.2bis) : le socle cible D16B (Factur-X ≤ 1.07.3) par cohérence avec le
   Schematron EN 16931 CII `validation-1.3.16`, lui-même D16B ; Factur-X

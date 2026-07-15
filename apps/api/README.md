@@ -3,16 +3,26 @@
 API REST NestJS d'ingestion et de lecture des factures électroniques
 (phase **1.3**), étendue en **1.4** avec l'authentification utilisateur
 (sessions httpOnly + CSRF), le signup self-service transactionnel, la
-gestion des clés API par session et un super admin plateforme minimal.
-Consomme `@factelec/invoice-core` (validation, calculs, génération des
-formats du socle) et expose l'ensemble derrière une couche d'authentification
-et d'isolation multi-tenant Postgres.
+gestion des clés API par session et un super admin plateforme minimal, puis
+en **2.1** avec des **workers BullMQ** (génération asynchrone des formats)
+et le **cycle de vie des statuts CDV** (nomenclature DGFiP, machine à états,
+journal d'événements append-only). Consomme `@factelec/invoice-core`
+(validation, calculs, génération des formats du socle) et expose l'ensemble
+derrière une couche d'authentification et d'isolation multi-tenant Postgres.
 
 > **Dettes 1.3 soldées** (plan 1.4, task 1) : `createDb` (piège hors-tenant,
 > jamais appelé en production) retiré de `src/db/client.ts` ; `DATABASE_URL`
 > migré de `z.string().url()` (déprécié) vers `z.url()` (zod 4). Aucun
 > changement de comportement — refactor mécanique couvert par la suite
 > existante.
+>
+> **Dettes 1.3/1.4 soldées** (plan 2.1, task 7) : `last_used_at` (table
+> `api_keys`) est désormais écrit à chaque authentification réussie, depuis
+> `authenticate_api_key` (seule fonction `SECURITY DEFINER` exécutée avant le
+> contexte tenant — cf. §Architecture workers/Sécurité) ; la purge des
+> sessions expirées tourne en job BullMQ répétable côté worker
+> (`SessionPurgeScheduler` → `purge_expired_sessions()`, également
+> `SECURITY DEFINER`, table `sessions` deny-all pour `factelec_app`).
 
 ## Architecture & compromis
 
@@ -41,17 +51,173 @@ et d'isolation multi-tenant Postgres.
     le pin racine `7.0.2` d'`invoice-core` — n'a **jamais été activé** et
     reste une option si une version future de tsgo régressait sur un
     décorateur NestJS particulier.
-- **Génération synchrone.** La génération des formats (UBL, CII, Factur-X,
-  extraits de flux) est effectuée **de façon synchrone**, dans la même
-  transaction que la persistance de la facture, derrière un port
-  `InvoiceFormatGenerator` (`src/invoices/format-generator.port.ts`) dont
-  l'unique implémentation actuelle est `SynchronousFormatGenerator`
-  (appelle directement `@factelec/invoice-core`). **Aucune file d'attente,
-  aucun worker.** Le passage à des workers BullMQ (génération asynchrone,
-  statut `pending` → `generated`/`failed`) est prévu en **1.4/2.x** ; il
-  s'implémente comme un second adaptateur du même port
-  (`QueuedFormatGenerator`), **sans modifier l'ingestion** ni le contrat
-  `POST /invoices` (point de risque n°4 du plan).
+- **Génération asynchrone (2.1).** La génération des formats (UBL, CII,
+  Factur-X, extraits de flux) est effectuée **par un worker BullMQ dédié**,
+  hors de la requête HTTP d'ingestion — voir [§ Architecture
+  workers](#architecture-workers) pour l'architecture complète (producteur/
+  consommateur, idempotence, retries, réconciliation). **Écart assumé par
+  rapport au plan initial (D2)** : le worker vit dans `apps/api`
+  (`src/worker-main.ts`, second point d'entrée du même workspace, processus
+  séparé au runtime) plutôt que dans un workspace `apps/worker` dédié —
+  aucun bénéfice d'isolation supplémentaire à ce stade (même image de
+  déploiement, mêmes dépendances), la séparation de workspace reste une
+  option ouverte si le worker devait un jour diverger fortement de l'API en
+  dépendances ou en cadence de déploiement.
+
+## Architecture workers
+
+**Producteur / consommateur**, séparés par une file BullMQ (Redis) :
+
+- **Producteur** — le process API (`src/main.ts`). `POST /invoices` valide,
+  persiste la facture (statut `received`) et **enfile** un job minimal sur la
+  file `invoice-generation` via le port `InvoiceGenerationQueue`
+  (`src/queue/invoice-generation.queue.ts`) — connexion BullMQ **paresseuse**
+  côté producteur (`skipWaitingForReady`/`skipVersionCheck`, `QueueModule`) :
+  aucune connexion Redis réelle n'est ouverte au montage du module, sauf
+  usage effectif (enfilement, sonde readiness).
+- **Consommateur** — `src/worker-main.ts`, **processus séparé** (`pnpm
+  start:worker` en prod, `pnpm worker:dev` en watch mode), qui monte
+  `WorkerModule` (jamais importé par l'API HTTP). Connexion BullMQ **eager**
+  côté worker (`WorkerQueueModule` distinct de `QueueModule` — un worker doit
+  échouer/crash-loop au démarrage si Redis est injoignable, pas tourner
+  silencieusement sans consommer). `InvoiceGenerationProcessor`
+  (`src/worker/invoice-generation.processor.ts`) charge la facture
+  canonique, appelle `InvoiceFormatGenerator` (même port qu'en 1.3/1.4 —
+  génération désormais exécutée **côté worker**, plus dans la requête HTTP),
+  puis persiste les formats.
+
+**Payload minimal (ids only).** Le job ne transporte que
+`{ tenantId, invoiceId }` (`InvoiceGenerationJob`) — **aucun contenu de
+facture ni format généré ne transite par Redis** ; le worker recharge la
+facture canonique depuis Postgres avant de générer.
+
+**Idempotence.** `jobId = invoiceId` : un ré-enfilement du même
+`invoiceId` (retry BullMQ, réconciliation) ne crée jamais de doublon de job
+en file. Côté persistance, `InvoicesRepository.completeGeneration` exécute
+**delete + insert** des formats et le passage à `generated` dans **une seule
+transaction tenant** : un retraitement complet (après crash, reconciliation)
+remplace intégralement les formats précédents plutôt que de les dupliquer.
+
+**Retries / backoff.** `GENERATION_JOB_ATTEMPTS` tentatives (défaut 3),
+backoff exponentiel (1 s de base) — politique définie une seule fois
+(`invoice-generation.job-options.ts`) et **partagée** entre le producteur
+(enfilement initial) et le worker (re-enfilement par la réconciliation), pour
+qu'un job rejoué hérite toujours de la même politique. `failed` n'est écrit
+en base **qu'après épuisement** des tentatives (`OnWorkerEvent('failed')`,
+compare `job.attemptsMade` à `job.opts.attempts`) — un retry en cours ne
+repositionne jamais un statut `failed` prématuré.
+
+**Rétention.** `removeOnComplete` (24 h / 1000 jobs), `removeOnFail` (7
+jours) — les jobs terminés (succès ou échec définitif) ne s'accumulent pas
+indéfiniment dans Redis.
+
+**Réconciliation auto-cicatrisante** (`InvoiceReconciliationService`,
+balayage périodique côté worker, file `maintenance`) : comble deux trous
+structurels qu'aucun retry BullMQ ne couvre —
+1. facture `received` **jamais enfilée** (l'enfilement Redis a pu échouer
+   *après* le commit Postgres de l'ingestion — l'API n'a alors aucun moyen
+   de le savoir de façon synchrone) : au-delà de `RECONCILIATION_STALE_MS`
+   (défaut 5 min), la facture est considérée orpheline et re-enfilée ;
+2. facture bloquée en `generating` (le worker a été tué — `SIGTERM`,
+   OOM — exactement entre le marquage `generating` et la transaction
+   `completeGeneration`, hors de toute couverture retry puisque le job
+   BullMQ correspondant a pu être marqué `failed` et évincé de Redis par
+   `removeOnFail`) : au-delà de `RECONCILIATION_GENERATING_STALE_MS`
+   (défaut 15 min, délibérément plus large que le seuil `received` — une
+   génération légitime ne dure jamais 15 minutes), re-enfilée à son tour.
+
+Le balayage évince aussi les jobs `failed` déjà épuisés de la file avant
+réenfilement (`getJobSchedulers`/eviction, cf. commentaires
+`invoice-reconciliation.service.ts`). **Fenêtre résiduelle documentée, non
+couverte** : un `SIGTERM` du worker frappant exactement entre le marquage
+`generating` et `completeGeneration` laisse la facture bloquée jusqu'au
+prochain balayage — bornée à `RECONCILIATION_GENERATING_STALE_MS` (~15 min
+par défaut), jamais indéfiniment, mais pas instantanée. Aucune stratégie de
+verrou distribué n'a été mise en place pour fermer cette fenêtre à zéro
+(compromis assumé : complexité vs. gain sur un cas déjà borné et rare).
+
+**Rôle Postgres du worker : `factelec_app`** (D6, comme l'API) — le worker
+n'a besoin d'aucun privilège supplémentaire (mêmes tables, même RLS) ; il
+partage `DATABASE_URL` avec le process API, jamais `factelec_owner`.
+
+## Nouvelle sémantique `POST /invoices`
+
+**Changement de contrat** vis-à-vis de 1.3/1.4 (assumé, D1) : `POST
+/invoices` répond désormais `201 { id, status: 'received' }` — la génération
+des formats n'est **plus** synchrone avec la réponse HTTP. Le suivi se fait
+via `GET /invoices/:id` (`status` : `received → generating → generated`,
+ou `failed` après épuisement des tentatives) ; les formats
+(`GET /invoices/:id/formats/:format`) ne sont disponibles qu'une fois
+`status = 'generated'` (404 sinon, comme pour une facture inconnue — aucune
+distinction observable entre « pas encore généré » et « n'existe pas », par
+cohérence avec le reste de l'API qui ne renvoie jamais d'état interne
+explicite sur une ressource non accessible).
+
+## Cycle de vie CDV
+
+Deux axes de statut **distincts**, à ne jamais confondre :
+
+- **`status`** (colonne `invoice_status`, décrit ci-dessus) : statut
+  **technique** de génération des formats (`received`/`generating`/
+  `generated`/`failed`), piloté par le worker, sans intervention humaine.
+- **`lifecycle_status`** (colonne `invoice_lifecycle_status`) : statut
+  **métier/réglementaire** du cycle de vie de la facture (CDV — Cadre de
+  facturation électronique), piloté par des transitions explicites (API ou,
+  plus tard, apposition automatique par la plateforme/le réseau Peppol).
+
+**Nomenclature DGFiP** — 14 statuts (codes 200-213, source Dossier général
+v3.2 §3.6.4 Tableau 8 + Annexe 7 règle G7.44 pour le socle obligatoire
+`{200 Déposée, 210 Refusée, 212 Encaissée, 213 Rejetée}`) ; les 10 statuts
+restants sont facultatifs (`emise`/`recue`/
+`mise_a_disposition`/`prise_en_charge`/`approuvee`/
+`approuvee_partiellement`/`en_litige`/`suspendue`/`completee`/
+`paiement_transmis`). Chaque facture démarre à `deposee` (200, **obligatoire**)
+à l'ingestion (événement initial inscrit dans le journal, cf. ci-dessous).
+
+**Machine à états** (`src/invoices/lifecycle-status.ts`) — chronologie
+monotone : une transition `from → to` n'est valide que si `to` a un code
+strictement supérieur à `from`, et si `from` n'est pas terminal (`refusee`
+210 et `rejetee` 213, exception l'un vers l'autre y compris) ; motif
+(`reason`) **obligatoire** pour `refusee`/`suspendue` (règle G7.25).
+
+> ⚠️ **Interprétation projet, à durcir avant mise en production.** La DGFiP
+> ne publie, dans le Dossier général, aucune matrice de transitions
+> autorisées (les figures 48/49 du circuit de transmission sont purement
+> graphiques, non extractibles en règles machine) — seule la contrainte
+> « respect de la chronologie » (G7.19/G7.25/G7.45) est documentée. La
+> machine à états ci-dessus encode donc une interprétation **projet**
+> (chronologie stricte du code numérique) qui doit être recoupée avec la
+> norme **AFNOR XP Z12-012** (hors dépôt DGFiP, à se procurer) avant tout
+> passage en production réelle. Cas notable resté ouvert : `212 Encaissée →
+> 213 Rejetée` est autorisé par la règle monotone (une facture encaissée
+> peut être ultérieurement rejetée pour anomalie détectée après paiement) ;
+> AFNOR pourrait l'interdire — à réexaminer lors du durcissement.
+
+**Endpoints** :
+
+- `POST /invoices/:id/status` — transition (`{ toStatus, reason? }`), session
+  **owner/admin/accountant** + CSRF (jamais clé API : l'apposition
+  automatique par un connecteur/la plateforme est différée, phase 3).
+  **CAS anti-race** : l'`UPDATE` conditionne sur le statut courant lu juste
+  avant (`WHERE lifecycle_status = from`) — 0 ligne affectée ⇒ **409**
+  (changement concurrent, à réessayer) plutôt qu'un écrasement silencieux.
+  **422** si la transition est invalide (chronologie) ou si `reason` manque
+  alors que requis.
+- `GET /invoices/:id/status` — statut courant + historique complet, dual-auth
+  (clé API ou session du même tenant, comme la lecture des factures).
+
+**Journal `invoice_status_events`** — append-only : la table n'accorde que
+`SELECT`/`INSERT` à `factelec_app` (aucun `UPDATE`/`DELETE` — immuabilité
+garantie par les grants Postgres, pas seulement par convention applicative).
+L'événement initial (`fromStatus: null → toStatus: 'deposee'`, `actor:
+'platform'`) est inscrit à l'ingestion, dans la même transaction que
+l'insertion de la facture (`InvoicesRepository.insertReceived`) ; chaque
+transition ultérieure inscrit `{fromStatus, toStatus, actor, reason,
+createdAt}` dans la **même transaction** que la mise à jour
+`lifecycle_status` (`InvoicesRepository.recordTransition`). Ce journal est
+le **substrat** du futur journal à valeur probante (scellement/archivage
+WORM, différé **2.2**) — non scellé cryptographiquement à ce stade, seule
+l'immuabilité par grants est garantie aujourd'hui.
 
 ## Sécurité / multi-tenant
 
@@ -67,9 +233,16 @@ Deux rôles, jamais confondus :
   (`pnpm provision:tenant`). Propriétaire du schéma `public` et de la
   fonction `authenticate_api_key`. **Jamais utilisé par le process API.**
 - **`factelec_app`** — `NOSUPERUSER NOBYPASSRLS NOCREATEDB`. Rôle applicatif
-  (runtime), seul rôle dont dispose `DATABASE_URL`. N'a que `USAGE` sur le
-  schéma, `SELECT/INSERT/UPDATE` sur les 4 tables, et `EXECUTE` sur
-  `authenticate_api_key` — jamais `BYPASSRLS`.
+  (runtime), seul rôle dont dispose `DATABASE_URL` — **y compris pour le
+  worker** (`src/worker-main.ts`, 2.1), qui partage exactement le même rôle
+  et les mêmes politiques RLS que le process API (aucun privilège
+  supplémentaire). N'a que `USAGE` sur le schéma, `SELECT/INSERT/UPDATE` sur
+  les tables `tenants`/`api_keys`/`invoices`/`invoice_formats`, `SELECT/
+  INSERT` **uniquement** (jamais `UPDATE`/`DELETE`) sur `invoice_status_events`
+  (append-only, 2.1 — cf. § Cycle de vie CDV), et `EXECUTE` sur
+  `authenticate_api_key`/`purge_expired_sessions` — jamais `BYPASSRLS`. (Les
+  tables `users`/`sessions`/`platform_admins`, introduites en 1.4, ont leurs
+  propres politiques RLS documentées dans `docs/superpowers/`.)
 
 ### Row-Level Security : `ENABLE` + `FORCE`
 
@@ -184,6 +357,16 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `TRUST_PROXY` | Nombre de proxys de confiance devant l'API (`app.set('trust proxy', n)`) | `0` (aucun) |
 | `SESSION_TTL_HOURS` | Durée de vie **absolue** d'une session (utilisateur ou admin) — aucun renouvellement glissant (D1 amendé, plan 1.4) | `12` |
 | `SESSION_COOKIE_DOMAIN` | Domaine des cookies `factelec_session`/`factelec_csrf` — requis en prod pour un partage same-site dashboard/API (ex. `.factelec.fr`) ; absent en dev (localhost) | — (absent = cookie scopé à l'hôte courant) |
+| `REDIS_HOST` | Hôte Redis (BullMQ, workers) | `localhost` |
+| `REDIS_PORT` | Port Redis | `6379` |
+| `REDIS_DB` | Index de base logique Redis (`SELECT n`) | `0` |
+| `REDIS_PASSWORD` | Mot de passe Redis (managed Redis en prod) | — (absent = aucune auth) |
+| `REDIS_TLS` | TLS Redis — parsé explicitement (`"true"`/`"1"` uniquement ; **jamais** `z.coerce.boolean`, qui transformerait à tort `"false"` en `true`) | `false` |
+| `GENERATION_JOB_ATTEMPTS` | Tentatives max d'un job de génération avant passage en `failed` (retries BullMQ, backoff exponentiel 1 s de base) | `3` |
+| `SESSION_PURGE_EVERY_MS` | Périodicité (ms) du job répétable de purge des sessions expirées (worker, Task 7) | `3600000` (1 h) |
+| `RECONCILIATION_STALE_MS` | Ancienneté (ms) au-delà de laquelle une facture `received` non enfilée est considérée orpheline et re-enfilée | `300000` (5 min) |
+| `RECONCILIATION_SWEEP_EVERY_MS` | Périodicité (ms) du balayage de réconciliation | `60000` (1 min) |
+| `RECONCILIATION_GENERATING_STALE_MS` | Ancienneté (ms) au-delà de laquelle une facture `generating` bloquée (worker tué en cours de génération) est re-enfilée | `900000` (15 min) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -210,27 +393,37 @@ annoncée par le client).
 
 ```sh
 cd apps/api
-docker compose up -d                         # Postgres local + rôles (scripts/db-init)
-DATABASE_OWNER_URL=... pnpm db:migrate        # applique 0000_init + 0001_roles_rls
+docker compose up -d                         # Postgres ET Redis locaux + rôles (scripts/db-init)
+DATABASE_OWNER_URL=... pnpm db:migrate        # applique 0000_init … 0009 (migrations séquentielles)
 DATABASE_OWNER_URL=... pnpm provision:tenant "Ma boutique"   # → { tenantId, token } (token affiché 1 fois)
-pnpm dev                                       # tsx watch
-pnpm test                                      # Vitest + Testcontainers (Docker requis)
+pnpm dev                                       # API : tsx watch
+pnpm start:worker                              # worker (build requis, dist/worker-main.js) …
+pnpm worker:dev                                # … ou tsx watch pour le worker, en développement
+pnpm test                                      # Vitest + Testcontainers (Postgres + Redis, Docker requis)
 ```
+
+L'API seule répond déjà (santé, ingestion, lecture) sans worker démarré —
+mais les factures ingérées restent en `received` tant qu'aucun worker ne
+tourne (aucune génération de formats ni transition de statut automatique).
+En développement, lancer l'API **et** le worker dans deux terminaux séparés.
 
 Depuis la racine du monorepo, `pnpm build` doit précéder `pnpm typecheck`
 (`apps/api` résout `@factelec/invoice-core` via son `dist/`, pas ses
-sources) : voir le README racine.
+sources ; `pnpm build` compile aussi `src/worker-main.ts` via swc) : voir le
+README racine.
 
 ## Endpoints
 
 | Méthode & route | Description | Codes possibles |
 | --- | --- | --- |
 | `GET /health` | Liveness (aucune dépendance externe) | 200 |
-| `GET /health/ready` | Readiness (ping Postgres via `@nestjs/terminus`) | 200, 503 |
-| `POST /invoices` | Ingestion : validation `invoice-core`, génération synchrone des 5 formats, persistance transactionnelle | 201, 401, 409, 422 |
+| `GET /health/ready` | Readiness (ping Postgres **et Redis**, `@nestjs/terminus`, chacun borné 2 s) | 200, 503 |
+| `POST /invoices` | Ingestion : validation `invoice-core`, persistance transactionnelle, **enfilement** du job de génération (asynchrone, 2.1 — voir § Nouvelle sémantique) | 201, 401, 409, 422 |
 | `GET /invoices` | Liste paginée (keyset), tenant-scopée | 200, 401 |
-| `GET /invoices/:id` | Métadonnées d'une facture + formats disponibles | 200, 401, 404 |
-| `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) | 200, 401, 404 |
+| `GET /invoices/:id` | Métadonnées d'une facture (`status` de génération, `lifecycleStatus` CDV) + formats disponibles | 200, 401, 404 |
+| `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) — **404 tant que `status ≠ 'generated'`** | 200, 401, 404 |
+| `POST /invoices/:id/status` | Transition de statut CDV (`{ toStatus, reason? }`) — session owner/admin/accountant + CSRF, CAS anti-race | 201, 401, 403, 404, 409, 422 |
+| `GET /invoices/:id/status` | Statut CDV courant + historique complet (journal `invoice_status_events`) | 200, 401, 404 |
 | `POST /auth/signup` | Inscription self-service : crée le tenant **et** l'utilisateur `owner` de façon atomique (fonction `SECURITY DEFINER` `signup_tenant`), ouvre une session | 201, 409, 422 |
 | `POST /auth/login` | Authentification utilisateur (email + mot de passe Argon2id), ouvre une session | 200, 401, 422 |
 | `POST /auth/logout` | Révoque la session courante (cookie `factelec_session`) | 204, 401 |
@@ -253,13 +446,19 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
 **Deux régimes d'authentification distincts, jamais interchangeables** :
 - **`POST /invoices`** (ingestion) reste **exclusivement machine** :
   `Authorization: Bearer fk_<prefix>.<secret>`, sans repli possible.
-- **`GET /invoices`, `GET /invoices/:id`, `GET /invoices/:id/formats/:format`**
-  (lecture) acceptent **soit une clé API, soit une session utilisateur** du
-  même tenant (`TenantAuthGuard`, dual-auth) — jamais une session **admin**
-  plateforme, refusée par ce guard. Un en-tête `Authorization: Bearer`
-  présent est **toujours** résolu en priorité (même invalide) : un client
-  machine ne retombe jamais silencieusement sur un cookie de session qui
-  traînerait dans la même requête.
+- **`GET /invoices`, `GET /invoices/:id`, `GET /invoices/:id/formats/:format`,
+  `GET /invoices/:id/status`** (lecture) acceptent **soit une clé API, soit
+  une session utilisateur** du même tenant (`TenantAuthGuard`, dual-auth) —
+  jamais une session **admin** plateforme, refusée par ce guard. Un en-tête
+  `Authorization: Bearer` présent est **toujours** résolu en priorité (même
+  invalide) : un client machine ne retombe jamais silencieusement sur un
+  cookie de session qui traînerait dans la même requête.
+- **`POST /invoices/:id/status`** (transition CDV) est une **mutation
+  métier** : exclusivement session **owner/admin/accountant** + CSRF
+  (`SessionGuard`/`RolesGuard`/`CsrfGuard`) — un `viewer` est refusé (403),
+  une clé API n'ouvre pas cette route (`SessionGuard` → 401, pas de cookie).
+  L'apposition automatique par un connecteur/le réseau Peppol est différée
+  (phase 3).
 - **`/auth/*`, `/api-keys/*`, `/admin/*`** sont exclusivement pilotés par
   **session serveur httpOnly** (cookie `factelec_session`) + **CSRF
   double-submit** (`X-CSRF-Token` face au cookie lisible `factelec_csrf`) sur
@@ -307,34 +506,70 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   une session admin plateforme ne peut ni lire `/api-keys` ni la lecture des
   factures (`TenantAuthGuard` la refuse explicitement) ; une session tenant
   ne peut pas accéder à `/admin/tenants` (403).
+- **Redis réel** (Testcontainers, `@testcontainers/redis`) pour tous les
+  tests e2e touchant à la file (`queue-readiness`, `async-generation`,
+  `session-purge`) — aucun mock BullMQ/ioredis.
+- **Worker bouclé en-process** (`tests/e2e/helpers/worker.ts#createTestWorker`)
+  : le **vrai** `WorkerModule` est monté contre le Postgres/Redis de test
+  (mêmes overrides que l'app HTTP de test), pas un double — les e2e
+  `async-generation.e2e.test.ts` exercent la génération asynchrone de bout
+  en bout (`received → generating → generated`), les retries/échec définitif
+  (`failed` après épuisement, générateur stub qui throw), et la
+  réconciliation (factures orphelines re-enfilées, jobs `failed` évincés).
+- **Cycle de vie CDV** (`lifecycle-persistence.e2e.test.ts`,
+  `lifecycle.e2e.test.ts`) : transitions valides/invalides (422), motif
+  requis (`refusee`/`suspendue`), CAS anti-race (409 sur écriture
+  concurrente simulée), historique ordonné, isolation cross-tenant (404),
+  immuabilité du journal vérifiée au niveau grants (tentative `UPDATE`/
+  `DELETE` par `factelec_app` rejetée par Postgres, pas seulement par le
+  code applicatif).
+- **Dette de test mineure documentée** : l'ordonnancement de certaines
+  assertions e2e sur l'historique du journal CDV s'appuie sur l'ordre
+  d'insertion plutôt que sur un critère explicite indépendant du timing —
+  fragile en théorie si deux transitions successives partageaient un
+  timestamp identique à la microseconde ; non observé en pratique (chaque
+  transition est sa propre transaction), à muscler (tri secondaire explicite)
+  si la suite devenait flaky.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
-  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 50
-  fichiers, **237 tests**, couverture **98.31 / 97.07 / 97.14 / 98.64 %**
+  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 67
+  fichiers, **335 tests**, couverture **98.02 / 94.64 / 95.91 / 98.53 %**
   (statements/branches/functions/lines).
 
 ```sh
-pnpm test          # apps/api : Vitest + Testcontainers (Docker requis)
+pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docker requis)
 ```
 
 ## Limites v1 / TODO
 
-- **Génération synchrone** — pas de file d'attente ; passage à des workers
-  BullMQ prévu en **phase 2** (Cœur réglementaire — cycle de vie/transmission)
-  derrière le port `InvoiceFormatGenerator` existant, sans changement du
-  contrat `POST /invoices`. Aucune transmission/cycle de vie en 1.4, donc
-  aucune file n'est nécessaire à ce stade.
-- **`last_used_at`** (table `api_keys`) demeure une colonne morte, jamais
-  écrite (reporté — décision à trancher : l'alimenter à chaque
-  authentification ou la retirer).
+- **Résolu en 2.1** : génération asynchrone par workers BullMQ (était
+  synchrone en 1.3/1.4) ; `last_used_at` (table `api_keys`) écrit à chaque
+  authentification réussie ; purge périodique des sessions expirées (job
+  BullMQ répétable). Voir § Architecture workers pour le détail.
+- **Fenêtre résiduelle de réconciliation** (2.1, documentée, non couverte
+  par un verrou distribué) : un `SIGTERM` du worker frappant exactement
+  entre le marquage `generating` et la transaction `completeGeneration`
+  laisse la facture bloquée jusqu'au balayage suivant — bornée à
+  `RECONCILIATION_GENERATING_STALE_MS` (~15 min par défaut), jamais
+  indéfiniment. Voir § Architecture workers.
+- **Machine à états CDV = interprétation projet** (2.1, chronologie
+  monotone du code DGFiP) — **à durcir contre la norme AFNOR XP Z12-012**
+  avant mise en production réelle ; aucune matrice de transitions formelle
+  n'est publiée par la DGFiP dans le dépôt. Voir § Cycle de vie CDV.
+- **`last_used_at` : contention potentielle sous forte concurrence** (2.1)
+  — `authenticate_api_key` exécute désormais un `UPDATE ... RETURNING` à
+  **chaque** authentification (verrou de ligne implicite sur la clé API
+  concernée) ; un même client émettant un très fort volume de requêtes
+  concurrentes avec la **même** clé API pourrait observer une légère
+  sérialisation sur cette ligne. Non mesuré en charge réelle à ce jour — à
+  surveiller si un tenant à très haut débit d'ingestion apparaît ; piste de
+  correction si nécessaire : différer/regrouper l'écriture (throttling) au
+  lieu d'un `UPDATE` synchrone par requête.
 - **Rate limiting par IP uniquement**, pas encore par tenant/clé — non
   planifié à ce jour.
 - **Expiration glissante des sessions** différée : seule l'expiration
   **absolue** (`SESSION_TTL_HOURS`) est implémentée (D1 amendé, plan 1.4) ;
   pas de renouvellement à l'usage.
-- **Purge périodique des sessions expirées** différée (pas de job de
-  ménage ; les lignes expirées restent en base, simplement inertes côté
-  authentification).
 - **Durcissement de la session admin** (TTL réduit spécifique, distinct de
   `SESSION_TTL_HOURS`) différé — la session super admin partage aujourd'hui
   la même durée de vie absolue que les sessions utilisateur.
@@ -347,3 +582,23 @@ pnpm test          # apps/api : Vitest + Testcontainers (Docker requis)
   **et** CLI `pnpm provision:tenant` (conservé). Provisioning **super
   admin** : **CLI exclusivement** (`pnpm provision:admin`), aucune
   inscription self-service — décision assumée, pas une limitation à lever.
+
+### Différé explicitement 2.2+ (hors périmètre 2.1)
+
+- **E-reporting DGFiP** (Flux 10) et **annuaire central** (Flux 13/14) —
+  aucune transmission ni consultation d'annuaire à ce jour.
+- **Scellement / archivage à valeur probante** (WORM, 10 ans) — le journal
+  `invoice_status_events` append-only (2.1) en est le **substrat direct**
+  (immuabilité par grants Postgres) mais n'est **pas** scellé
+  cryptographiquement ; à cette occasion, revoir le `ON DELETE CASCADE` de
+  `invoice_status_events` vers `invoices` (`0007_invoice_lifecycle.sql`) —
+  un journal à valeur probante ne devrait pas pouvoir disparaître avec la
+  suppression de sa facture.
+- **Transmission Peppol des statuts CDV** et **apposition automatique** des
+  transitions par un connecteur/le réseau → **phase 3**. Les transitions
+  2.1 sont exclusivement pilotées par session utilisateur.
+- **Journal d'audit des authentifications** (connexions, échecs,
+  révocations de session — distinct du journal CDV 2.1) → **horizon 2.x**.
+- **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan
+  1.2bis) — différée dans l'attente d'un Schematron D22B publié par
+  ConnectingEurope.

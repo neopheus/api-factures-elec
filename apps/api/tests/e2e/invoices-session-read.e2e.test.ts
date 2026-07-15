@@ -1,3 +1,4 @@
+import type { InvoiceInput } from '@factelec/invoice-core'
 import type { INestApplication } from '@nestjs/common'
 import pg from 'pg'
 import request from 'supertest'
@@ -5,26 +6,30 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { hashPassword } from '../../src/auth/password.js'
 import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
+import { seedGeneratedInvoice } from './helpers/seed-invoice.js'
 import { type Session, signupSession } from './helpers/session.js'
 
-async function seedInvoice(
-  ownerPool: pg.Pool,
-  tenantId: string,
-  number: string,
-): Promise<string> {
-  const inv = await ownerPool.query(
-    `INSERT INTO invoices (tenant_id, number, type_code, issue_date, currency, canonical)
-     VALUES ($1, $2, '380', '2026-07-13', 'EUR', '{}'::jsonb) RETURNING id`,
-    [tenantId, number],
-  )
-  const id = inv.rows[0].id
-  await ownerPool.query(
-    `INSERT INTO invoice_formats (tenant_id, invoice_id, kind, content_type, body_text, byte_size)
-     VALUES ($1, $2, 'ubl', 'application/xml', '<Invoice/>', 10)`,
-    [tenantId, id],
-  )
-  return id
-}
+const invoice = (number: string): InvoiceInput => ({
+  number,
+  issueDate: '2026-07-13',
+  dueDate: '2026-08-12',
+  typeCode: '380',
+  currency: 'EUR',
+  businessProcessType: 'S1',
+  seller: { name: 'Vendeur', address: { countryCode: 'FR' } },
+  buyer: { name: 'Acheteur', address: { countryCode: 'FR' } },
+  lines: [
+    {
+      id: '1',
+      name: 'Service',
+      quantity: '1',
+      unitCode: 'C62',
+      unitPrice: '100.00',
+      vatCategory: 'S',
+      vatRate: '20.00',
+    },
+  ],
+})
 
 describe('invoices read via session (e2e)', () => {
   let db: TestDb
@@ -49,7 +54,7 @@ describe('invoices read via session (e2e)', () => {
         'a@shop.example',
       ])
     ).rows[0].tenant_id
-    invoiceA = await seedInvoice(ownerPool, tenantA, 'FA-A-1')
+    invoiceA = await seedGeneratedInvoice(ownerPool, tenantA, invoice('FA-A-1'))
   })
   afterAll(async () => {
     await app.close()

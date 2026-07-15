@@ -29,6 +29,48 @@
       "when": 1783969124224,
       "tag": "0003_auth_rls_functions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784066113596,
+      "tag": "0004_generation_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784068800000,
+      "tag": "0005_invoice_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784069000000,
+      "tag": "0006_stuck_generation_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784073821606,
+      "tag": "0007_invoice_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784073900000,
+      "tag": "0008_lifecycle_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784074000000,
+      "tag": "0009_last_used_and_purge",
+      "breakpoints": true
     }
   ]
 }

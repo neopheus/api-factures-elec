@@ -1,3 +1,4 @@
+import type { InvoiceInput } from '@factelec/invoice-core'
 import type { INestApplication } from '@nestjs/common'
 import pg from 'pg'
 import request from 'supertest'
@@ -5,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
 import { seedTenantWithKey } from './helpers/seed.js'
+import { seedGeneratedInvoice } from './helpers/seed-invoice.js'
 
-const invoice = (number: string) => ({
+const invoice = (number: string): InvoiceInput => ({
   number,
   issueDate: '2026-07-13',
   dueDate: '2026-08-12',
@@ -33,20 +35,16 @@ describe('GET /invoices (e2e)', () => {
   let ownerPool: pg.Pool
   let app: INestApplication
   let token: string
+  let tenantId: string
   let id: string
   const auth = () => `Bearer ${token}`
 
   beforeAll(async () => {
     db = await startTestDb()
     ownerPool = new pg.Pool({ connectionString: db.ownerUrl })
-    ;({ token } = await seedTenantWithKey(ownerPool))
+    ;({ tenantId, token } = await seedTenantWithKey(ownerPool))
     app = await createTestApp(db.appUrl)
-    const res = await request(app.getHttpServer())
-      .post('/invoices')
-      .set('Authorization', auth())
-      .send(invoice('R-1'))
-      .expect(201)
-    id = res.body.id
+    id = await seedGeneratedInvoice(ownerPool, tenantId, invoice('R-1'))
   })
   afterAll(async () => {
     await app.close()
@@ -126,16 +124,8 @@ describe('GET /invoices (e2e)', () => {
 
   it('paginates by keyset (limit + nextCursor)', async () => {
     // R-1 existe déjà (beforeAll) ; +2 factures → 3 au total.
-    await request(app.getHttpServer())
-      .post('/invoices')
-      .set('Authorization', auth())
-      .send(invoice('R-2'))
-      .expect(201)
-    await request(app.getHttpServer())
-      .post('/invoices')
-      .set('Authorization', auth())
-      .send(invoice('R-3'))
-      .expect(201)
+    await seedGeneratedInvoice(ownerPool, tenantId, invoice('R-2'))
+    await seedGeneratedInvoice(ownerPool, tenantId, invoice('R-3'))
 
     const p1 = await request(app.getHttpServer())
       .get('/invoices?limit=2')

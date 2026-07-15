@@ -22,6 +22,7 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
 
 export const invoiceStatus = pgEnum('invoice_status', [
   'received',
+  'generating',
   'generated',
   'failed',
 ])
@@ -31,6 +32,25 @@ export const formatKind = pgEnum('format_kind', [
   'facturx',
   'flux_base',
   'flux_full',
+])
+
+// Cycle de vie CDV — nomenclature DGFiP (cf. src/invoices/lifecycle-status.ts,
+// STATUS_META, source de vérité de l'ordre/labels/codes).
+export const invoiceLifecycleStatus = pgEnum('invoice_lifecycle_status', [
+  'deposee',
+  'emise',
+  'recue',
+  'mise_a_disposition',
+  'prise_en_charge',
+  'approuvee',
+  'approuvee_partiellement',
+  'en_litige',
+  'suspendue',
+  'completee',
+  'refusee',
+  'paiement_transmis',
+  'encaissee',
+  'rejetee',
 ])
 
 export const tenants = pgTable('tenants', {
@@ -76,6 +96,9 @@ export const invoices = pgTable(
     issueDate: text('issue_date').notNull(),
     currency: text('currency').notNull(),
     status: invoiceStatus('status').notNull().default('received'),
+    lifecycleStatus: invoiceLifecycleStatus('lifecycle_status')
+      .notNull()
+      .default('deposee'),
     canonical: jsonb('canonical').$type<Invoice>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -112,6 +135,35 @@ export const invoiceFormats = pgTable(
   (t) => [
     uniqueIndex('invoice_formats_invoice_kind_unique').on(t.invoiceId, t.kind),
     index('invoice_formats_tenant_idx').on(t.tenantId),
+  ],
+)
+
+// Journal d'événements du cycle de vie CDV : APPEND-ONLY (RLS + grants
+// SELECT/INSERT seulement, cf. migration 0008) — substrat à valeur probante,
+// scellement/WORM reporté 2.2.
+export const invoiceStatusEvents = pgTable(
+  'invoice_status_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoices.id, { onDelete: 'cascade' }),
+    // NULL pour l'événement initial (dépôt) ; sinon statut de départ.
+    fromStatus: invoiceLifecycleStatus('from_status'),
+    toStatus: invoiceLifecycleStatus('to_status').notNull(),
+    // Acteur ayant apposé le statut : 'platform' | 'user:<uuid>' | 'apikey:<prefix>'.
+    actor: text('actor').notNull(),
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('invoice_status_events_invoice_idx').on(t.invoiceId, t.createdAt),
+    index('invoice_status_events_tenant_idx').on(t.tenantId),
   ],
 )
 

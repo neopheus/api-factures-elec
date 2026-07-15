@@ -19,6 +19,9 @@ describe('problem (RFC 9457)', () => {
       'urn:factelec:problem:business-rule-violation',
     )
     expect(ProblemType.notFound).toBe('urn:factelec:problem:not-found')
+    expect(ProblemType.invalidTransition).toBe(
+      'urn:factelec:problem:invalid-status-transition',
+    )
   })
 })
 

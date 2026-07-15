@@ -1,11 +1,19 @@
 import type { Invoice } from '@factelec/invoice-core'
 import { Injectable } from '@nestjs/common'
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm'
-import { invoiceFormats, invoices } from '../db/schema.js'
+import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm'
+import {
+  invoiceFormats,
+  type invoiceStatus,
+  invoiceStatusEvents,
+  invoices,
+} from '../db/schema.js'
 // biome-ignore lint/style/useImportType: TenantContextService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { TenantContextService } from '../db/tenant-context.service.js'
 import { decodeCursor, encodeCursor } from './cursor.js'
 import type { FormatKind, GeneratedFormat } from './format-generator.port.js'
+import type { LifecycleStatus } from './lifecycle-status.js'
+
+export type GenerationStatus = (typeof invoiceStatus.enumValues)[number]
 
 export interface InvoiceSummary {
   id: string
@@ -14,6 +22,15 @@ export interface InvoiceSummary {
   issueDate: string
   currency: string
   status: string
+  lifecycleStatus: string
+  createdAt: Date
+}
+
+export interface StatusEvent {
+  fromStatus: string | null
+  toStatus: string
+  actor: string
+  reason: string | null
   createdAt: Date
 }
 
@@ -21,14 +38,11 @@ export interface InvoiceSummary {
 export class InvoicesRepository {
   constructor(private readonly tenant: TenantContextService) {}
 
-  // Persiste la facture + tous ses formats dans UNE transaction tenant (RLS).
-  // Idempotence : PAS de existsByNumber ici (TOCTOU) — l'unicité repose sur la
-  // contrainte unique(tenant_id, number) en base ; le service catche l'erreur
-  // pg 23505 et la traduit en 409 (cf. InvoicesService.ingest). Cf. task-7-report.md (A3).
-  async persist(
+  // Persiste la SEULE ligne facture au statut de génération `received`.
+  // Idempotence (tenant, number) portée par la contrainte unique → 23505 → 409.
+  async insertReceived(
     tenantId: string,
     invoice: Invoice,
-    formats: GeneratedFormat[],
   ): Promise<{ id: string }> {
     return this.tenant.run(tenantId, async (db) => {
       const [row] = await db
@@ -39,26 +53,90 @@ export class InvoicesRepository {
           typeCode: invoice.typeCode,
           issueDate: invoice.issueDate,
           currency: invoice.currency,
-          status: 'generated',
+          status: 'received',
           canonical: invoice,
+          // lifecycle_status : défaut 'deposee' (colonne).
         })
         .returning({ id: invoices.id })
-      if (!row) {
-        throw new Error('insert into invoices returned no row')
+      if (!row) throw new Error('insert into invoices returned no row')
+      // Journal append-only : événement initial de dépôt (Déposée / code 200).
+      await db.insert(invoiceStatusEvents).values({
+        tenantId,
+        invoiceId: row.id,
+        fromStatus: null,
+        toStatus: 'deposee',
+        actor: 'platform',
+      })
+      return { id: row.id }
+    })
+  }
+
+  // Amendement A1 (plan 2.1, Task 3, décision contrôleur) : succès de
+  // génération ATOMIQUE — delete+insert des formats ET passage du statut à
+  // `generated` dans UNE SEULE transaction tenant (remplace l'ancien couple
+  // saveFormats()+markGenerationStatus('generated') appelés séparément par le
+  // processor). Un crash entre les deux anciennes étapes laissait une fenêtre
+  // observable où les formats existaient déjà mais le statut restait
+  // `generating` ; ici c'est tout ou rien (COMMIT unique). Rejeu sûr
+  // identique à l'ex-saveFormats : delete puis insert, la contrainte
+  // unique(invoice_id, kind) interdit les doublons — un retry (ou un rejeu
+  // explicite de job) reconverge vers exactement le même état.
+  async completeGeneration(
+    tenantId: string,
+    invoiceId: string,
+    formats: GeneratedFormat[],
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .delete(invoiceFormats)
+        .where(eq(invoiceFormats.invoiceId, invoiceId))
+      if (formats.length > 0) {
+        await db.insert(invoiceFormats).values(
+          formats.map((f) => ({
+            tenantId,
+            invoiceId,
+            kind: f.kind,
+            contentType: f.contentType,
+            bodyText: f.bodyText,
+            bodyBytes: f.bodyBytes,
+            byteSize: f.byteSize,
+          })),
+        )
       }
-      const invoiceId = row.id
-      await db.insert(invoiceFormats).values(
-        formats.map((f) => ({
-          tenantId,
-          invoiceId,
-          kind: f.kind,
-          contentType: f.contentType,
-          bodyText: f.bodyText,
-          bodyBytes: f.bodyBytes,
-          byteSize: f.byteSize,
-        })),
-      )
-      return { id: invoiceId }
+      await db
+        .update(invoices)
+        .set({ status: 'generated', updatedAt: new Date() })
+        .where(eq(invoices.id, invoiceId))
+    })
+  }
+
+  async markGenerationStatus(
+    tenantId: string,
+    invoiceId: string,
+    status: GenerationStatus,
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .update(invoices)
+        .set({ status, updatedAt: new Date() })
+        .where(eq(invoices.id, invoiceId))
+    })
+  }
+
+  // Recharge le canonical pour le worker (payload de job = ids only, cf.
+  // invoice-generation.job.ts) — le contenu de la facture ne transite jamais
+  // par Redis, seul ce chargement sous RLS y accède.
+  async loadCanonical(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<Invoice | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ canonical: invoices.canonical })
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .limit(1)
+      return rows[0]?.canonical ?? null
     })
   }
 
@@ -72,12 +150,78 @@ export class InvoicesRepository {
           issueDate: invoices.issueDate,
           currency: invoices.currency,
           status: invoices.status,
+          lifecycleStatus: invoices.lifecycleStatus,
           createdAt: invoices.createdAt,
         })
         .from(invoices)
         .where(eq(invoices.id, id))
         .limit(1)
       return rows[0] ?? null
+    })
+  }
+
+  async getLifecycleStatus(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<LifecycleStatus | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ lifecycleStatus: invoices.lifecycleStatus })
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .limit(1)
+      return (rows[0]?.lifecycleStatus as LifecycleStatus | undefined) ?? null
+    })
+  }
+
+  // Optimiste (anti-race) : n'écrit QUE si le statut courant est toujours
+  // `from`. Retourne false si 0 ligne mise à jour (transition concurrente) →
+  // le service traduit en 409. Événement inscrit dans la MÊME transaction.
+  async recordTransition(
+    tenantId: string,
+    invoiceId: string,
+    from: LifecycleStatus,
+    to: LifecycleStatus,
+    actor: string,
+    reason: string | undefined,
+  ): Promise<boolean> {
+    return this.tenant.run(tenantId, async (db) => {
+      const updated = await db
+        .update(invoices)
+        .set({ lifecycleStatus: to, updatedAt: new Date() })
+        .where(
+          and(eq(invoices.id, invoiceId), eq(invoices.lifecycleStatus, from)),
+        )
+        .returning({ id: invoices.id })
+      if (updated.length === 0) return false
+      await db.insert(invoiceStatusEvents).values({
+        tenantId,
+        invoiceId,
+        fromStatus: from,
+        toStatus: to,
+        actor,
+        reason: reason ?? null,
+      })
+      return true
+    })
+  }
+
+  async listStatusEvents(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<StatusEvent[]> {
+    return this.tenant.run(tenantId, async (db) => {
+      return db
+        .select({
+          fromStatus: invoiceStatusEvents.fromStatus,
+          toStatus: invoiceStatusEvents.toStatus,
+          actor: invoiceStatusEvents.actor,
+          reason: invoiceStatusEvents.reason,
+          createdAt: invoiceStatusEvents.createdAt,
+        })
+        .from(invoiceStatusEvents)
+        .where(eq(invoiceStatusEvents.invoiceId, invoiceId))
+        .orderBy(asc(invoiceStatusEvents.createdAt))
     })
   }
 
@@ -140,6 +284,7 @@ export class InvoicesRepository {
           issueDate: invoices.issueDate,
           currency: invoices.currency,
           status: invoices.status,
+          lifecycleStatus: invoices.lifecycleStatus,
           createdAt: invoices.createdAt,
           createdAtRaw,
         })

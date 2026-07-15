@@ -1,10 +1,10 @@
 import { buildInvoice, type InvoiceInput } from '@factelec/invoice-core'
 import { describe, expect, it } from 'vitest'
+import { FormatGenerationService } from '../../src/invoices/format-generation.service.js'
 import type {
   FormatKind,
   GeneratedFormat,
 } from '../../src/invoices/format-generator.port.js'
-import { SynchronousFormatGenerator } from '../../src/invoices/synchronous-format-generator.js'
 
 // noUncheckedIndexedAccess (tsconfig.base.json) : un lookup par index (objet ou
 // tableau) type toujours `T | undefined`. `find` échoue fort (throw) plutôt que
@@ -38,9 +38,9 @@ const input: InvoiceInput = {
   ],
 }
 
-describe('SynchronousFormatGenerator', () => {
+describe('FormatGenerationService', () => {
   it('produces UBL, CII, Factur-X and both flux extracts (businessProcessType present)', async () => {
-    const out = await new SynchronousFormatGenerator().generate(
+    const out = await new FormatGenerationService().generate(
       buildInvoice(input),
     )
     expect(out.map((f) => f.kind).sort()).toEqual([
@@ -61,7 +61,7 @@ describe('SynchronousFormatGenerator', () => {
 
   it('omits flux extracts when businessProcessType is absent', async () => {
     const noProc = buildInvoice({ ...input, businessProcessType: undefined })
-    const kinds = (await new SynchronousFormatGenerator().generate(noProc)).map(
+    const kinds = (await new FormatGenerationService().generate(noProc)).map(
       (f) => f.kind,
     )
     expect(kinds).toEqual(['ubl', 'cii', 'facturx'])

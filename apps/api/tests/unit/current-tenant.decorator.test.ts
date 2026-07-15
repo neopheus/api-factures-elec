@@ -46,11 +46,11 @@ describe('@CurrentTenant()', () => {
     )
   })
 
-  it('throws when used without ApiKeyGuard (tenantId not set — misuse guard)', () => {
+  it('throws when used without an auth guard that resolves tenantId (misuse guard)', () => {
     const factory = extractFactory()
 
     expect(() => factory(undefined, mockContext({}))).toThrow(
-      'CurrentTenant used without ApiKeyGuard',
+      'CurrentTenant used without a guard that resolves tenantId (ApiKeyGuard/SessionGuard/TenantAuthGuard)',
     )
   })
 })

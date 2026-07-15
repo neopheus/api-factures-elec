@@ -10,7 +10,7 @@ export interface GeneratedFormat {
   byteSize: number
 }
 
-// Port : la génération est synchrone en 1.3 (SynchronousFormatGenerator) ; un
+// Port : la génération est synchrone en 1.3 (FormatGenerationService) ; un
 // adaptateur BullMQ pourra l'implémenter en 1.4/2.x sans toucher l'ingestion.
 export interface InvoiceFormatGenerator {
   generate(invoice: Invoice): Promise<GeneratedFormat[]>

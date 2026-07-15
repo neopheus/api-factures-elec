@@ -1,0 +1,46 @@
+import { describe, expect, it, vi } from 'vitest'
+import { MaintenanceProcessor } from '../../src/worker/maintenance.processor.js'
+
+function build() {
+  const reconciliation = {
+    sweepStuckGeneration: vi.fn().mockResolvedValue(3),
+  }
+  const sessionMaintenance = {
+    purgeExpiredSessions: vi.fn().mockResolvedValue(2),
+  }
+  const processor = new MaintenanceProcessor(
+    reconciliation as never,
+    sessionMaintenance as never,
+  )
+  return { processor, reconciliation, sessionMaintenance }
+}
+
+describe('MaintenanceProcessor.process', () => {
+  it('dispatches reconcile-invoices jobs to the reconciliation service', async () => {
+    const { processor, reconciliation, sessionMaintenance } = build()
+
+    await processor.process({ name: 'reconcile-invoices' } as never)
+
+    expect(reconciliation.sweepStuckGeneration).toHaveBeenCalledTimes(1)
+    expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
+  })
+
+  it('dispatches purge-sessions jobs to the session maintenance service (Task 7)', async () => {
+    const { processor, reconciliation, sessionMaintenance } = build()
+
+    await processor.process({ name: 'purge-sessions' } as never)
+
+    expect(sessionMaintenance.purgeExpiredSessions).toHaveBeenCalledTimes(1)
+    expect(reconciliation.sweepStuckGeneration).not.toHaveBeenCalled()
+  })
+
+  it('ignores a genuinely unknown job name without throwing (forward-compat)', async () => {
+    const { processor, reconciliation, sessionMaintenance } = build()
+
+    await expect(
+      processor.process({ name: 'some-future-job' } as never),
+    ).resolves.toBeUndefined()
+    expect(reconciliation.sweepStuckGeneration).not.toHaveBeenCalled()
+    expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
+  })
+})

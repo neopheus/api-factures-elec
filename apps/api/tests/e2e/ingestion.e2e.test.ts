@@ -4,6 +4,7 @@ import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
+import { startTestRedis, type TestRedis } from './helpers/redis.js'
 import { seedTenantWithKey } from './helpers/seed.js'
 
 const valid = {
@@ -30,21 +31,22 @@ const valid = {
 
 describe('POST /invoices (e2e)', () => {
   let db: TestDb
+  let redis: TestRedis
   let ownerPool: pg.Pool
   let app: INestApplication
   let token: string
   const auth = () => `Bearer ${token}`
 
   beforeAll(async () => {
-    db = await startTestDb()
+    ;[db, redis] = await Promise.all([startTestDb(), startTestRedis()])
     ownerPool = new pg.Pool({ connectionString: db.ownerUrl })
     ;({ token } = await seedTenantWithKey(ownerPool))
-    app = await createTestApp(db.appUrl)
+    app = await createTestApp(db.appUrl, { host: redis.host, port: redis.port })
   })
   afterAll(async () => {
     await app.close()
     await ownerPool.end()
-    await db.stop()
+    await Promise.all([db.stop(), redis.stop()])
   })
 
   it('rejects an unauthenticated request → 401', async () => {
@@ -56,49 +58,24 @@ describe('POST /invoices (e2e)', () => {
     expect(res.body.type).toBe('urn:factelec:problem:unauthorized')
   })
 
-  it('ingests a valid invoice → 201 with id + status', async () => {
+  it('ingests a valid invoice → 201 received, no formats yet (async)', async () => {
     const res = await request(app.getHttpServer())
       .post('/invoices')
       .set('Authorization', auth())
       .send(valid)
       .expect(201)
     expect(res.body.id).toMatch(/^[0-9a-f-]{36}$/)
-    expect(res.body.status).toBe('generated')
-    // persistance des 5 formats
+    expect(res.body.status).toBe('received')
+    const inv = await ownerPool.query(
+      'SELECT status FROM invoices WHERE id = $1',
+      [res.body.id],
+    )
+    expect(inv.rows[0].status).toBe('received')
     const n = await ownerPool.query(
       'SELECT count(*)::int AS n FROM invoice_formats WHERE invoice_id = $1',
       [res.body.id],
     )
-    expect(n.rows[0].n).toBe(5)
-    const kinds = await ownerPool.query(
-      'SELECT kind, content_type, byte_size, body_text IS NOT NULL AS has_text, body_bytes IS NOT NULL AS has_bytes FROM invoice_formats WHERE invoice_id = $1 ORDER BY kind',
-      [res.body.id],
-    )
-    expect(kinds.rows.map((r) => r.kind).sort()).toEqual([
-      'cii',
-      'facturx',
-      'flux_base',
-      'flux_full',
-      'ubl',
-    ])
-    for (const row of kinds.rows) {
-      expect(row.byte_size).toBeGreaterThan(0)
-      if (row.kind === 'facturx') {
-        expect(row.has_bytes).toBe(true)
-        expect(row.has_text).toBe(false)
-        expect(row.content_type).toBe('application/pdf')
-      } else {
-        expect(row.has_text).toBe(true)
-        expect(row.has_bytes).toBe(false)
-        expect(row.content_type).toBe('application/xml')
-      }
-    }
-    const invoiceRow = await ownerPool.query(
-      'SELECT status, number FROM invoices WHERE id = $1',
-      [res.body.id],
-    )
-    expect(invoiceRow.rows[0].status).toBe('generated')
-    expect(invoiceRow.rows[0].number).toBe('FA-2026-1')
+    expect(n.rows[0].n).toBe(0) // génération déférée au worker (aucun worker ici)
   })
 
   it('rejects a structurally invalid payload → 422 validation', async () => {

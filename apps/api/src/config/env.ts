@@ -37,6 +37,55 @@ export const envSchema = z.object({
   // Domaine du cookie de session (ex: `.factelec.fr` en prod, pour partager le
   // cookie entre le dashboard et l'API sur des sous-domaines). Absent en dev.
   SESSION_COOKIE_DOMAIN: z.string().optional(),
+  // ── Redis / BullMQ (workers) ──────────────────────────────────────────────
+  REDIS_HOST: z.string().default('localhost'),
+  REDIS_PORT: z.coerce.number().int().positive().default(6379),
+  REDIS_DB: z.coerce.number().int().nonnegative().default(0),
+  REDIS_PASSWORD: z.string().optional(),
+  // TLS activé UNIQUEMENT sur "true"/"1" (managed Redis prod). z.coerce.boolean
+  // est PROSCRIT ici : il transforme toute chaîne non vide (dont "false") en
+  // true — piège classique. On parse explicitement.
+  REDIS_TLS: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  // Nombre de tentatives d'un job de génération avant passage en `failed`.
+  GENERATION_JOB_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10)
+    .default(3),
+  // Périodicité de la purge des sessions expirées (job répétable, Task 7).
+  SESSION_PURGE_EVERY_MS: z.coerce.number().int().positive().default(3_600_000),
+  // ── Réconciliation (Task 3, décision contrôleur — comble le trou "received"
+  // orpheline documenté au commentaire InvoicesService.ingest) ─────────────
+  // Ancienneté (ms) au-delà de laquelle une facture encore `received` est
+  // considérée orpheline (enfilement Redis probablement en échec après la
+  // persistance Postgres) et re-enfilée par le balayage périodique.
+  RECONCILIATION_STALE_MS: z.coerce.number().int().positive().default(300_000),
+  // Périodicité du balayage de réconciliation (job répétable, file `maintenance`).
+  RECONCILIATION_SWEEP_EVERY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60_000),
+  // Ancienneté (ms) au-delà de laquelle une facture encore `generating` est
+  // considérée bloquée (le worker a probablement crashé/été tué entre le
+  // marquage `generating` et la complétion — cf. amendement A1, la fenêtre
+  // entre les deux transactions — sans qu'aucun retry BullMQ ne la
+  // rattrape : le job a pu être définitivement `failed` puis évincé de
+  // Redis par `removeOnFail`, ou l'écriture finale du statut `failed` a pu
+  // se perdre dans la course décrite au rapport Task 3). Seuil DÉLIBÉRÉMENT
+  // plus large que `RECONCILIATION_STALE_MS` (`received`) : une génération
+  // légitime (5 formats EN 16931) ne dure jamais 15 minutes — un seuil
+  // court risquerait de balayer une génération simplement lente/en file
+  // d'attente sous charge normale.
+  RECONCILIATION_GENERATING_STALE_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(900_000),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
