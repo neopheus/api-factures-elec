@@ -11,12 +11,22 @@ function build() {
   const archiveRetry = {
     sweepFailedArchives: vi.fn().mockResolvedValue(1),
   }
+  const ereportingSweep = {
+    sweep: vi.fn().mockResolvedValue(4),
+  }
   const processor = new MaintenanceProcessor(
     reconciliation as never,
     sessionMaintenance as never,
     archiveRetry as never,
+    ereportingSweep as never,
   )
-  return { processor, reconciliation, sessionMaintenance, archiveRetry }
+  return {
+    processor,
+    reconciliation,
+    sessionMaintenance,
+    archiveRetry,
+    ereportingSweep,
+  }
 }
 
 describe('MaintenanceProcessor.process', () => {
@@ -49,9 +59,31 @@ describe('MaintenanceProcessor.process', () => {
     expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
   })
 
+  it('dispatches ereporting-sweep jobs to the e-reporting sweep service (Task 7)', async () => {
+    const {
+      processor,
+      reconciliation,
+      sessionMaintenance,
+      archiveRetry,
+      ereportingSweep,
+    } = build()
+
+    await processor.process({ name: 'ereporting-sweep' } as never)
+
+    expect(ereportingSweep.sweep).toHaveBeenCalledTimes(1)
+    expect(reconciliation.sweepStuckGeneration).not.toHaveBeenCalled()
+    expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
+    expect(archiveRetry.sweepFailedArchives).not.toHaveBeenCalled()
+  })
+
   it('ignores a genuinely unknown job name without throwing (forward-compat)', async () => {
-    const { processor, reconciliation, sessionMaintenance, archiveRetry } =
-      build()
+    const {
+      processor,
+      reconciliation,
+      sessionMaintenance,
+      archiveRetry,
+      ereportingSweep,
+    } = build()
 
     await expect(
       processor.process({ name: 'some-future-job' } as never),
@@ -59,5 +91,6 @@ describe('MaintenanceProcessor.process', () => {
     expect(reconciliation.sweepStuckGeneration).not.toHaveBeenCalled()
     expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
     expect(archiveRetry.sweepFailedArchives).not.toHaveBeenCalled()
+    expect(ereportingSweep.sweep).not.toHaveBeenCalled()
   })
 })

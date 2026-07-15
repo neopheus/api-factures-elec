@@ -12,3 +12,10 @@ export const PURGE_SESSIONS_JOB = 'purge-sessions'
 // figé en `pending`). Dispatché par MaintenanceProcessor (branche dédiée),
 // planifié par ArchiveRetryScheduler (worker/archive-retry.scheduler.ts).
 export const ARCHIVE_RETRY_JOB = 'archive-retry'
+// EREPORTING_SWEEP_JOB : ordonnanceur e-reporting Flux 10 (plan 2.3, Task 7)
+// — énumère les déclarants actifs (find_ereporting_declarants_due, SD
+// cross-tenant) puis enfile un job `ereporting-generation` par période due
+// (period.ts, fenêtre bornée). Dispatché par MaintenanceProcessor (branche
+// dédiée), planifié par EreportingScheduler
+// (worker/ereporting.scheduler.ts).
+export const EREPORTING_SWEEP_JOB = 'ereporting-sweep'

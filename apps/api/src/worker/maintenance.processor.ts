@@ -3,12 +3,15 @@ import { Logger } from '@nestjs/common'
 import type { Job } from 'bullmq'
 import {
   ARCHIVE_RETRY_JOB,
+  EREPORTING_SWEEP_JOB,
   PURGE_SESSIONS_JOB,
   RECONCILE_INVOICES_JOB,
 } from '../queue/maintenance.job.js'
 import { MAINTENANCE_QUEUE } from '../queue/queue.constants.js'
 // biome-ignore lint/style/useImportType: ArchiveRetryService résolu par Nest via design:paramtypes.
 import { ArchiveRetryService } from './archive-retry.service.js'
+// biome-ignore lint/style/useImportType: EreportingSweepService résolu par Nest via design:paramtypes.
+import { EreportingSweepService } from './ereporting-sweep.service.js'
 // biome-ignore lint/style/useImportType: InvoiceReconciliationService résolu par Nest via design:paramtypes.
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
 // biome-ignore lint/style/useImportType: SessionMaintenanceService résolu par Nest via design:paramtypes.
@@ -31,6 +34,7 @@ export class MaintenanceProcessor extends WorkerHost {
     private readonly reconciliation: InvoiceReconciliationService,
     private readonly sessionMaintenance: SessionMaintenanceService,
     private readonly archiveRetry: ArchiveRetryService,
+    private readonly ereportingSweep: EreportingSweepService,
   ) {
     super()
   }
@@ -49,6 +53,11 @@ export class MaintenanceProcessor extends WorkerHost {
     if (job.name === ARCHIVE_RETRY_JOB) {
       const n = await this.archiveRetry.sweepFailedArchives()
       this.logger.log(`archive retry sweep: ${n} invoice(s)`)
+      return
+    }
+    if (job.name === EREPORTING_SWEEP_JOB) {
+      const n = await this.ereportingSweep.sweep()
+      this.logger.log(`ereporting sweep: ${n} declarant×period job(s)`)
       return
     }
     this.logger.warn(`unknown maintenance job: ${job.name}`)

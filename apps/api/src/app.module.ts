@@ -4,6 +4,7 @@ import { ApiKeysModule } from './api-keys/api-keys.module.js'
 import { AuthModule } from './auth/auth.module.js'
 import { AppConfigModule } from './config/config.module.js'
 import { DbModule } from './db/db.module.js'
+import { EreportingModule } from './ereporting/ereporting.module.js'
 import { HealthModule } from './health/health.module.js'
 import { InvoicesModule } from './invoices/invoices.module.js'
 import { LedgerModule } from './ledger/ledger.module.js'
@@ -21,6 +22,7 @@ import { UsersModule } from './users/users.module.js'
     HealthModule,
     InvoicesModule,
     LedgerModule,
+    EreportingModule,
     UsersModule,
     ApiKeysModule,
     AdminModule,

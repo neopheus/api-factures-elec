@@ -100,6 +100,32 @@ export const envSchema = z.object({
     .default(5),
   // Périodicité de la reprise d'archivage (archive_status='failed').
   ARCHIVE_RETRY_EVERY_MS: z.coerce.number().int().positive().default(300_000),
+  // ── e-reporting Flux 10 (D7/D11) ─────────────────────────────────────────
+  // 'local' = LocalFilesystemTransmissionStore (write-once, dev/test) ;
+  // sftp/as2/as4/api = adaptateurs réels (auth transport, D3/D7) ACTIVÉS AU
+  // DÉPLOIEMENT (non fournis en 2.3).
+  EREPORTING_TRANSMISSION_DRIVER: z
+    .enum(['local', 'sftp', 'as2', 'as4', 'api'])
+    .default('local'),
+  EREPORTING_LOCAL_DIR: z.string().default('./var/ereporting'),
+  EREPORTING_PA_ID: z.string().default('PA00'), // TT-8 (matricule émetteur PA)
+  EREPORTING_PA_SCHEME_ID: z.string().default('0238'), // TT-7
+  EREPORTING_PA_NAME: z.string().default('Factelec PA'), // TT-9
+  EREPORTING_SWEEP_EVERY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(3_600_000),
+  // Nombre de tentatives d'un job de génération e-reporting (Task 8) avant
+  // passage en `failed` — distingue une erreur OPÉRATIONNELLE (xmllint
+  // absent, DB/port transitoire) d'un rejet sémantique REJ_SEMAN, qui ne
+  // throw jamais et n'est donc jamais rejoué.
+  EREPORTING_GENERATION_JOB_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10)
+    .default(3),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

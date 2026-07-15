@@ -118,14 +118,58 @@ API publique pour les systèmes custom.
 > 98.11/95.1/96.09/98.48 % (statements/branches/fonctions/lignes) ·
 > `apps/web` 48 à 100/96.66/100/100 %). Détail complet : `apps/api/README.md`.
 >
-> **Reprise — prochaine étape : phase 2.3** (Cœur réglementaire, suite) —
-> e-reporting DGFiP (Flux 10). Puis **phase 2.4** : annuaire central (Flux
-> 13/14). Puis **phase 3** : transmission Peppol des statuts CDV, point
-> d'accès Peppol interne, remplacement de la matrice de transitions CDV
-> contre la norme AFNOR XP Z12-012 (bloqueur go-live PDP). **Horizon 2.x** :
-> journal d'audit des authentifications (distinct du journal CDV).
+> **2.3 — E-reporting DGFiP (Flux 10)** livre : le Flux 10 = transmission au
+> PPF de **données d'opérations** (agrégats), **distinct** de l'e-invoicing
+> (Flux 1-9) qui transmet des factures. **RÉSOLU de bout en bout : le
+> sous-flux 10.3 (B2C domestique)**, transactions agrégées — classification
+> par facture (`classifyEreportingOperation`), agrégation BT→TT (date ‖
+> devise ‖ catégorie TLB1/TPS1), génération XML XSD-valide (`xmllint`),
+> machine à états **300/301** distincte du CDV (statuts internes
+> `prepared`/`transmitted` sans code DGFiP → `deposee`=300/`rejetee`=301),
+> transmission à blanc optionnelle, cadence par régime TVA (Tableau 13),
+> ordonnanceur BullMQ idempotent, acquittements PPF et endpoints de
+> consultation dual-auth. **DIFFÉRÉS EXPLICITES (à ne pas surpromettre
+> « B2B international livré »)** : 10.1/10.2 B2Bi (classifiées mais non
+> émises), TB-3 paiements (10.2/10.4, aucun modèle de capture des
+> encaissements), cadres de facturation **mixtes M1/M2/M4** (le modèle
+> `Invoice` n'a aucun discriminant biens/services par ligne — une
+> ventilation forcée aurait doublé la base/TVA déclarées, donc différée
+> plutôt que fabriquée), adaptateurs de transport réels (sftp/as2/as4/api →
+> lèvent une erreur explicite, activés au déploiement), push/acquittement
+> PPF réel (le service `recordPpfStatus` est la **frontière** applicable,
+> exercée directement par les e2e faute de webhook PPF), schematron/contrôles
+> sémantiques Annexe 7, chemin RE/rectificatif. **Aucun scellement/signature
+> au niveau message** (auth au niveau transport, responsabilité PA — le
+> PAF/scellement 2.2 ne s'applique pas ici ; journal e-reporting append-only
+> **non scellé**, comportement correct). Validation **XSD structurelle
+> uniquement** dans le worker — XSD-valide ≠ conformité sémantique PPF (un
+> flux structurellement valide peut être rejeté 301 par le PPF).
+> **Interprétations projet résiduelles à confirmer au go-live** : échéances
+> « 8h00 » du Tableau 13 modélisées en **UTC** (côté sûr vs heure de Paris),
+> fenêtre de rattrapage bornée (`MAX_DUE_PERIODS=2`, un rattrapage plus long
+> est un processus d'exploitation manuel), heuristique d'assujettissement de
+> l'acheteur (présence SIREN/TVA, faute de champ dédié dans le modèle),
+> TT-77 = date d'émission de la facture, SIREN/SIRET sous `schemeId 0002`,
+> catégorie par défaut TLB1 si le cadre BT-23 est absent, modèle binaire du
+> cycle de vie (Figure 59 DGFiP non extractible). **745 tests** au total
+> (`invoice-core` 129 100 % · `apps/api` 568 à 97.87/94.25/95.73/98.31 %
+> (statements/branches/fonctions/lignes) · `apps/web` 48 à
+> 100/96.66/100/100 %). Détail complet, runbook opérationnel (dont le point
+> d'attention slot A2 ci-dessous) et variables d'environnement
+> `EREPORTING_*` : `apps/api/README.md`.
+>
+> **Reprise — prochaine étape : phase 2.4** : annuaire central (Flux 13/14).
+> Puis **phase 3** : transmission Peppol des statuts CDV, point d'accès
+> Peppol interne, remplacement de la matrice de transitions CDV contre la
+> norme AFNOR XP Z12-012 (bloqueur go-live PDP) — **ce même bloqueur
+> s'applique à l'immatriculation PDP côté e-reporting** (Peppol + matrice
+> CDV AFNOR restent la dépendance de mise en production réelle). **Horizon
+> 2.x** : journal d'audit des authentifications (distinct du journal CDV).
 > **Déploiement** : confirmer `CREATE EXTENSION pgcrypto` sur le Postgres
-> managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`. Reports
+> managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`, adaptateurs
+> de transmission e-reporting réels (sftp/as2/as4/api), et **`libxml2`/
+> `xmllint` sur l'hôte du worker** (NOUVEAU, validation XSD runtime du Flux
+> 10 — à ajouter aux prérequis existants pgcrypto/S3/`TRUST_PROXY`). Reports
 > explicites détaillés en Feuille de route ci-dessous.
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
@@ -196,11 +240,13 @@ fichiers (hors tests).
 
 ## `@factelec/api`
 
-API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2** : ingestion et
+API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3** : ingestion et
 lecture des factures (consommant `@factelec/invoice-core`), authentification
 utilisateur (sessions httpOnly + CSRF), signup self-service transactionnel,
 gestion des clés API par session, super admin plateforme minimal, **workers
-BullMQ de génération asynchrone** et **cycle de vie des statuts CDV**.
+BullMQ de génération asynchrone**, **cycle de vie des statuts CDV** et
+**e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, machine à états 300/301
+distincte, cadence par régime TVA, transmission différée au déploiement).
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -219,7 +265,8 @@ totale de la chaîne live (troncature de queue et réécriture complète
 cohérente hors périmètre du hash-chain seul, cf. `apps/api/README.md`).
 Documentation complète — architecture & compromis (ESM +
 typecheck tsgo + émission SWC), workers, sécurité multi-tenant et auth,
-scellement/archivage/PAF/DLQ détaillés, variables d'environnement,
+scellement/archivage/PAF/DLQ détaillés, **e-reporting Flux 10 (périmètre,
+runbook opérationnel, différés)**, variables d'environnement,
 endpoints, tests, limites — dans
 [`apps/api/README.md`](apps/api/README.md).
 
@@ -236,13 +283,19 @@ tsgo/Next — dans [`apps/web/README.md`](apps/web/README.md).
 
 ## Développement
 
-Prérequis : Node.js ≥ 22 (`.nvmrc`), pnpm 10, `xmllint` (libxml2) pour la
-validation XSD dans les tests, et Docker (Postgres **et Redis** de dev/tests
-`apps/api`, via Testcontainers pour les e2e — **non requis** pour `apps/web`,
-dont les tests tournent en jsdom pur). Le Schematron EN 16931 officiel
-s'exécute en **Node pur** (saxon-js, `xslt3`), sans JVM ; le premier
-`pnpm test` compile le SEF (~10-20 s), mis en cache ensuite (répertoire
-git-ignoré).
+Prérequis : Node.js ≥ 22 (`.nvmrc`), pnpm 10, `xmllint` (libxml2) et Docker
+(Postgres **et Redis** de dev/tests `apps/api`, via Testcontainers pour les
+e2e — **non requis** pour `apps/web`, dont les tests tournent en jsdom pur).
+`xmllint` est requis à **deux titres distincts** : validation XSD
+`invoice-core` **en tests uniquement**, et validation XSD e-reporting Flux 10
+(`apps/api`) **en runtime** — le worker de génération e-reporting (2.3)
+l'invoque à chaque transmission (`ereporting-xsd-validator.ts`, `execFile`),
+pas seulement en test. **`libxml2`/`xmllint` est donc désormais un prérequis
+de l'hôte de déploiement du worker**, pas seulement de la CI/du poste de dev
+(voir « Prérequis pré-production » ci-dessous et `apps/api/README.md`). Le
+Schematron EN 16931 officiel s'exécute en **Node pur** (saxon-js, `xslt3`),
+sans JVM ; le premier `pnpm test` compile le SEF (~10-20 s), mis en cache
+ensuite (répertoire git-ignoré).
 
 ```sh
 pnpm install
@@ -377,18 +430,33 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       réécriture complète cohérente par accès propriétaire — seul l'ancrage
       de tête dans l'archive WORM externe (S3 object-lock, activé au
       déploiement) couvre ces deux modes. Détail : `apps/api/README.md`.
+- [x] **2.3 — E-reporting DGFiP (Flux 10)** (terminé) : **RÉSOLU** de bout en
+      bout pour le sous-flux **10.3 (B2C domestique)** — classification par
+      facture, agrégation des transactions (BT→TT), génération XML XSD-valide
+      (`xmllint`), machine à états **300/301** distincte du CDV, cadence par
+      régime TVA (Tableau 13 §3.7.7 verbatim), ordonnanceur BullMQ idempotent
+      (fenêtre bornée `MAX_DUE_PERIODS=2`), transmission à blanc optionnelle,
+      port de transmission (implémentation locale write-once testable),
+      acquittements PPF et endpoints de consultation dual-auth. **Différés
+      explicites** : 10.1/10.2 B2Bi, TB-3 paiements, cadres mixtes M1/M2/M4,
+      adaptateurs de transport réels, push PPF réel, schematron Annexe 7,
+      chemin RE. **Aucun scellement message** (auth transport, D3). **Runbook
+      opérationnel nouveau** : procédure de déblocage du slot A2 (transmission
+      IN rejetée localement qui occupe définitivement son slot), prérequis
+      `libxml2`/`xmllint` sur l'hôte du worker, dette de durcissement du rôle
+      SD cross-tenant. Détail complet : `apps/api/README.md`.
 
-> **Point de reprise → phase 2.3** (Cœur réglementaire, suite) : e-reporting
-> DGFiP (Flux 10). Puis **phase 2.4** : annuaire central (Flux 13/14). Puis
+> **Point de reprise → phase 2.4** : annuaire central (Flux 13/14). Puis
 > **phase 3** : transmission Peppol des statuts CDV, point d'accès Peppol
 > interne, remplacement de la matrice de transitions CDV contre la norme
-> AFNOR XP Z12-012 (bloqueur go-live PDP).
+> AFNOR XP Z12-012 (bloqueur go-live PDP, s'applique aussi à l'immatriculation
+> PDP côté e-reporting).
 
 ### Prérequis pré-production / pré-DGFiP
 
 Liste compacte consolidant des points déjà détaillés ci-dessous (dette
 reportée) ou dans `apps/api/README.md` : aucun ne bloque le passage en
-phase 2.3, mais **tous** doivent être traités avant une exposition réelle
+phase 2.4, mais **tous** doivent être traités avant une exposition réelle
 (immatriculation DGFiP, onboarding de tenants en production) :
 
 - **Journal d'audit des authentifications** (connexions, échecs, révocations
@@ -420,8 +488,23 @@ phase 2.3, mais **tous** doivent être traités avant une exposition réelle
 - **`CREATE EXTENSION pgcrypto`** (2.2) — à confirmer sur le Postgres managé
   Scaleway visé en production (vérifiée uniquement sur `postgres:17-alpine`
   dev/CI à ce jour).
+- **`libxml2`/`xmllint` = prérequis de l'hôte du worker** (2.3, **NOUVEAU**) —
+  la validation XSD du Flux 10 s'exécute en **runtime** (`execFile`) à chaque
+  transmission, pas seulement en test/CI ; à ajouter à côté de
+  pgcrypto/S3/`TRUST_PROXY` sur toute image/hôte exécutant le worker. Détail :
+  `apps/api/README.md`.
+- **Deadlock du slot A2** (2.3, MEDIUM, fail-safe) — une transmission IN née
+  `rejetee` (rejet local `REJ_SEMAN`) occupe **définitivement** le slot unique
+  (déclarant × flux × période) : après correction des données source, la
+  période ne repart pas automatiquement. Procédure manuelle documentée
+  (runbook) dans `apps/api/README.md`, en attendant un chantier
+  RE/rectificatif ou de libération de slot.
+- **Durcissement du rôle SD e-reporting** (2.3) — `find_ereporting_declarants_due`
+  expose `(tenant_id, siren, name)` **cross-tenant** au rôle applicatif (comme
+  le pool worker=app aujourd'hui) ; à durcir en retirant l'`EXECUTE` au rôle
+  HTTP lors du split du rôle worker au déploiement.
 
-Dette explicitement reportée (aucune ne bloque le passage en phase 2.3) :
+Dette explicitement reportée (aucune ne bloque le passage en phase 2.4) :
 
 - **Stripe / abonnements** (modèle commercial self-service, spec §2/§8) →
   **phase 5** (Commercialisation).
@@ -441,8 +524,14 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 2.3) :
   le partage de cookies cross-subdomain dashboard/API.
 - **Throttle par tenant** (rate limiting actuellement par IP uniquement,
   `apps/api`) — non planifié à ce jour.
-- **E-reporting DGFiP** (Flux 10) → **phase 2.3** — aucune transmission à ce
-  jour.
+- **E-reporting DGFiP (Flux 10) au-delà du 10.3** (2.3) : 10.1/10.2 B2Bi
+  (classifiées mais non émises), TB-3 paiements (10.2/10.4, aucune source de
+  capture des encaissements), cadres de facturation **mixtes M1/M2/M4**
+  (aucun discriminant biens/services par ligne dans le modèle `Invoice` — une
+  ventilation forcée aurait doublé la base/TVA déclarées), adaptateurs de
+  transport réels (sftp/as2/as4/api), push/acquittement PPF réel (webhook),
+  schematron/contrôles sémantiques Annexe 7, chemin RE/rectificatif — tous
+  différés, aucun n'est fabriqué. Détail : `apps/api/README.md`.
 - **Annuaire central** (Flux 13/14) → **phase 2.4** — aucune consultation
   d'annuaire à ce jour.
 - **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway,
