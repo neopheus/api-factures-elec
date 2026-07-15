@@ -6,9 +6,16 @@ API REST NestJS d'ingestion et de lecture des factures électroniques
 gestion des clés API par session et un super admin plateforme minimal, puis
 en **2.1** avec des **workers BullMQ** (génération asynchrone des formats)
 et le **cycle de vie des statuts CDV** (nomenclature DGFiP, machine à états,
-journal d'événements append-only). Consomme `@factelec/invoice-core`
-(validation, calculs, génération des formats du socle) et expose l'ensemble
-derrière une couche d'authentification et d'isolation multi-tenant Postgres.
+journal d'événements append-only), puis en **2.2** avec le **scellement
+cryptographique** du journal `invoice_status_events` (chaîne SHA-256 par
+tenant **imposée par la base**, non contournable par l'application), la
+**vérification d'intégrité** indépendante (recompute TypeScript pur), l'
+**archivage à valeur probante** (port `ArchiveStore` write-once + implémentation
+locale testable, adaptateur S3 object-lock différé au déploiement), l'export de
+la **Piste d'Audit Fiable (PAF)** et le **DLQ** des factures « poison ». Consomme
+`@factelec/invoice-core` (validation, calculs, génération des formats du socle)
+et expose l'ensemble derrière une couche d'authentification et d'isolation
+multi-tenant Postgres.
 
 > **Dettes 1.3 soldées** (plan 1.4, task 1) : `createDb` (piège hors-tenant,
 > jamais appelé en production) retiré de `src/db/client.ts` ; `DATABASE_URL`
@@ -23,6 +30,18 @@ derrière une couche d'authentification et d'isolation multi-tenant Postgres.
 > sessions expirées tourne en job BullMQ répétable côté worker
 > (`SessionPurgeScheduler` → `purge_expired_sessions()`, également
 > `SECURITY DEFINER`, table `sessions` deny-all pour `factelec_app`).
+>
+> **Dette 2.1 soldée** (plan 2.2, task 1) : la FK `invoice_status_events.invoice_id
+> → invoices.id`, en `ON DELETE CASCADE` depuis 2.1, est passée en
+> **`ON DELETE RESTRICT`** — un journal à valeur probante ne doit plus pouvoir
+> disparaître avec la suppression de sa facture (la base refuse, `23503`).
+>
+> **Dette opérationnelle 2.1 soldée** (plan 2.2, task 8) : le ré-enfilement
+> par la réconciliation auto-cicatrisante est désormais **borné**
+> (`GENERATION_MAX_ATTEMPTS_CAP`) — une facture « poison » (crash récurrent
+> avant l'écriture d'un statut `failed` définitif) est déversée dans une
+> **DLQ** (`invoice_dead_letters`, append-only) plutôt que ré-enfilée
+> indéfiniment. Voir § DLQ / cap de réconciliation ci-dessous.
 
 ## Architecture & compromis
 
@@ -214,10 +233,179 @@ L'événement initial (`fromStatus: null → toStatus: 'deposee'`, `actor:
 l'insertion de la facture (`InvoicesRepository.insertReceived`) ; chaque
 transition ultérieure inscrit `{fromStatus, toStatus, actor, reason,
 createdAt}` dans la **même transaction** que la mise à jour
-`lifecycle_status` (`InvoicesRepository.recordTransition`). Ce journal est
-le **substrat** du futur journal à valeur probante (scellement/archivage
-WORM, différé **2.2**) — non scellé cryptographiquement à ce stade, seule
-l'immuabilité par grants est garantie aujourd'hui.
+`lifecycle_status` (`InvoicesRepository.recordTransition`). Ce journal,
+livré append-only en 2.1 (immuabilité par grants), est **scellé
+cryptographiquement depuis 2.2** — voir § Scellement et vérification
+d'intégrité ci-dessous.
+
+## Scellement et vérification d'intégrité du journal (2.2)
+
+Le journal `invoice_status_events` est **scellé** par une chaîne SHA-256
+**par tenant**, calculée et **imposée par la base** — l'application ne peut
+ni la fournir ni la modifier.
+
+### Scellement (imposé côté base)
+
+- **Trigger `BEFORE INSERT`** (`seal_status_event`, `SECURITY DEFINER`,
+  propriété du rôle **propriétaire**, `search_path` épinglé à `pg_catalog,
+  pg_temp` avec objets applicatifs schéma-qualifiés — défense en profondeur
+  contre un shadowing d'objet, cf. commentaires migration `0012`) : sous
+  **`pg_advisory_xact_lock`** par tenant (sérialise les insertions d'un même
+  tenant sans bloquer les autres, verrou transactionnel), il calcule pour
+  chaque événement un `seq` **monotone par tenant** (1, 2, 3…), le
+  `prev_hash` (tête de chaîne courante, ou **genesis dérivé** du tenant —
+  `SHA-256('factelec:ledger:genesis:v1:' || tenant_id)` — pour le premier
+  événement), et `hash = SHA-256(prev_hash ‖ payload canonique)` via
+  **`pgcrypto.digest`** (extension créée en migration `0010`, `CREATE
+  EXTENSION IF NOT EXISTS pgcrypto`).
+- **Canonicalisation longueur-préfixée** (injection-proof) : chaque champ
+  (`tenant_id, invoice_id, seq, from_status, to_status, actor, reason,
+  created_at_ms`, ordre figé) est encodé `octet_length‖'|'‖valeur` (`-1|` si
+  `NULL`) — non ambigu même si `reason` (texte libre) contient `|` ou des
+  sauts de ligne. La fonction PL/pgSQL `ledger_field` (migration `0012`) est
+  le **miroir exact, à l'octet près**, du module TypeScript pur
+  `src/ledger/ledger-hash.ts` (`canonicalizeStatusEvent`/`computeEventHash`) —
+  vecteurs de test déterministes constants + test croisé DB↔Node prouvant
+  l'égalité des deux implémentations pour un même événement.
+- **Immuabilité inchangée** : `factelec_app` ne détient que `SELECT`+`INSERT`
+  sur `invoice_status_events` (jamais `UPDATE`/`DELETE`, migration `0008`) et
+  **ne possède pas** les colonnes `seq`/`prev_hash`/`hash` — le trigger les
+  écrase systématiquement, même si le client tente de les fournir.
+
+### Vérification d'intégrité — `GET /invoices/:id/ledger`
+
+`LedgerVerificationService` recompute la chaîne **côté Node**, indépendamment
+du trigger DB, et expose deux vérifications complémentaires :
+
+- **`integrity`** (`verifyInvoiceEvents`) — self-check par facture : chaque
+  événement de la facture est recalculé à partir de son `prev_hash` stocké et
+  comparé au `hash` stocké.
+- **`chainIntegrity`** (`verifyTenantChain`) — chaîne **complète** du tenant :
+  genesis, contiguïté du `seq`, linkage `prev_hash`, `hash` — seule à révéler
+  la suppression d'un maillon **intermédiaire**, invisible au self-check
+  par-facture (chaque événement restant s'auto-vérifie contre son propre
+  `prev_hash`, intact).
+
+#### Limites de détection — honnêteté probatoire (lecture obligatoire)
+
+Le scellement est une **tamper-evidence** contre l'édition, la suppression ou
+l'insertion **partielle** d'événements (détectées par `verifyTenantChain` :
+contiguïté `seq` + linkage `prev_hash` + genesis), renforcée par l'immuabilité
+applicative (grants `SELECT`+`INSERT`, `42501`) et l'archivage WORM. **Ce
+n'est pas une inviolabilité de la chaîne live** : un accès propriétaire
+(`BYPASSRLS`, hors périmètre RLS) peut :
+
+1. **TRONQUER la queue de chaîne** — supprimer le **dernier** maillon (ou les
+   N derniers) laisse la chaîne `1..n-1` (ou `1..n-N`) parfaitement valide :
+   `verifyTenantChain` ne voit rien d'anormal, la chaîne restante est
+   cohérente de bout en bout.
+2. **RÉÉCRIRE intégralement et de façon cohérente** toute la chaîne — le
+   genesis est **dérivé publiquement** du `tenant_id` (recalculable par
+   quiconque connaît la formule) : un accès direct-DB peut, en théorie,
+   régénérer une chaîne entièrement différente mais interne-cohérente.
+
+Ces deux modes sont **intrinsèques à tout hash-chain auto-contenu** (une
+chaîne de hash n'est pas un MAC : elle prouve la cohérence interne d'une
+séquence, pas qu'elle n'a pas été remplacée dans son ensemble par un accès
+disposant des mêmes privilèges que celui qui l'a écrite). Ils ne sont
+détectables **que par l'ancrage de tête** (le `seq` maximum et le `hash` de
+tête, à un instant donné) dans le **bundle d'archive WORM externe** — ancrage
+effectif uniquement une fois l'adaptateur S3 object-lock **activé au
+déploiement** (`ARCHIVE_DRIVER=s3`, non fourni en 2.2, voir § Archivage). Tant
+que cet adaptateur n'est pas branché, l'archive locale (write-once
+applicatif) ne constitue **pas** un ancrage de tête indépendant du même
+serveur Postgres.
+
+## Archivage à valeur probante (WORM)
+
+- **Port `ArchiveStore`** (`src/archive/archive-store.port.ts`) — contrat
+  `put`/`head`/`get`, sémantique **write-once** : `put` ne réécrit **jamais**
+  une clé existante (idempotent — un rejeu retombe sur la clé et renvoie
+  l'empreinte du contenu d'origine, `alreadyExisted: true`).
+- **`LocalFilesystemArchiveStore`** (dev/test, sélectionnée par
+  `ARCHIVE_DRIVER=local`, défaut) : écriture atomique (`flag: 'wx'`, échec si
+  la clé existe déjà — y compris en cas de course TOCTOU concurrente),
+  permissions **`chmod 0o444`** après écriture (lecture seule), empreinte
+  SHA-256 vérifiée en lecture. **Ceci est une immuabilité applicative locale
+  (simulacre WORM), pas un WORM matériel** : un processus disposant des
+  privilèges filesystem suffisants peut toujours modifier les permissions et
+  réécrire le fichier — contrairement à un véritable object-lock, qui refuse
+  la modification même au propriétaire du compte cloud pendant la période de
+  rétention.
+- **Adaptateur S3 object-lock** (`ARCHIVE_DRIVER=s3`) — **spécifié, non fourni
+  en 2.2** (`ArchiveModule` lève une erreur explicite et testée tant que le
+  driver `s3` est sélectionné sans implémentation). C'est cet adaptateur
+  (Scaleway Object Storage, mode `COMPLIANCE`, rétention 10 ans) qui fournit
+  le **WORM matériel réel** — activation **au déploiement**, hors périmètre
+  de ce plan (infra à la main de Xavier).
+- **Bundle d'archive probatoire** (`src/archive/archive-bundle.ts`) : facture
+  canonique + les 5 formats du socle (rechargés) + extrait scellé du journal
+  de la facture (`seq`/`hash`/`prevHash` de chaque événement) + manifeste
+  d'empreintes SHA-256, sérialisé à ordre de clés **figé** (octets
+  déterministes, empreinte reproductible). Clé d'archive déterministe
+  (`{tenantId}/{invoiceId}/...bundle`).
+- **Déclenchement best-effort, découplé de la génération** (`ArchiveService`,
+  appelé par le worker après `completeGeneration`) : un échec d'archivage
+  n'échoue **jamais** la génération (les formats restent disponibles,
+  `archive_status='failed'`), repris par un balayage de réconciliation
+  (`ARCHIVE_RETRY_EVERY_MS`, réutilise la file `maintenance` 2.1 — voir
+  `find_failed_archives`, migration `0015`, qui balaie aussi les `pending`
+  bloqués > 15 min).
+- **Statut persisté** sur `invoices` : `archive_status` (`pending` |
+  `archived` | `failed`), `archive_location`, `archive_hash`.
+
+## Piste d'Audit Fiable (PAF)
+
+`GET /invoices/:id/paf?format=json|csv` (dual-auth, comme la lecture des
+factures) exporte la chaîne d'événements scellés d'une facture, ses
+vérifications d'intégrité (`integrity`, `chainIntegrity`) et son état
+d'archivage.
+
+- **Format = conception projet, non normalisée DGFiP.** Constat de
+  provenance vérifié : les spécifications externes v3.2 **ne définissent
+  aucun format PAF ou de scellement normalisé** — l'obligation relève du CGI
+  (art. 289 bis/289 E, intégrité/authenticité), pas d'un schéma XSD/JSON
+  publié par la DGFiP. Le format JSON/CSV ci-dessous est donc une
+  **conception projet**, documentée comme telle, **sans prétendre à une
+  conformité de schéma DGFiP**.
+- **JSON** : document complet (`invoiceId`, `lifecycleStatus`, `integrity`,
+  `chainIntegrity`, `archive`, `events[]` — identité probatoire
+  `(tenant_id, seq)`, jamais le PK surrogate `id`).
+- **CSV** (`format=csv`, `Content-Disposition: attachment`) : table des
+  **événements uniquement** (`integrity`/`chainIntegrity`/`archive` restent
+  des métadonnées niveau-document, portées par le JSON, jamais injectées dans
+  les lignes CSV). Échappement des champs **conforme RFC 4180** (guillemets
+  si le champ contient `,` `"` CR ou LF, `"` doublé) ; les fins de ligne du
+  rendu sont **LF** (RFC 4180 stricte prescrit CRLF — choix assumé : les
+  parseurs CSV usuels tolèrent LF, et changer le terminateur casserait des
+  tests sans bénéfice pratique).
+- **⚠️ Injection de formule — rendu probatoire fidèle, volontairement non
+  assaini.** Le CSV reproduit **verbatim** le contenu scellé, y compris un
+  `reason` (motif de transition, texte libre) commençant par `=`, `+`, `-` ou
+  `@` — un tel champ, ouvert dans un tableur, peut être interprété comme une
+  formule. **Ce fichier doit être ouvert comme donnée/texte, jamais exécuté
+  dans un tableur** (import CSV en mode texte, pas double-clic). Un
+  assainissement par défaut (préfixe `'` par ex.) **corromprait la fidélité
+  probatoire** de la PAF — elle doit reproduire l'exact contenu scellé, pas
+  une version modifiée pour la rendre « safe » dans un logiciel tiers.
+  Volontairement **non appliqué** ; une variante « spreadsheet-safe » à la
+  demande pourrait être ajoutée en option explicite si un besoin réel
+  apparaît, jamais comme comportement par défaut.
+
+## DLQ / cap de réconciliation (factures poison)
+
+Dette opérationnelle 2.1 soldée (task 8) : le balayage de réconciliation
+auto-cicatrisante (§ Architecture workers) ré-enfile désormais les factures
+orphelines/bloquées avec un **compteur borné** (`reconcile_attempts`,
+comparé à `GENERATION_MAX_ATTEMPTS_CAP`, défaut 5). Au-delà du cap, une
+facture qui continue de crasher avant d'atteindre un statut `failed`
+définitif (« poison » — p. ex. crash récurrent du worker sur cette facture
+précise) est **déversée dans la DLQ** (`invoice_dead_letters`,
+`InvoicesRepository.recordDeadLetter`) plutôt que ré-enfilée indéfiniment :
+table **append-only** (`SELECT`+`INSERT` seulement pour `factelec_app`, RLS
+`FORCE` tenant-scopée, migration `0015`), consignant `reason`, `attempts` et
+l'horodatage. Sans ce cap, une facture poison boucle indéfiniment dans la
+file de réconciliation (dette 2.1 tracée, désormais soldée).
 
 ## Sécurité / multi-tenant
 
@@ -367,6 +555,10 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `RECONCILIATION_STALE_MS` | Ancienneté (ms) au-delà de laquelle une facture `received` non enfilée est considérée orpheline et re-enfilée | `300000` (5 min) |
 | `RECONCILIATION_SWEEP_EVERY_MS` | Périodicité (ms) du balayage de réconciliation | `60000` (1 min) |
 | `RECONCILIATION_GENERATING_STALE_MS` | Ancienneté (ms) au-delà de laquelle une facture `generating` bloquée (worker tué en cours de génération) est re-enfilée | `900000` (15 min) |
+| `ARCHIVE_DRIVER` | Adaptateur d'archivage WORM : `local` (`LocalFilesystemArchiveStore`, testable) \| `s3` (object-lock Scaleway, **activé au déploiement**, lève une erreur explicite tant que non fourni) | `local` |
+| `ARCHIVE_LOCAL_DIR` | Répertoire local du driver `local` | `./var/archive` |
+| `GENERATION_MAX_ATTEMPTS_CAP` | Cap de ré-enfilements par la réconciliation avant DLQ (`invoice_dead_letters`) — facture « poison » | `5` |
+| `ARCHIVE_RETRY_EVERY_MS` | Périodicité (ms) du balayage de reprise d'archivage (`archive_status='failed'` ou `pending` bloqué > 15 min) | `300000` (5 min) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -424,6 +616,8 @@ README racine.
 | `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) — **404 tant que `status ≠ 'generated'`** | 200, 401, 404 |
 | `POST /invoices/:id/status` | Transition de statut CDV (`{ toStatus, reason? }`) — session owner/admin/accountant + CSRF, CAS anti-race | 201, 401, 403, 404, 409, 422 |
 | `GET /invoices/:id/status` | Statut CDV courant + historique complet (journal `invoice_status_events`) | 200, 401, 404 |
+| `GET /invoices/:id/ledger` | Journal scellé de la facture + vérifications d'intégrité (`integrity` self-check, `chainIntegrity` chaîne complète du tenant) | 200, 401, 404 |
+| `GET /invoices/:id/paf` | Piste d'Audit Fiable (`?format=json` défaut \| `?format=csv`, `Content-Disposition: attachment` en CSV) — conception projet, non normalisée DGFiP | 200, 401, 404 |
 | `POST /auth/signup` | Inscription self-service : crée le tenant **et** l'utilisateur `owner` de façon atomique (fonction `SECURITY DEFINER` `signup_tenant`), ouvre une session | 201, 409, 422 |
 | `POST /auth/login` | Authentification utilisateur (email + mot de passe Argon2id), ouvre une session | 200, 401, 422 |
 | `POST /auth/logout` | Révoque la session courante (cookie `factelec_session`) | 204, 401 |
@@ -447,7 +641,8 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
 - **`POST /invoices`** (ingestion) reste **exclusivement machine** :
   `Authorization: Bearer fk_<prefix>.<secret>`, sans repli possible.
 - **`GET /invoices`, `GET /invoices/:id`, `GET /invoices/:id/formats/:format`,
-  `GET /invoices/:id/status`** (lecture) acceptent **soit une clé API, soit
+  `GET /invoices/:id/status`, `GET /invoices/:id/ledger`, `GET
+  /invoices/:id/paf`** (lecture) acceptent **soit une clé API, soit
   une session utilisateur** du même tenant (`TenantAuthGuard`, dual-auth) —
   jamais une session **admin** plateforme, refusée par ce guard. Un en-tête
   `Authorization: Bearer` présent est **toujours** résolu en priorité (même
@@ -530,10 +725,18 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   timestamp identique à la microseconde ; non observé en pratique (chaque
   transition est sa propre transaction), à muscler (tri secondaire explicite)
   si la suite devenait flaky.
+- **Scellement/hash couverts par des vecteurs déterministes** (Task 3) : un
+  vecteur canonique **constant** (genesis + événement entièrement spécifié →
+  SHA-256 attendu hardcodé) verrouille la canonicalisation contre toute
+  dérive ; un test **croisé** prouve `hash` calculé par le trigger DB == hash
+  recalculé côté TypeScript pour le même événement (double preuve DB↔Node).
+  Tentative d'altération/suppression de maillon prouvée détectée par
+  `verifyTenantChain` **au niveau base réelle** (Testcontainers), pas
+  simulée.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
-  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 67
-  fichiers, **335 tests**, couverture **98.02 / 94.64 / 95.91 / 98.53 %**
+  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 85
+  fichiers, **440 tests**, couverture **98.11 / 95.1 / 96.09 / 98.48 %**
   (statements/branches/functions/lines).
 
 ```sh
@@ -542,6 +745,34 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
 
 ## Limites v1 / TODO
 
+- **Résolu en 2.2** : scellement cryptographique du journal (chaîne SHA-256
+  par tenant imposée par la base) + vérification d'intégrité indépendante ;
+  archivage à valeur probante (port `ArchiveStore` + implémentation locale
+  write-once testable) ; export PAF (JSON/CSV) ; retrait de la FK cascade du
+  journal (`ON DELETE RESTRICT`) ; cap de réconciliation + DLQ des factures
+  poison. Voir §§ Scellement/Archivage/PAF/DLQ ci-dessus.
+- **Limite intrinsèque du scellement (2.2, honnêteté probatoire) — NON
+  résolue par ce plan** : le hash-chain auto-contenu ne détecte **ni** la
+  troncature du dernier maillon (la chaîne restante `1..n-1` reste valide),
+  **ni** une réécriture complète et cohérente de la chaîne par un accès
+  propriétaire (le genesis est dérivé publiquement du `tenant_id`, donc
+  recalculable). Ces deux modes ne seront couverts que par l'**ancrage de
+  tête** dans l'archive WORM externe, effectif une fois l'adaptateur S3
+  object-lock **activé au déploiement** (`ARCHIVE_DRIVER=s3`, non fourni en
+  2.2). Voir § Scellement — Limites de détection.
+- **WORM matériel non fourni en 2.2** : `LocalFilesystemArchiveStore`
+  (`chmod 0o444`) est une immuabilité **applicative locale**, pas un WORM
+  matériel — le véritable object-lock (refus de modification même par le
+  propriétaire du compte cloud pendant la rétention) vient de l'adaptateur
+  S3 `ARCHIVE_DRIVER=s3`, à fournir et activer **au déploiement**.
+- **PAF non normalisée** : aucune spécification externe v3.2 ne définit de
+  format PAF/scellement DGFiP — le format JSON/CSV livré est une conception
+  **projet**, sans conformité de schéma DGFiP revendiquée.
+- **PAF CSV — injection de formule, volontairement non assainie** : le CSV
+  reproduit verbatim le contenu scellé (y compris un `reason` commençant par
+  `= + - @`) ; à ouvrir comme donnée/texte, jamais à exécuter dans un
+  tableur. Un assainissement par défaut corromprait la fidélité probatoire —
+  non appliqué.
 - **Résolu en 2.1** : génération asynchrone par workers BullMQ (était
   synchrone en 1.3/1.4) ; `last_used_at` (table `api_keys`) écrit à chaque
   authentification réussie ; purge périodique des sessions expirées (job
@@ -583,20 +814,29 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   admin** : **CLI exclusivement** (`pnpm provision:admin`), aucune
   inscription self-service — décision assumée, pas une limitation à lever.
 
-### Différé explicitement 2.2+ (hors périmètre 2.1)
+### Différé explicitement 2.3+ (hors périmètre 2.2)
 
-- **E-reporting DGFiP** (Flux 10) et **annuaire central** (Flux 13/14) —
-  aucune transmission ni consultation d'annuaire à ce jour.
-- **Scellement / archivage à valeur probante** (WORM, 10 ans) — le journal
-  `invoice_status_events` append-only (2.1) en est le **substrat direct**
-  (immuabilité par grants Postgres) mais n'est **pas** scellé
-  cryptographiquement ; à cette occasion, revoir le `ON DELETE CASCADE` de
-  `invoice_status_events` vers `invoices` (`0007_invoice_lifecycle.sql`) —
-  un journal à valeur probante ne devrait pas pouvoir disparaître avec la
-  suppression de sa facture.
+- **E-reporting DGFiP** (Flux 10, plan 2.3) et **annuaire central** (Flux
+  13/14, plan 2.4) — aucune transmission ni consultation d'annuaire à ce
+  jour.
+- **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway
+  Object Storage, mode `COMPLIANCE`, rétention 10 ans) — **spécifié** (même
+  contrat que `ArchiveStore`) mais **non écrit** en 2.2 : infra à la main de
+  Xavier, non testable sans bucket S3 réel. Activation par
+  `ARCHIVE_DRIVER=s3` **au déploiement**. Tant qu'il n'est pas fourni, le
+  WORM reste applicatif-local uniquement et l'ancrage de tête (seul rempart
+  contre la troncature/réécriture de chaîne, cf. § Scellement) n'est pas
+  effectif.
+- **`CREATE EXTENSION pgcrypto`** — présente et vérifiée sur `postgres:17-alpine`
+  (dev/CI/Testcontainers) ; **à confirmer** sur le Postgres managé Scaleway
+  visé en production (extension contrib standard, généralement disponible
+  sur les offres managées, mais non vérifiée sur l'infra réelle à ce jour).
 - **Transmission Peppol des statuts CDV** et **apposition automatique** des
   transitions par un connecteur/le réseau → **phase 3**. Les transitions
   2.1 sont exclusivement pilotées par session utilisateur.
+- **Remplacement de la matrice de transitions CDV** contre la norme **AFNOR
+  XP Z12-012** (payante, hors dépôt) → **phase 3**, **bloqueur go-live PDP**
+  (D7) — la matrice monotone 2.1 reste une interprétation projet documentée.
 - **Journal d'audit des authentifications** (connexions, échecs,
   révocations de session — distinct du journal CDV 2.1) → **horizon 2.x**.
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan

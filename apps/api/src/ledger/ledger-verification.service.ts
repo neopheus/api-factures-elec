@@ -61,12 +61,19 @@ export class LedgerVerificationService {
   }
 
   // Chaîne complète du tenant : genesis, contiguïté du seq, linkage prev_hash,
-  // hash. Détecte suppression/insertion/altération sur tout le journal du
-  // tenant — notamment la suppression d'un maillon, invisible au self-check
-  // par-facture ci-dessus. Scanne TOUS les événements du tenant (O(n)) ;
-  // acceptable pour un endpoint d'audit (pas un hot path) — une
-  // pagination/borne pourra être ajoutée si un tenant devient très
-  // volumineux (différé, non implémenté ici).
+  // hash. Détecte l'altération/suppression/insertion PARTIELLE d'un événement
+  // intermédiaire du journal du tenant — notamment la suppression d'un
+  // maillon, invisible au self-check par-facture ci-dessus. NE détecte PAS la
+  // troncature de la QUEUE de chaîne (supprimer le DERNIER maillon laisse la
+  // chaîne 1..n-1 valide) ni une RÉÉCRITURE COMPLÈTE cohérente de toute la
+  // chaîne (genesis dérivé du tenant, donc public et recalculable) : ces deux
+  // modes sont intrinsèques à tout hash-chain auto-contenu (≠ MAC) et ne sont
+  // détectables que par l'ancrage de tête (seq max + hash) dans l'archive
+  // WORM externe (adaptateur S3 object-lock, activé au déploiement — cf.
+  // README). Scanne TOUS les événements du tenant (O(n)) ; acceptable pour un
+  // endpoint d'audit (pas un hot path) — une pagination/borne pourra être
+  // ajoutée si un tenant devient très volumineux (différé, non implémenté
+  // ici).
   async verifyTenantChain(tenantId: string): Promise<LedgerIntegrity> {
     const events = await this.repo.loadSealedEventsByTenant(tenantId)
     let expectedSeq = 1

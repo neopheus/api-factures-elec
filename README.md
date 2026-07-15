@@ -9,7 +9,7 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (15/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4 et 2.1
+> **État du projet (15/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1 et 2.2
 > terminés et mergés ; dettes héritées soldées avant chaque plan suivant.**
 > `invoice-core` (v0.3.1 — patch BT-9) livre les **formats du socle** : UBL 2.1
 > Invoice **et** CreditNote (avoir), extraits de flux DGFiP F1 (facture et
@@ -89,14 +89,43 @@ API publique pour les systèmes custom.
 > (statements/branches/fonctions/lignes) · `apps/web` 48 à
 > 100/96.66/100/100 %). Détail complet : `apps/api/README.md`.
 >
-> **Reprise — prochaine étape : phase 2.2** (Cœur réglementaire, suite) —
-> e-reporting DGFiP (Flux 10), annuaire central (Flux 13/14),
-> scellement/archivage à valeur probante (WORM ; le journal append-only 2.1
-> en est le substrat direct — revoir à cette occasion le `ON DELETE CASCADE`
-> d'`invoice_status_events` vers `invoices` : un journal à valeur probante ne
-> doit pas disparaître avec sa facture). Puis **phase 3** : transmission
-> Peppol des statuts CDV, point d'accès Peppol interne. **Horizon 2.x** :
-> journal d'audit des authentifications (distinct du journal CDV). Reports
+> **2.2 — Scellement et archivage à valeur probante du journal CDV** livre :
+> chaîne SHA-256 **par tenant**, calculée et **imposée par la base** (trigger
+> `SECURITY DEFINER`, verrou consultatif par tenant, genesis dérivé du
+> tenant, `pgcrypto`) sur le journal `invoice_status_events` (append-only
+> depuis 2.1) ; **vérification d'intégrité** indépendante (recompute
+> TypeScript pur, miroir exact du PL/pgSQL, endpoint `GET
+> /invoices/:id/ledger`) ; **archivage WORM** — port `ArchiveStore`
+> write-once + implémentation locale testable (`chmod 0o444`), adaptateur S3
+> object-lock **différé à l'activation au déploiement** ; export de la
+> **Piste d'Audit Fiable** (`GET /invoices/:id/paf`, JSON/CSV, **conception
+> projet non normalisée DGFiP** — aucune spec externe v3.2 ne normalise ce
+> format) ; **DLQ** des factures poison (cap de réconciliation
+> `GENERATION_MAX_ATTEMPTS_CAP`, `invoice_dead_letters` append-only).
+> Dettes soldées : retrait de la FK cascade du journal (`ON DELETE
+> RESTRICT`, dette 2.1) et cap de réconciliation/DLQ (dette opérationnelle
+> 2.1). **Honnêteté probatoire (limite intrinsèque, non résolue par ce
+> plan)** : le scellement est une tamper-evidence contre l'édition/
+> suppression/insertion **partielle** d'événements — ce n'est **pas** une
+> inviolabilité de la chaîne live : un accès propriétaire peut **tronquer**
+> la queue de chaîne (supprimer le dernier maillon laisse `1..n-1` valide)
+> ou la **réécrire intégralement de façon cohérente** (genesis dérivé
+> publiquement du tenant, donc recalculable) — deux modes intrinsèques à
+> tout hash-chain auto-contenu (≠ MAC), détectables uniquement par
+> l'**ancrage de tête** dans l'archive WORM externe, effectif seulement une
+> fois l'adaptateur S3 object-lock **activé au déploiement**. **617 tests**
+> au total (`invoice-core` 129 100 % · `apps/api` 440 à
+> 98.11/95.1/96.09/98.48 % (statements/branches/fonctions/lignes) ·
+> `apps/web` 48 à 100/96.66/100/100 %). Détail complet : `apps/api/README.md`.
+>
+> **Reprise — prochaine étape : phase 2.3** (Cœur réglementaire, suite) —
+> e-reporting DGFiP (Flux 10). Puis **phase 2.4** : annuaire central (Flux
+> 13/14). Puis **phase 3** : transmission Peppol des statuts CDV, point
+> d'accès Peppol interne, remplacement de la matrice de transitions CDV
+> contre la norme AFNOR XP Z12-012 (bloqueur go-live PDP). **Horizon 2.x** :
+> journal d'audit des authentifications (distinct du journal CDV).
+> **Déploiement** : confirmer `CREATE EXTENSION pgcrypto` sur le Postgres
+> managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`. Reports
 > explicites détaillés en Feuille de route ci-dessous.
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
@@ -167,8 +196,8 @@ fichiers (hors tests).
 
 ## `@factelec/api`
 
-API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1** : ingestion et lecture
-des factures (consommant `@factelec/invoice-core`), authentification
+API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2** : ingestion et
+lecture des factures (consommant `@factelec/invoice-core`), authentification
 utilisateur (sessions httpOnly + CSRF), signup self-service transactionnel,
 gestion des clés API par session, super admin plateforme minimal, **workers
 BullMQ de génération asynchrone** et **cycle de vie des statuts CDV**.
@@ -180,11 +209,18 @@ extraits de flux) : `POST /invoices` enfile un job minimal (ids only) derrière
 le port `InvoiceFormatGenerator` et répond `201 { status: 'received' }` ;
 un **worker** (processus séparé, `apps/api/src/worker-main.ts`) le consomme,
 génère les formats et persiste, avec retries/backoff et réconciliation
-auto-cicatrisante des orphelins. Cycle de vie métier CDV (nomenclature DGFiP
-14 statuts, machine à états, journal append-only) distinct du statut de
-génération. Documentation complète — architecture & compromis (ESM +
-typecheck tsgo + émission SWC), workers, sécurité multi-tenant et auth
-détaillées, variables d'environnement, endpoints, tests, limites — dans
+auto-cicatrisante des orphelins (désormais **bornée**, cap + DLQ des
+factures poison). Cycle de vie métier CDV (nomenclature DGFiP 14 statuts,
+machine à états, journal append-only) distinct du statut de génération ; ce
+journal est désormais **scellé** (chaîne SHA-256 par tenant imposée par la
+base) et **archivé** (port WORM), avec export PAF — tamper-evidence contre
+l'altération/suppression/insertion **partielle**, **pas** une inviolabilité
+totale de la chaîne live (troncature de queue et réécriture complète
+cohérente hors périmètre du hash-chain seul, cf. `apps/api/README.md`).
+Documentation complète — architecture & compromis (ESM +
+typecheck tsgo + émission SWC), workers, sécurité multi-tenant et auth,
+scellement/archivage/PAF/DLQ détaillés, variables d'environnement,
+endpoints, tests, limites — dans
 [`apps/api/README.md`](apps/api/README.md).
 
 ## `@factelec/web`
@@ -325,20 +361,34 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       `invoice_status_events` append-only (substrat valeur probante),
       dettes 1.3/1.4 soldées (`last_used_at`, purge des sessions expirées).
       Détail : `apps/api/README.md`.
+- [x] **2.2 — Scellement et archivage à valeur probante du journal CDV**
+      (terminé) : chaîne SHA-256 **par tenant** imposée par la base (trigger
+      `SECURITY DEFINER`, genesis dérivé du tenant, `pgcrypto`) sur le
+      journal `invoice_status_events` ; vérification d'intégrité
+      indépendante (recompute TypeScript pur, `GET /invoices/:id/ledger`) ;
+      archivage WORM (port `ArchiveStore` + implémentation locale
+      write-once testable, adaptateur S3 object-lock différé au
+      déploiement) ; export de la Piste d'Audit Fiable (`GET
+      /invoices/:id/paf`, JSON/CSV, conception projet non normalisée
+      DGFiP) ; DLQ des factures poison (cap de réconciliation borné,
+      `invoice_dead_letters`) ; retrait de la FK cascade du journal (dette
+      2.1). **Limite intrinsèque documentée, non résolue** : le hash-chain
+      auto-contenu ne détecte pas la troncature de la queue de chaîne ni une
+      réécriture complète cohérente par accès propriétaire — seul l'ancrage
+      de tête dans l'archive WORM externe (S3 object-lock, activé au
+      déploiement) couvre ces deux modes. Détail : `apps/api/README.md`.
 
-> **Point de reprise → phase 2.2** (Cœur réglementaire, suite) : e-reporting
-> DGFiP (Flux 10), annuaire central (Flux 13/14), scellement/archivage à
-> valeur probante (WORM — le journal `invoice_status_events` append-only 2.1
-> en est le substrat ; revoir à cette occasion son `ON DELETE CASCADE` vers
-> `invoices`, qu'un journal probant ne devrait pas hériter). Puis
+> **Point de reprise → phase 2.3** (Cœur réglementaire, suite) : e-reporting
+> DGFiP (Flux 10). Puis **phase 2.4** : annuaire central (Flux 13/14). Puis
 > **phase 3** : transmission Peppol des statuts CDV, point d'accès Peppol
-> interne.
+> interne, remplacement de la matrice de transitions CDV contre la norme
+> AFNOR XP Z12-012 (bloqueur go-live PDP).
 
 ### Prérequis pré-production / pré-DGFiP
 
 Liste compacte consolidant des points déjà détaillés ci-dessous (dette
 reportée) ou dans `apps/api/README.md` : aucun ne bloque le passage en
-phase 2.2, mais **tous** doivent être traités avant une exposition réelle
+phase 2.3, mais **tous** doivent être traités avant une exposition réelle
 (immatriculation DGFiP, onboarding de tenants en production) :
 
 - **Journal d'audit des authentifications** (connexions, échecs, révocations
@@ -361,8 +411,17 @@ phase 2.2, mais **tous** doivent être traités avant une exposition réelle
   norme AFNOR XP Z12-012 avant mise en production réelle (aucune matrice de
   transitions formelle publiée par la DGFiP dans le dépôt). Détail :
   `apps/api/README.md`.
+- **Ancrage de tête WORM non effectif** (2.2) — le scellement du journal ne
+  détecte pas la troncature de queue ni une réécriture complète cohérente
+  par accès propriétaire (limite intrinsèque du hash-chain) ; seul
+  l'ancrage de tête dans l'archive WORM **externe** couvre ces deux modes,
+  effectif uniquement une fois l'adaptateur S3 object-lock **activé au
+  déploiement**. Détail : `apps/api/README.md`.
+- **`CREATE EXTENSION pgcrypto`** (2.2) — à confirmer sur le Postgres managé
+  Scaleway visé en production (vérifiée uniquement sur `postgres:17-alpine`
+  dev/CI à ce jour).
 
-Dette explicitement reportée (aucune ne bloque le passage en phase 2.2) :
+Dette explicitement reportée (aucune ne bloque le passage en phase 2.3) :
 
 - **Stripe / abonnements** (modèle commercial self-service, spec §2/§8) →
   **phase 5** (Commercialisation).
@@ -382,15 +441,22 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 2.2) :
   le partage de cookies cross-subdomain dashboard/API.
 - **Throttle par tenant** (rate limiting actuellement par IP uniquement,
   `apps/api`) — non planifié à ce jour.
-- **E-reporting DGFiP** (Flux 10) et **annuaire central** (Flux 13/14) →
-  **phase 2.2** — aucune transmission ni consultation d'annuaire à ce jour.
-- **Scellement / archivage à valeur probante** (WORM, 10 ans) → **phase
-  2.2** — le journal `invoice_status_events` append-only (2.1) en est le
-  substrat direct (immuabilité par grants Postgres), non scellé
-  cryptographiquement à ce stade.
+- **E-reporting DGFiP** (Flux 10) → **phase 2.3** — aucune transmission à ce
+  jour.
+- **Annuaire central** (Flux 13/14) → **phase 2.4** — aucune consultation
+  d'annuaire à ce jour.
+- **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway,
+  mode `COMPLIANCE`, rétention 10 ans) → **déploiement** — spécifié (2.2,
+  même contrat que `ArchiveStore`) mais non écrit (infra à la main de
+  Xavier, non testable sans bucket S3 réel) ; tant qu'il n'est pas fourni,
+  l'ancrage de tête (seul rempart contre la troncature/réécriture du
+  journal scellé, cf. `apps/api/README.md`) n'est pas effectif.
 - **Transmission Peppol des statuts CDV** et apposition automatique des
   transitions par un connecteur/le réseau → **phase 3** (les transitions
   2.1 sont exclusivement pilotées par session utilisateur).
+- **Remplacement de la matrice de transitions CDV** contre la norme AFNOR XP
+  Z12-012 (payante, hors dépôt) → **phase 3**, **bloqueur go-live PDP** — la
+  matrice monotone 2.1 reste une interprétation projet documentée.
 - **Horizon 2.x** : journal d'audit persistant des **authentifications**
   (distinct du journal CDV à valeur probante, livré en substrat par 2.1).
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan

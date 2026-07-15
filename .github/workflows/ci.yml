@@ -30,4 +30,4 @@ jobs:
       # conteneur géré par le test lui-même). Le worker BullMQ n'est PAS démarré comme
       # process CI séparé : les e2e le bootent en-process (helpers/worker.ts →
       # createTestWorker) dans le même processus Vitest que l'API testée.
-      - run: pnpm test          # invoice-core + apps/api (Testcontainers Postgres + Redis) + apps/web (jsdom)
+      - run: pnpm test          # invoice-core + apps/api (Testcontainers Postgres[pgcrypto] + Redis) + apps/web (jsdom)
