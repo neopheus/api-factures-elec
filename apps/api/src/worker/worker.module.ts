@@ -6,6 +6,8 @@ import { DbModule } from '../db/db.module.js'
 import { FormatGenerationService } from '../invoices/format-generation.service.js'
 import { INVOICE_FORMAT_GENERATOR } from '../invoices/format-generator.port.js'
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
+import { ArchiveRetryScheduler } from './archive-retry.scheduler.js'
+import { ArchiveRetryService } from './archive-retry.service.js'
 import { InvoiceGenerationProcessor } from './invoice-generation.processor.js'
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
 import { MaintenanceProcessor } from './maintenance.processor.js'
@@ -32,6 +34,8 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     ReconciliationScheduler,
     SessionMaintenanceService,
     SessionPurgeScheduler,
+    ArchiveRetryService,
+    ArchiveRetryScheduler,
   ],
 })
 export class WorkerModule {}

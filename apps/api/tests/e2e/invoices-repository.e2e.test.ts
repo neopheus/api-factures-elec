@@ -286,4 +286,54 @@ describe('InvoicesRepository (e2e, Postgres réel)', () => {
       ),
     ).toBeNull()
   })
+
+  // ── Task 8 : cap de réconciliation / DLQ ─────────────────────────────────
+
+  it('bumpReconcileAttempts increments atomically and returns the new count', async () => {
+    const invoice = buildInvoice({ ...input, number: 'FA-REPO-RECONCILE-1' })
+    const { id } = await repo.insertReceived(tenantId, invoice)
+
+    expect(await repo.bumpReconcileAttempts(tenantId, id)).toBe(1)
+    expect(await repo.bumpReconcileAttempts(tenantId, id)).toBe(2)
+    expect(await repo.bumpReconcileAttempts(tenantId, id)).toBe(3)
+
+    const row = await ownerPool.query(
+      'SELECT reconcile_attempts FROM invoices WHERE id = $1',
+      [id],
+    )
+    expect(row.rows[0].reconcile_attempts).toBe(3)
+  })
+
+  it('bumpReconcileAttempts returns 0 for an unknown invoice (no row updated)', async () => {
+    expect(
+      await repo.bumpReconcileAttempts(
+        tenantId,
+        '00000000-0000-0000-0000-000000000000',
+      ),
+    ).toBe(0)
+  })
+
+  it('recordDeadLetter appends a DLQ row (append-only, no update on replay)', async () => {
+    const invoice = buildInvoice({ ...input, number: 'FA-REPO-DLQ-1' })
+    const { id } = await repo.insertReceived(tenantId, invoice)
+
+    await repo.recordDeadLetter(
+      tenantId,
+      id,
+      'generation attempts cap exceeded',
+      6,
+    )
+
+    const rows = await ownerPool.query(
+      'SELECT tenant_id, invoice_id, reason, attempts FROM invoice_dead_letters WHERE invoice_id = $1',
+      [id],
+    )
+    expect(rows.rows).toHaveLength(1)
+    expect(rows.rows[0]).toMatchObject({
+      tenant_id: tenantId,
+      invoice_id: id,
+      reason: 'generation attempts cap exceeded',
+      attempts: 6,
+    })
+  })
 })

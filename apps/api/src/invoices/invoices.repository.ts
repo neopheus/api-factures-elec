@@ -2,6 +2,7 @@ import type { Invoice } from '@factelec/invoice-core'
 import { Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm'
 import {
+  invoiceDeadLetters,
   invoiceFormats,
   type invoiceStatus,
   invoiceStatusEvents,
@@ -447,6 +448,43 @@ export class InvoicesRepository {
         .where(eq(invoices.id, invoiceId))
         .limit(1)
       return rows[0] ?? null
+    })
+  }
+
+  // Compteur de ré-enfilements (Task 8, cap réconciliation → DLQ). Incrémente
+  // ATOMIQUEMENT (SQL `+ 1`, pas de lecture-puis-écriture) et retourne la
+  // nouvelle valeur, seule source de vérité pour la comparaison au cap
+  // (InvoiceReconciliationService.sweepStuckGeneration).
+  async bumpReconcileAttempts(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<number> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .update(invoices)
+        .set({
+          reconcileAttempts: sql`${invoices.reconcileAttempts} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, invoiceId))
+        .returning({ n: invoices.reconcileAttempts })
+      return rows[0]?.n ?? 0
+    })
+  }
+
+  // Neutralise DÉFINITIVEMENT une facture « poison » (cap de ré-enfilements
+  // dépassé) : entrée append-only dans la DLQ (migration 0015 — grants
+  // SELECT/INSERT seulement pour factelec_app).
+  async recordDeadLetter(
+    tenantId: string,
+    invoiceId: string,
+    reason: string,
+    attempts: number,
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .insert(invoiceDeadLetters)
+        .values({ tenantId, invoiceId, reason, attempts })
     })
   }
 

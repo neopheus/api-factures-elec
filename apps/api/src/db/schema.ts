@@ -118,6 +118,11 @@ export const invoices = pgTable(
     archiveStatus: archiveStatus('archive_status').notNull().default('pending'),
     archiveLocation: text('archive_location'),
     archiveHash: text('archive_hash'),
+    // Compteur de ré-enfilements par la réconciliation (Task 8) : borne le
+    // nombre de tentatives d'une facture bloquée avant neutralisation en DLQ
+    // (facture « poison »). Jamais remis à 0 sur succès — sans impact (une
+    // facture `generated` sort de find_stuck_* et n'est plus jamais re-swept).
+    reconcileAttempts: integer('reconcile_attempts').notNull().default(0),
     canonical: jsonb('canonical').$type<Invoice>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -200,6 +205,27 @@ export const invoiceStatusEvents = pgTable(
     unique('invoice_status_events_tenant_seq_unique').on(t.tenantId, t.seq),
     unique('invoice_status_events_tenant_hash_unique').on(t.tenantId, t.hash),
   ],
+)
+
+// DLQ des factures « poison » : génération en échec récurrent, neutralisées par
+// la réconciliation (cap). Append-only (grants SELECT/INSERT, migration 0015).
+export const invoiceDeadLetters = pgTable(
+  'invoice_dead_letters',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoices.id, { onDelete: 'restrict' }),
+    reason: text('reason').notNull(),
+    attempts: integer('attempts').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('invoice_dead_letters_tenant_idx').on(t.tenantId)],
 )
 
 export const userRole = pgEnum('user_role', [

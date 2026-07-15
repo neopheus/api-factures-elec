@@ -145,4 +145,36 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/ARCHIVE_DRIVER/)
   })
+
+  it('applies the generation reconciliation cap default (5) and the archive retry cadence default (5 min)', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.GENERATION_MAX_ATTEMPTS_CAP).toBe(5)
+    expect(env.ARCHIVE_RETRY_EVERY_MS).toBe(300_000)
+  })
+
+  it('rejects a non-positive or over-cap GENERATION_MAX_ATTEMPTS_CAP', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        GENERATION_MAX_ATTEMPTS_CAP: '0',
+      }),
+    ).toThrow(/GENERATION_MAX_ATTEMPTS_CAP/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        GENERATION_MAX_ATTEMPTS_CAP: '51',
+      }),
+    ).toThrow(/GENERATION_MAX_ATTEMPTS_CAP/)
+  })
+
+  it('rejects a non-positive ARCHIVE_RETRY_EVERY_MS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ARCHIVE_RETRY_EVERY_MS: '0',
+      }),
+    ).toThrow(/ARCHIVE_RETRY_EVERY_MS/)
+  })
 })
