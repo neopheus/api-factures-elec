@@ -31,7 +31,10 @@ export const REJECT_MOTIFS = [
 ] as const
 export type RejectMotif = (typeof REJECT_MOTIFS)[number]
 
-// Catégories de transactions B2C 10.3 (TT-81).
+// Catégories de transactions B2C 10.3 (TT-81) — SOUS-ENSEMBLE 10.3 de la
+// nomenclature TT-81, PAS la liste TT-81 exhaustive (il manque notamment
+// TNT1/TMA1, hors périmètre 10.3). Ne pas traiter FLUX10_CATEGORIES comme
+// une énumération complète de TT-81 lors de la sérialisation.
 export const FLUX10_CATEGORIES = ['TLB1', 'TPS1'] as const // livraisons biens / prestations services
 export type Flux10Category = (typeof FLUX10_CATEGORIES)[number]
 
