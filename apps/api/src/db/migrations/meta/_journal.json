@@ -113,6 +113,20 @@
       "when": 1784112900000,
       "tag": "0015_dead_letters_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1784134739349,
+      "tag": "0016_ereporting_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784135000000,
+      "tag": "0017_ereporting_rls",
+      "breakpoints": true
     }
   ]
 }

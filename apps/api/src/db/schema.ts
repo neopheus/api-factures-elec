@@ -228,6 +228,151 @@ export const invoiceDeadLetters = pgTable(
   (t) => [index('invoice_dead_letters_tenant_idx').on(t.tenantId)],
 )
 
+// ── E-reporting Flux 10 (plan 2.3, Task 5) : déclarants, transmissions, ────
+// journal du cycle de vie. Distinct du CDV facture (invoiceLifecycleStatus
+// ci-dessus) — cf. ereporting/ereporting-lifecycle.ts (EREPORTING_STATUS_META).
+
+// Régimes TVA pilotant la cadence de dépôt (D4/D11, cf. ereporting/nomenclature.ts VAT_REGIMES).
+export const ereportingVatRegime = pgEnum('ereporting_vat_regime', [
+  'reel_normal_mensuel',
+  'reel_normal_trimestriel',
+  'simplifie',
+  'franchise',
+])
+// Rôle du déclarant (TT-15, cf. ereporting/nomenclature.ts ISSUER_ROLES) : acheteur/vendeur.
+export const ereportingIssuerRole = pgEnum('ereporting_issuer_role', [
+  'BY',
+  'SE',
+])
+// Type de transmission (TT-4, cf. ereporting/nomenclature.ts TRANSMISSION_TYPES) : initiale/rectificatif.
+export const ereportingTransmissionType = pgEnum(
+  'ereporting_transmission_type',
+  ['IN', 'RE'],
+)
+export const ereportingFluxKind = pgEnum('ereporting_flux_kind', [
+  'transactions',
+  'payments',
+])
+// Cycle de vie e-reporting (cf. ereporting/ereporting-lifecycle.ts EREPORTING_STATUS_META).
+// 300/301 (Tableaux 5/6 DGFiP) = deposee/rejetee ; prepared/transmitted = états internes PA (A3).
+export const ereportingStatus = pgEnum('ereporting_status', [
+  'prepared',
+  'transmitted',
+  'deposee',
+  'rejetee',
+])
+// Motifs de rejet PPF (Tableau 6, §3.7.10, cf. ereporting/nomenclature.ts REJECT_MOTIFS).
+export const ereportingRejectMotif = pgEnum('ereporting_reject_motif', [
+  'REJ_SEMAN',
+  'REJ_UNI',
+  'REJ_COH',
+  'REJ_PER',
+])
+
+// Config par déclarant (D11) : maille SIREN × rôle, régime TVA (→ cadence, period.ts Task 7).
+// Mutable par l'opérateur (grants SELECT/INSERT/UPDATE/DELETE, migration 0017).
+export const ereportingDeclarants = pgTable(
+  'ereporting_declarants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    siren: text('siren').notNull(),
+    name: text('name').notNull(),
+    role: ereportingIssuerRole('role').notNull(),
+    vatRegime: ereportingVatRegime('vat_regime').notNull(),
+    active: boolean('active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('ereporting_declarants_tenant_siren_role_unique').on(
+      t.tenantId,
+      t.siren,
+      t.role,
+    ),
+    index('ereporting_declarants_tenant_idx').on(t.tenantId),
+  ],
+)
+
+export const ereportingTransmissions = pgTable(
+  'ereporting_transmissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    declarantId: uuid('declarant_id')
+      .notNull()
+      .references(() => ereportingDeclarants.id, { onDelete: 'restrict' }),
+    transmissionRef: text('transmission_ref').notNull(), // TT-1
+    type: ereportingTransmissionType('type').notNull(), // IN/RE
+    fluxKind: ereportingFluxKind('flux_kind').notNull(),
+    periodStart: text('period_start').notNull(), // AAAAMMJJ
+    periodEnd: text('period_end').notNull(),
+    status: ereportingStatus('status').notNull().default('prepared'),
+    invoiceCount: integer('invoice_count').notNull().default(0),
+    trackingId: text('tracking_id'),
+    xml: text('xml'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('ereporting_transmissions_tenant_idx').on(t.tenantId, t.createdAt),
+    index('ereporting_transmissions_declarant_period_idx').on(
+      t.declarantId,
+      t.periodStart,
+    ),
+    // Amendement A2 (revue plan, MUST-FIX, anti double-envoi) : UNE SEULE
+    // transmission INITIALE (type='IN') par déclarant×flux×période. Sans
+    // cette contrainte, un crash entre transmit() et markTransmitted()
+    // (Task 8) laisserait une transmission `prepared`/`transmitted` orpheline
+    // que le re-balayage regénèrerait en double auprès du PPF (le jobId
+    // BullMQ ne suffit pas à travers la rétention). Les rectificatifs
+    // (type='RE') restent LIBRES — plusieurs RE possibles sur la même
+    // période, car `rejetee` est TERMINAL (Task 4) : un rectificatif est
+    // TOUJOURS une nouvelle transmission, jamais une transition de l'ancienne.
+    uniqueIndex('ereporting_transmissions_declarant_flux_period_in_unique')
+      .on(t.declarantId, t.fluxKind, t.periodStart)
+      .where(sql`${t.type} = 'IN'`),
+  ],
+)
+
+// Journal APPEND-ONLY du cycle de vie e-reporting — NON scellé (D3/D5,
+// transmission authentifiée au transport, contrairement au CDV facture) :
+// PAS de trigger de hash-chain ici, contrairement à invoice_status_events.
+export const ereportingStatusEvents = pgTable(
+  'ereporting_status_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    transmissionId: uuid('transmission_id')
+      .notNull()
+      .references(() => ereportingTransmissions.id, { onDelete: 'restrict' }),
+    fromStatus: ereportingStatus('from_status'), // NULL pour l'événement initial ('prepared')
+    toStatus: ereportingStatus('to_status').notNull(),
+    motif: ereportingRejectMotif('motif'), // requis ssi to_status='rejetee'
+    actor: text('actor').notNull(), // 'platform' | 'ppf' | 'user:<uuid>'
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('ereporting_status_events_transmission_idx').on(
+      t.transmissionId,
+      t.createdAt,
+    ),
+  ],
+)
+
 export const userRole = pgEnum('user_role', [
   'owner',
   'admin',
