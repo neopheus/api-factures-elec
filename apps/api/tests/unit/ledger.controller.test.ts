@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InvoicesRepository } from '../../src/invoices/invoices.repository.js'
 import { LedgerController } from '../../src/ledger/ledger.controller.js'
 import type { LedgerVerificationService } from '../../src/ledger/ledger-verification.service.js'
+import type { PafDocument } from '../../src/ledger/paf.js'
+import type { PafService } from '../../src/ledger/paf.service.js'
 
 const TENANT = 'tenant-1'
 const INVOICE = 'invoice-1'
@@ -21,17 +23,26 @@ function fakeVerification() {
   }
 }
 
+function fakePafService() {
+  return {
+    buildPaf: vi.fn(),
+  }
+}
+
 describe('LedgerController.ledger', () => {
   let repo: ReturnType<typeof fakeRepo>
   let verification: ReturnType<typeof fakeVerification>
+  let paf: ReturnType<typeof fakePafService>
   let controller: LedgerController
 
   beforeEach(() => {
     repo = fakeRepo()
     verification = fakeVerification()
+    paf = fakePafService()
     controller = new LedgerController(
       repo as unknown as InvoicesRepository,
       verification as unknown as LedgerVerificationService,
+      paf as unknown as PafService,
     )
   })
 
@@ -166,5 +177,80 @@ describe('LedgerController.ledger', () => {
       prevHash: 'cc'.repeat(32),
       hash: 'dd'.repeat(32),
     })
+  })
+})
+
+function fakeResponse() {
+  return {
+    type: vi.fn(),
+    setHeader: vi.fn(),
+    send: vi.fn(),
+    json: vi.fn(),
+  }
+}
+
+describe('LedgerController.paf', () => {
+  let repo: ReturnType<typeof fakeRepo>
+  let verification: ReturnType<typeof fakeVerification>
+  let paf: ReturnType<typeof fakePafService>
+  let controller: LedgerController
+
+  beforeEach(() => {
+    repo = fakeRepo()
+    verification = fakeVerification()
+    paf = fakePafService()
+    controller = new LedgerController(
+      repo as unknown as InvoicesRepository,
+      verification as unknown as LedgerVerificationService,
+      paf as unknown as PafService,
+    )
+  })
+
+  const doc: PafDocument = {
+    invoiceId: INVOICE,
+    lifecycleStatus: 'deposee',
+    integrity: { valid: true, length: 1 },
+    chainIntegrity: { valid: true, length: 1 },
+    archive: { status: 'pending', location: null, hash: null },
+    events: [],
+  }
+
+  it('404s (anti-leak) when the invoice is unknown in this tenant, before touching the response', async () => {
+    paf.buildPaf.mockResolvedValue(null)
+    const res = fakeResponse()
+
+    await expect(
+      controller.paf(TENANT, INVOICE, undefined, res as never),
+    ).rejects.toBeInstanceOf(NotFoundException)
+    expect(res.json).not.toHaveBeenCalled()
+    expect(res.send).not.toHaveBeenCalled()
+  })
+
+  it('responds with the JSON document by default (no format query)', async () => {
+    paf.buildPaf.mockResolvedValue(doc)
+    const res = fakeResponse()
+
+    await controller.paf(TENANT, INVOICE, undefined, res as never)
+
+    expect(paf.buildPaf).toHaveBeenCalledWith(TENANT, INVOICE)
+    expect(res.json).toHaveBeenCalledWith(doc)
+    expect(res.send).not.toHaveBeenCalled()
+  })
+
+  it('responds with a text/csv attachment when format=csv', async () => {
+    paf.buildPaf.mockResolvedValue(doc)
+    const res = fakeResponse()
+
+    await controller.paf(TENANT, INVOICE, 'csv', res as never)
+
+    expect(res.type).toHaveBeenCalledWith('text/csv')
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      `attachment; filename="paf-${INVOICE}.csv"`,
+    )
+    expect(res.send).toHaveBeenCalledWith(
+      'seq,from_status,to_status,actor,reason,created_at,prev_hash,hash\n',
+    )
+    expect(res.json).not.toHaveBeenCalled()
   })
 })

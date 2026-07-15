@@ -5,6 +5,7 @@ import { InvoicesModule } from '../invoices/invoices.module.js'
 import { UsersModule } from '../users/users.module.js'
 import { LedgerController } from './ledger.controller.js'
 import { LedgerVerificationService } from './ledger-verification.service.js'
+import { PafService } from './paf.service.js'
 
 // TenantAuthGuard dépend d'ApiKeyService (AuthModule) ET de SessionService
 // (UsersModule) — les deux imports sont requis (calqué sur InvoicesModule,
@@ -14,6 +15,6 @@ import { LedgerVerificationService } from './ledger-verification.service.js'
 @Module({
   imports: [AuthModule, UsersModule, InvoicesModule],
   controllers: [LedgerController],
-  providers: [LedgerVerificationService, TenantAuthGuard],
+  providers: [LedgerVerificationService, PafService, TenantAuthGuard],
 })
 export class LedgerModule {}
