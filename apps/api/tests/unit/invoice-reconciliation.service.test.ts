@@ -79,29 +79,27 @@ describe('InvoiceReconciliationService.sweepStuckGeneration', () => {
     expect(n).toBe(1)
   })
 
-  it.each([
-    'waiting',
-    'active',
-    'delayed',
-    'completed',
-  ])('never duplicates a still-live job (state: %s) — no eviction, no re-enqueue', async (state) => {
-    const rows = [{ tenant_id: 't1', id: 'i1' }]
-    const pool = { query: vi.fn().mockResolvedValue({ rows }) }
-    const queue = {
-      getJobState: vi.fn().mockResolvedValue(state),
-      removeJob: vi.fn(),
-      enqueue: vi.fn(),
-    }
-    const service = new InvoiceReconciliationService(
-      pool as never,
-      queue as never,
-      fakeConfig(300_000, 900_000),
-    )
+  it.each(['waiting', 'active', 'delayed', 'completed'])(
+    'never duplicates a still-live job (state: %s) — no eviction, no re-enqueue',
+    async (state) => {
+      const rows = [{ tenant_id: 't1', id: 'i1' }]
+      const pool = { query: vi.fn().mockResolvedValue({ rows }) }
+      const queue = {
+        getJobState: vi.fn().mockResolvedValue(state),
+        removeJob: vi.fn(),
+        enqueue: vi.fn(),
+      }
+      const service = new InvoiceReconciliationService(
+        pool as never,
+        queue as never,
+        fakeConfig(300_000, 900_000),
+      )
 
-    const n = await service.sweepStuckGeneration()
+      const n = await service.sweepStuckGeneration()
 
-    expect(queue.removeJob).not.toHaveBeenCalled()
-    expect(queue.enqueue).not.toHaveBeenCalled()
-    expect(n).toBe(0)
-  })
+      expect(queue.removeJob).not.toHaveBeenCalled()
+      expect(queue.enqueue).not.toHaveBeenCalled()
+      expect(n).toBe(0)
+    },
+  )
 })

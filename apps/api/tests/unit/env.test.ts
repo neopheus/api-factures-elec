@@ -45,13 +45,13 @@ describe('validateEnv', () => {
     expect(env.TRUST_PROXY).toBe(0)
   })
 
-  it.each([
-    '0',
-    '2',
-  ])('accepts a non-negative integer TRUST_PROXY (%s)', (v) => {
-    const env = validateEnv({ ...base, TRUST_PROXY: v })
-    expect(env.TRUST_PROXY).toBe(Number(v))
-  })
+  it.each(['0', '2'])(
+    'accepts a non-negative integer TRUST_PROXY (%s)',
+    (v) => {
+      const env = validateEnv({ ...base, TRUST_PROXY: v })
+      expect(env.TRUST_PROXY).toBe(Number(v))
+    },
+  )
 
   it.each(['-1', '1.5', 'abc'])('rejects an invalid TRUST_PROXY (%s)', (v) => {
     expect(() => validateEnv({ ...base, TRUST_PROXY: v })).toThrowError(

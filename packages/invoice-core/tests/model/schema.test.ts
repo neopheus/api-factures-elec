@@ -141,15 +141,12 @@ describe('parseInvoiceInput', () => {
 })
 
 describe('businessProcessTypeSchema', () => {
-  it.each([
-    'B1',
-    'S1',
-    'M1',
-    'S5',
-    'S7',
-  ] as const)('accepts the G1.02 code %s', (code) => {
-    expect(businessProcessTypeSchema.parse(code)).toBe(code)
-  })
+  it.each(['B1', 'S1', 'M1', 'S5', 'S7'] as const)(
+    'accepts the G1.02 code %s',
+    (code) => {
+      expect(businessProcessTypeSchema.parse(code)).toBe(code)
+    },
+  )
 
   it('rejects a code outside the G1.02 nomenclature', () => {
     expect(() => businessProcessTypeSchema.parse('X1')).toThrow()

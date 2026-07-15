@@ -90,14 +90,12 @@ describe('lifecycle-status (CDV state machine)', () => {
   // d'Object.prototype seraient (à tort) reconnus comme des slugs valides,
   // faussant silencieusement canTransition/statusByCode en aval
   // (STATUS_META['toString'].code === undefined).
-  it.each([
-    'toString',
-    'constructor',
-    'hasOwnProperty',
-    'valueOf',
-  ])('rejects prototype-chain property %s as an unknown status', (name) => {
-    expect(isLifecycleStatus(name)).toBe(false)
-  })
+  it.each(['toString', 'constructor', 'hasOwnProperty', 'valueOf'])(
+    'rejects prototype-chain property %s as an unknown status',
+    (name) => {
+      expect(isLifecycleStatus(name)).toBe(false)
+    },
+  )
 
   // A7 (amendement contrôleur) : le modèle monotone autorise explicitement
   // 212 (Encaissée) → 213 (Rejetée) — une facture encaissée peut être
