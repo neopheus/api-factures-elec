@@ -23,6 +23,11 @@ jobs:
       - run: pnpm run audit:ci
       - run: pnpm outdated -r    # échoue si une dépendance n'est pas en dernière stable
       - run: pnpm lint
-      - run: pnpm build        # invoice-core (tsc) → apps/api (swc) → apps/web (next build), ordre topologique pnpm
-      - run: pnpm typecheck     # apps/api tsgo ; apps/web repli typescript 5.9.x local (next build fait autorité sur les types de routes)
-      - run: pnpm test          # invoice-core + apps/api (Docker/Testcontainers) + apps/web (jsdom, sans Docker)
+      - run: pnpm build        # invoice-core (tsc) → apps/api (swc, y compris src/worker-main.ts) → apps/web (next build), ordre topologique pnpm
+      - run: pnpm typecheck     # apps/api tsgo (couvre worker-main.ts) ; apps/web repli typescript 5.9.x local (next build fait autorité sur les types de routes)
+      # Testcontainers démarre Postgres ET Redis (Docker natif du runner ubuntu-latest,
+      # aucun service `redis:`/`postgres:` de job GitHub requis — cycle de vie du
+      # conteneur géré par le test lui-même). Le worker BullMQ n'est PAS démarré comme
+      # process CI séparé : les e2e le bootent en-process (helpers/worker.ts →
+      # createTestWorker) dans le même processus Vitest que l'API testée.
+      - run: pnpm test          # invoice-core + apps/api (Testcontainers Postgres + Redis) + apps/web (jsdom)
