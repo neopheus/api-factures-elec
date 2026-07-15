@@ -205,10 +205,18 @@ Conventions du projet :
   `"1000.00"`).
 - Identifiants de code en anglais, messages de commit en français.
 - **Dépendances toujours en dernière version stable, 0 vulnérabilité** :
-  `pnpm outdated -r` doit rester vierge et `pnpm audit` ne doit remonter
-  **aucune** vulnérabilité (toutes sévérités) — les deux sont des étapes
-  **bloquantes** de la CI (`.github/workflows/ci.yml`), au même titre que
-  lint/build/typecheck/test. Deux overrides tolérés à ce jour
+  `pnpm outdated -r` doit rester vierge et `pnpm run audit:ci` ne doit
+  remonter **aucune** vulnérabilité applicable (toutes sévérités) — les deux
+  sont des étapes **bloquantes** de la CI (`.github/workflows/ci.yml`), au
+  même titre que lint/build/typecheck/test. `audit:ci` (`scripts/audit.mjs`)
+  remplace `pnpm audit` : ce dernier interroge l'ancien endpoint npm
+  `/-/npm/v1/security/audits`, **retiré** par npm (l'outil est cassé, pas nos
+  dépendances) — sur pnpm 10.12.1 comme sur pnpm 11.x. Le script interroge
+  directement le nouvel endpoint officiel `POST
+  /-/npm/v1/security/advisories/bulk` sur l'arbre de dépendances résolu
+  (`pnpm ls -r --depth Infinity --json`, transitives comprises), donc les
+  overrides `pnpm.overrides` ci-dessous sont naturellement pris en compte.
+  Deux overrides tolérés à ce jour
   (`pnpm.overrides` racine) : `@esbuild-kit/core-utils>esbuild` épinglé à
   `^0.25.0`, nécessaire à la chaîne de dépendances de `drizzle-kit` ; et
   `postcss` épinglé à `8.5.19` (CVE-2026-41305, `next@16.2.10` épingle en
@@ -219,7 +227,7 @@ Conventions du projet :
   (verdict D6, cf. `apps/web/README.md`) est neutralisé par
   `pnpm.updateConfig.ignoreDependencies: ["typescript"]` — le pin racine
   `typescript@7.0.2` (tsgo) n'est, lui, jamais ignoré.
-- CI GitHub Actions bloquante : `pnpm audit`, `pnpm outdated -r`, lint,
+- CI GitHub Actions bloquante : `pnpm run audit:ci`, `pnpm outdated -r`, lint,
   build, typecheck, tests — `invoice-core` + `apps/api` (ce dernier via
   Testcontainers Postgres, Docker natif du runner) + `apps/web` (jsdom, sans
   Docker), les trois balayés par `pnpm -r`.

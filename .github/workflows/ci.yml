@@ -15,7 +15,12 @@ jobs:
           cache: pnpm
       - run: sudo apt-get update && sudo apt-get install -y libxml2-utils
       - run: pnpm install --frozen-lockfile
-      - run: pnpm audit          # 0 vulnérabilité exigé (toutes sévérités)
+      # `pnpm audit` interroge l'ancien endpoint npm /-/npm/v1/security/audits,
+      # retiré par npm (4xx systématique, outil cassé — pas nos dépendances).
+      # On interroge donc directement le nouvel endpoint officiel utilisé par
+      # npm (bulk advisories) via scripts/audit.mjs. 0 vulnérabilité exigé
+      # (toutes sévérités) sur l'arbre résolu (overrides pnpm compris).
+      - run: pnpm run audit:ci
       - run: pnpm outdated -r    # échoue si une dépendance n'est pas en dernière stable
       - run: pnpm lint
       - run: pnpm build        # invoice-core (tsc) → apps/api (swc) → apps/web (next build), ordre topologique pnpm
