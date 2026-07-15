@@ -128,4 +128,21 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/RECONCILIATION_GENERATING_STALE_MS/)
   })
+
+  it('applies archive defaults', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.ARCHIVE_DRIVER).toBe('local')
+    expect(env.ARCHIVE_LOCAL_DIR).toBe('./var/archive')
+  })
+
+  it('rejects an unknown ARCHIVE_DRIVER', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ARCHIVE_DRIVER: 'ftp',
+      }),
+    ).toThrow(/ARCHIVE_DRIVER/)
+  })
 })

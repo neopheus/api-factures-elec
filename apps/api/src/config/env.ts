@@ -86,6 +86,11 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(900_000),
+  // ── Archivage à valeur probante (D5) ─────────────────────────────────────
+  // 'local' = LocalFilesystemArchiveStore (write-once, dev/test) ; 's3' =
+  // adaptateur object-lock Scaleway ACTIVÉ AU DÉPLOIEMENT (non fourni en 2.2).
+  ARCHIVE_DRIVER: z.enum(['local', 's3']).default('local'),
+  ARCHIVE_LOCAL_DIR: z.string().default('./var/archive'),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
