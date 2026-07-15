@@ -1,6 +1,7 @@
 import type { Invoice } from '@factelec/invoice-core'
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
   boolean,
   check,
   customType,
@@ -11,6 +12,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
@@ -167,10 +169,19 @@ export const invoiceStatusEvents = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // ── Scellement chaîné (imposé par le trigger seal_status_event, D1/D2) ──
+    // Les défauts ci-dessous sont des PLACEHOLDERS : le trigger BEFORE INSERT
+    // recalcule TOUJOURS seq/prev_hash/hash. Ils existent uniquement pour rendre
+    // ces colonnes NOT NULL optionnelles à l'insert (repository inchangé).
+    seq: bigint('seq', { mode: 'number' }).notNull().default(0),
+    prevHash: bytea('prev_hash').notNull().default(sql`'\\x'::bytea`),
+    hash: bytea('hash').notNull().default(sql`'\\x'::bytea`),
   },
   (t) => [
     index('invoice_status_events_invoice_idx').on(t.invoiceId, t.createdAt),
     index('invoice_status_events_tenant_idx').on(t.tenantId),
+    unique('invoice_status_events_tenant_seq_unique').on(t.tenantId, t.seq),
+    unique('invoice_status_events_tenant_hash_unique').on(t.tenantId, t.hash),
   ],
 )
 

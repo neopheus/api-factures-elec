@@ -78,6 +78,20 @@
       "when": 1784102784846,
       "tag": "0010_ledger_fk_restrict",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784103392778,
+      "tag": "0011_ledger_seal_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1784103500000,
+      "tag": "0012_ledger_seal_trigger",
+      "breakpoints": true
     }
   ]
 }
