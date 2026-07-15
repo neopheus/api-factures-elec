@@ -8,3 +8,4 @@ var/
 .env.*
 !.env.example
 *.sef.json
+.claude/settings.local.json
