@@ -34,6 +34,23 @@ export interface StatusEvent {
   createdAt: Date
 }
 
+// Événement SCELLÉ (Task 4) — miroir des colonnes de scellement chaîné
+// (seal_status_event, migration 0012) : consommé par LedgerVerificationService
+// pour recalculer/comparer la chaîne. Identité probative = (tenant_id, seq) ;
+// `id` (PK surrogate) reste hors périmètre probatoire, volontairement absent
+// d'ici (les appelants ne doivent jamais référencer un événement par `id`).
+export interface SealedEvent {
+  seq: number
+  invoiceId: string
+  fromStatus: string | null
+  toStatus: string
+  actor: string
+  reason: string | null
+  createdAt: Date
+  prevHash: Buffer
+  hash: Buffer
+}
+
 @Injectable()
 export class InvoicesRepository {
   constructor(private readonly tenant: TenantContextService) {}
@@ -222,6 +239,61 @@ export class InvoicesRepository {
         .from(invoiceStatusEvents)
         .where(eq(invoiceStatusEvents.invoiceId, invoiceId))
         .orderBy(asc(invoiceStatusEvents.createdAt))
+    })
+  }
+
+  // Lecture sous RLS des événements scellés d'UNE facture, triés par seq
+  // croissant — support du self-check par-facture (LedgerVerificationService
+  // .verifyInvoiceEvents). `prev_hash`/`hash` (bytea) reviennent en `Buffer`
+  // via pg (customType `bytea`) ; `seq` (bigint mode `number`) revient en
+  // `number`.
+  async loadSealedEventsByInvoice(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<SealedEvent[]> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          seq: invoiceStatusEvents.seq,
+          invoiceId: invoiceStatusEvents.invoiceId,
+          fromStatus: invoiceStatusEvents.fromStatus,
+          toStatus: invoiceStatusEvents.toStatus,
+          actor: invoiceStatusEvents.actor,
+          reason: invoiceStatusEvents.reason,
+          createdAt: invoiceStatusEvents.createdAt,
+          prevHash: invoiceStatusEvents.prevHash,
+          hash: invoiceStatusEvents.hash,
+        })
+        .from(invoiceStatusEvents)
+        .where(eq(invoiceStatusEvents.invoiceId, invoiceId))
+        .orderBy(asc(invoiceStatusEvents.seq))
+      return rows as SealedEvent[]
+    })
+  }
+
+  // Lecture sous RLS de TOUS les événements scellés du tenant, triés par seq
+  // croissant — support de la vérification de chaîne complète
+  // (LedgerVerificationService.verifyTenantChain : genesis, contiguïté,
+  // linkage, hash). O(n) sur le nombre d'événements du tenant ; acceptable
+  // pour un endpoint d'audit (pas un hot path) — une pagination/borne pourra
+  // être ajoutée si un tenant devient très volumineux (différé).
+  async loadSealedEventsByTenant(tenantId: string): Promise<SealedEvent[]> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          seq: invoiceStatusEvents.seq,
+          invoiceId: invoiceStatusEvents.invoiceId,
+          fromStatus: invoiceStatusEvents.fromStatus,
+          toStatus: invoiceStatusEvents.toStatus,
+          actor: invoiceStatusEvents.actor,
+          reason: invoiceStatusEvents.reason,
+          createdAt: invoiceStatusEvents.createdAt,
+          prevHash: invoiceStatusEvents.prevHash,
+          hash: invoiceStatusEvents.hash,
+        })
+        .from(invoiceStatusEvents)
+        .orderBy(asc(invoiceStatusEvents.seq))
+      return rows as SealedEvent[]
     })
   }
 

@@ -19,5 +19,8 @@ import { LifecycleService } from './lifecycle.service.js'
     TenantAuthGuard,
     RolesGuard,
   ],
+  // InvoicesRepository exporté pour LedgerModule (Task 4 : lecture des
+  // événements scellés sous RLS, partagée avec le journal probatoire).
+  exports: [InvoicesRepository],
 })
 export class InvoicesModule {}
