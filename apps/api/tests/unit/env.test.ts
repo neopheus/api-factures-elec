@@ -177,4 +177,46 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/ARCHIVE_RETRY_EVERY_MS/)
   })
+
+  it('applies e-reporting Flux 10 defaults', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.EREPORTING_TRANSMISSION_DRIVER).toBe('local')
+    expect(env.EREPORTING_LOCAL_DIR).toBe('./var/ereporting')
+    expect(env.EREPORTING_PA_ID).toBe('PA00')
+    expect(env.EREPORTING_PA_SCHEME_ID).toBe('0238')
+    expect(env.EREPORTING_PA_NAME).toBe('Factelec PA')
+    expect(env.EREPORTING_SWEEP_EVERY_MS).toBe(3_600_000)
+  })
+
+  it('accepts an override of EREPORTING_TRANSMISSION_DRIVER and EREPORTING_PA_*', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+      EREPORTING_TRANSMISSION_DRIVER: 'sftp',
+      EREPORTING_PA_ID: 'PA42',
+      EREPORTING_PA_NAME: 'Ma PA',
+    })
+    expect(env.EREPORTING_TRANSMISSION_DRIVER).toBe('sftp')
+    expect(env.EREPORTING_PA_ID).toBe('PA42')
+    expect(env.EREPORTING_PA_NAME).toBe('Ma PA')
+  })
+
+  it('rejects an unknown EREPORTING_TRANSMISSION_DRIVER', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        EREPORTING_TRANSMISSION_DRIVER: 'ftp',
+      }),
+    ).toThrow(/EREPORTING_TRANSMISSION_DRIVER/)
+  })
+
+  it('rejects a non-positive EREPORTING_SWEEP_EVERY_MS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        EREPORTING_SWEEP_EVERY_MS: '0',
+      }),
+    ).toThrow(/EREPORTING_SWEEP_EVERY_MS/)
+  })
 })
