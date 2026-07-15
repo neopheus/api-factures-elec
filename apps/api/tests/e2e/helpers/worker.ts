@@ -10,6 +10,13 @@ import {
 } from '../../../src/archive/archive-store.port.js'
 import { APP_POOL, createPool } from '../../../src/db/client.js'
 import {
+  FLUX10_TRANSMISSION,
+  type Flux10TransmissionPort,
+  type TransmissionStatus,
+  type TransmitPayload,
+  type TransmitResult,
+} from '../../../src/ereporting/flux10-transmission.port.js'
+import {
   INVOICE_FORMAT_GENERATOR,
   type InvoiceFormatGenerator,
 } from '../../../src/invoices/format-generator.port.js'
@@ -54,16 +61,50 @@ class InMemoryArchiveStore implements ArchiveStore {
   }
 }
 
+// Sink de transmission Flux 10 EN MÉMOIRE (hermétique, motif
+// InMemoryArchiveStore ci-dessus) : le WorkerModule câble EreportingTransmission
+// Module (Task 8), qui — sans override — construirait un
+// LocalFilesystemTransmissionStore écrivant dans ./var/ereporting (driver
+// 'local' par défaut, EREPORTING_TRANSMISSION_DRIVER). Ce sink garde le XML
+// en RAM, fidèle au contrat write-once (rejeu même transmissionRef -> même
+// trackingId, jamais d'écrasement) mais sans effet de bord FS.
+class InMemoryTransmissionSink implements Flux10TransmissionPort {
+  private readonly store = new Map<string, string>()
+
+  async transmit(payload: TransmitPayload): Promise<TransmitResult> {
+    const key = `${payload.tenantId}/${payload.fluxKind}/${payload.transmissionRef}`
+    const existing = this.store.get(key)
+    if (existing === undefined) this.store.set(key, payload.xml)
+    const xml = existing ?? payload.xml // write-once : jamais le contenu rejoué
+    return {
+      trackingId: createHash('sha256').update(xml, 'utf8').digest('hex'),
+      location: `mem://${key}`,
+    }
+  }
+
+  status(trackingId: string): Promise<TransmissionStatus> {
+    return Promise.resolve({ trackingId, outcome: 'pending' })
+  }
+}
+
 // Boote le VRAI WorkerModule en-process contre le Postgres + Redis de test
 // (overrides du pool applicatif et de la connexion Redis, comme createTestApp).
 // opts.generator : stub de génération (ex. qui throw) pour tester les échecs.
 // opts.archiveStore : override d'ARCHIVE_STORE (Task 6) — répertoire temporaire
 // réel OU stub qui throw, pour tester l'archivage. Par défaut : store en mémoire
 // hermétique (ci-dessus) → aucun test n'écrit dans ./var/archive sans le demander.
+// opts.transmissionPort : override de FLUX10_TRANSMISSION (Task 8) — stub
+// d'échec/de comptage d'appels pour prouver qu'un chemin (à blanc, XML
+// invalide) n'appelle JAMAIS le port. Par défaut : sink en mémoire hermétique
+// (ci-dessus) → aucun test n'écrit dans ./var/ereporting sans le demander.
 export async function createTestWorker(
   appUrl: string,
   redis: { host: string; port: number },
-  opts?: { generator?: InvoiceFormatGenerator; archiveStore?: ArchiveStore },
+  opts?: {
+    generator?: InvoiceFormatGenerator
+    archiveStore?: ArchiveStore
+    transmissionPort?: Flux10TransmissionPort
+  },
 ): Promise<INestApplicationContext> {
   process.env.DATABASE_URL = appUrl
   process.env.LOG_LEVEL = 'silent'
@@ -74,6 +115,8 @@ export async function createTestWorker(
     .useValue({ host: redis.host, port: redis.port })
     .overrideProvider(ARCHIVE_STORE)
     .useValue(opts?.archiveStore ?? new InMemoryArchiveStore())
+    .overrideProvider(FLUX10_TRANSMISSION)
+    .useValue(opts?.transmissionPort ?? new InMemoryTransmissionSink())
   if (opts?.generator) {
     builder.overrideProvider(INVOICE_FORMAT_GENERATOR).useValue(opts.generator)
   }

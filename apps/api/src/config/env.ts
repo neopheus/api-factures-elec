@@ -116,6 +116,16 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(3_600_000),
+  // Nombre de tentatives d'un job de génération e-reporting (Task 8) avant
+  // passage en `failed` — distingue une erreur OPÉRATIONNELLE (xmllint
+  // absent, DB/port transitoire) d'un rejet sémantique REJ_SEMAN, qui ne
+  // throw jamais et n'est donc jamais rejoué.
+  EREPORTING_GENERATION_JOB_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10)
+    .default(3),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

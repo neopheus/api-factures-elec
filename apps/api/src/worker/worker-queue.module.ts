@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import type { ConnectionOptions } from 'bullmq'
 import type { EnvConfig } from '../config/env.js'
+import { ereportingGenerationJobOptions } from '../queue/ereporting-generation.job-options.js'
 import { invoiceGenerationJobOptions } from '../queue/invoice-generation.job-options.js'
 import { InvoiceGenerationQueue } from '../queue/invoice-generation.queue.js'
 import {
@@ -49,16 +50,22 @@ import {
       }),
     }),
     BullModule.registerQueue({ name: MAINTENANCE_QUEUE }),
-    // `ereporting-generation` (Task 7) : enregistrée ICI côté worker car
-    // c'est le PRODUCTEUR (EreportingSweepService, `@InjectQueue`) — pas de
-    // politique de job dédiée (jobId déterministe posé explicitement par le
-    // sweep, cf. son commentaire). AUCUN `@Processor(EREPORTING_GENERATION_
-    // QUEUE)` n'existe encore (arrive en Task 8) : `registerQueue` ne
-    // l'exige pas — un Worker BullMQ ne démarre que pour une classe
-    // décorée `@Processor`, la Queue (producteur) est indépendante de tout
-    // consommateur. Les jobs posés ici restent simplement en attente dans
-    // Redis jusqu'à ce que Task 8 branche son processor.
-    BullModule.registerQueue({ name: EREPORTING_GENERATION_QUEUE }),
+    // `ereporting-generation` (Task 7, `defaultJobOptions` câblés Task 8) :
+    // enregistrée ICI côté worker car c'est le PRODUCTEUR (EreportingSweep
+    // Service, `@InjectQueue`) ET, depuis Task 8, le CONSOMMATEUR
+    // (EreportingGenerationProcessor, `@Processor`) — jobId déterministe posé
+    // explicitement par le sweep (dédup, cf. son commentaire) ;
+    // `ereportingGenerationJobOptions` fournit attempts/backoff/rétention
+    // (SEULE source de vérité, motif invoice-generation.job-options.ts) —
+    // sans quoi un `throw` opérationnel du processeur (XsdToolingError)
+    // ne serait JAMAIS rejoué (défaut BullMQ nu : 1 tentative).
+    BullModule.registerQueueAsync({
+      name: EREPORTING_GENERATION_QUEUE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<EnvConfig, true>) => ({
+        defaultJobOptions: ereportingGenerationJobOptions(config),
+      }),
+    }),
   ],
   providers: [InvoiceGenerationQueue],
   exports: [BullModule, InvoiceGenerationQueue],

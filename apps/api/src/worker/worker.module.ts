@@ -3,12 +3,16 @@ import { ArchiveModule } from '../archive/archive.module.js'
 import { ArchiveService } from '../archive/archive.service.js'
 import { AppConfigModule } from '../config/config.module.js'
 import { DbModule } from '../db/db.module.js'
+import { EreportingRepository } from '../ereporting/ereporting.repository.js'
+import { EreportingGenerationService } from '../ereporting/ereporting-generation.service.js'
+import { EreportingTransmissionModule } from '../ereporting/ereporting-transmission.module.js'
 import { FormatGenerationService } from '../invoices/format-generation.service.js'
 import { INVOICE_FORMAT_GENERATOR } from '../invoices/format-generator.port.js'
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
 import { ArchiveRetryScheduler } from './archive-retry.scheduler.js'
 import { ArchiveRetryService } from './archive-retry.service.js'
 import { EreportingScheduler } from './ereporting.scheduler.js'
+import { EreportingGenerationProcessor } from './ereporting-generation.processor.js'
 import { EreportingSweepService } from './ereporting-sweep.service.js'
 import { InvoiceGenerationProcessor } from './invoice-generation.processor.js'
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
@@ -25,7 +29,13 @@ import { WorkerQueueModule } from './worker-queue.module.js'
 // fichier et dans queue.module.ts — le worker possède sa PROPRE connexion
 // BullMQ eager, sans les flags skip* du producteur HTTP.
 @Module({
-  imports: [AppConfigModule, DbModule, WorkerQueueModule, ArchiveModule],
+  imports: [
+    AppConfigModule,
+    DbModule,
+    WorkerQueueModule,
+    ArchiveModule,
+    EreportingTransmissionModule,
+  ],
   providers: [
     InvoicesRepository,
     { provide: INVOICE_FORMAT_GENERATOR, useClass: FormatGenerationService },
@@ -40,6 +50,9 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     ArchiveRetryScheduler,
     EreportingSweepService,
     EreportingScheduler,
+    EreportingRepository,
+    EreportingGenerationService,
+    EreportingGenerationProcessor,
   ],
 })
 export class WorkerModule {}

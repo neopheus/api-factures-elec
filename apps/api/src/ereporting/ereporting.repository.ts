@@ -47,6 +47,16 @@ export interface NewTransmission {
   periodEnd: string
   invoiceCount: number
   xml: string | null
+  // Rejet sémantique LOCAL pré-transmission (Task 8, injection revue #6 —
+  // XML XSD-invalide, motif REJ_SEMAN). Quand fourni, la ligne naît
+  // DIRECTEMENT `rejetee` (fromStatus=null -> toStatus='rejetee') AU LIEU de
+  // `prepared` — PAS une transition `prepared`→`rejetee` (assertTransition,
+  // Task 4, l'interdit délibérément : seul le PPF, via `transmitted`→
+  // `rejetee`, porte un 301 officiel, Task 9). L'événement GENÈSE
+  // (fromStatus=null) échappe à assertTransition ici comme pour 'prepared'
+  // ci-dessous (c'est une création, pas une transition). Omis (défaut) :
+  // comportement STRICTEMENT inchangé (statut initial 'prepared').
+  rejectMotif?: RejectMotif
 }
 
 export interface TransmissionSummary {
@@ -108,6 +118,33 @@ export class EreportingRepository {
     })
   }
 
+  // Lecture RLS-scopée d'un déclarant unique (Task 8 : la raison sociale,
+  // TT-14/Issuer.Name, n'est PAS portée par EreportingGenerationJob — payload
+  // minimal, motif 2.1 — le worker la recharge ICI depuis Postgres). `null`
+  // si le déclarant a disparu entre l'enfilement et le traitement (mêmes
+  // moindre-privilège que listDeclarantsByTenant, une seule ligne).
+  async findDeclarant(
+    tenantId: string,
+    id: string,
+  ): Promise<DeclarantSummary | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          id: ereportingDeclarants.id,
+          siren: ereportingDeclarants.siren,
+          name: ereportingDeclarants.name,
+          role: ereportingDeclarants.role,
+          vatRegime: ereportingDeclarants.vatRegime,
+          active: ereportingDeclarants.active,
+          createdAt: ereportingDeclarants.createdAt,
+        })
+        .from(ereportingDeclarants)
+        .where(eq(ereportingDeclarants.id, id))
+        .limit(1)
+      return rows[0] ?? null
+    })
+  }
+
   async listDeclarantsByTenant(tenantId: string): Promise<DeclarantSummary[]> {
     return this.tenant.run(tenantId, async (db) => {
       return db
@@ -140,6 +177,9 @@ export class EreportingRepository {
     row: NewTransmission,
   ): Promise<{ id: string; created: boolean }> {
     return this.tenant.run(tenantId, async (db) => {
+      const initialStatus: EreportingStatus = row.rejectMotif
+        ? 'rejetee'
+        : 'prepared'
       const inserted = await db
         .insert(ereportingTransmissions)
         .values({
@@ -152,6 +192,7 @@ export class EreportingRepository {
           periodEnd: row.periodEnd,
           invoiceCount: row.invoiceCount,
           xml: row.xml,
+          status: initialStatus,
         })
         .onConflictDoNothing({
           target: [
@@ -169,7 +210,8 @@ export class EreportingRepository {
           tenantId,
           transmissionId: createdRow.id,
           fromStatus: null,
-          toStatus: 'prepared',
+          toStatus: initialStatus,
+          motif: row.rejectMotif ?? null,
           actor: 'platform',
         })
         return { id: createdRow.id, created: true }
@@ -310,6 +352,26 @@ export class EreportingRepository {
         .where(eq(ereportingTransmissions.id, id))
         .limit(1)
       return rows[0]?.xml ?? null
+    })
+  }
+
+  // Statut courant d'une transmission (Task 8, injection revue #4 —
+  // idempotence & reprise) : sur `created:false` (conflit insertTransmission,
+  // rejeu), la VÉRITÉ à consulter pour décider reprise/skip est TOUJOURS en
+  // base (jamais le retour du port, qui ne distingue pas frais/rejeu). `null`
+  // si l'id est inconnu (ne devrait pas arriver juste après un
+  // insertTransmission réussi, mais reste défensif).
+  async findTransmissionStatus(
+    tenantId: string,
+    id: string,
+  ): Promise<EreportingStatus | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ status: ereportingTransmissions.status })
+        .from(ereportingTransmissions)
+        .where(eq(ereportingTransmissions.id, id))
+        .limit(1)
+      return rows[0]?.status ?? null
     })
   }
 
