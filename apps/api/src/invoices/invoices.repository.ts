@@ -376,6 +376,80 @@ export class InvoicesRepository {
     })
   }
 
+  // Recharge les 5 formats persistés (Task 6, archivage) — support du bundle
+  // probatoire (ArchiveService), qui embarque le contenu intégral de chaque
+  // format généré.
+  async loadAllFormats(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<
+    {
+      kind: string
+      contentType: string
+      bodyText: string | null
+      bodyBytes: Buffer | null
+      byteSize: number
+    }[]
+  > {
+    return this.tenant.run(tenantId, async (db) => {
+      return db
+        .select({
+          kind: invoiceFormats.kind,
+          contentType: invoiceFormats.contentType,
+          bodyText: invoiceFormats.bodyText,
+          bodyBytes: invoiceFormats.bodyBytes,
+          byteSize: invoiceFormats.byteSize,
+        })
+        .from(invoiceFormats)
+        .where(eq(invoiceFormats.invoiceId, invoiceId))
+    })
+  }
+
+  // Marque le résultat de l'archivage best-effort (Task 6). `location`/`hash`
+  // omis (ex. passage à `failed`) → effacés (pas d'empreinte stale d'une
+  // tentative précédente).
+  async markArchiveStatus(
+    tenantId: string,
+    invoiceId: string,
+    status: 'pending' | 'archived' | 'failed',
+    location?: string,
+    hash?: string,
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .update(invoices)
+        .set({
+          archiveStatus: status,
+          archiveLocation: location ?? null,
+          archiveHash: hash ?? null,
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, invoiceId))
+    })
+  }
+
+  async findArchiveState(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<{
+    status: string
+    location: string | null
+    hash: string | null
+  } | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          status: invoices.archiveStatus,
+          location: invoices.archiveLocation,
+          hash: invoices.archiveHash,
+        })
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .limit(1)
+      return rows[0] ?? null
+    })
+  }
+
   async findFormat(
     tenantId: string,
     invoiceId: string,

@@ -38,6 +38,17 @@ export const formatKind = pgEnum('format_kind', [
 
 // Cycle de vie CDV — nomenclature DGFiP (cf. src/invoices/lifecycle-status.ts,
 // STATUS_META, source de vérité de l'ordre/labels/codes).
+// Statut d'archivage probatoire (Task 6, 2.2) : `pending` tant que le job de
+// génération n'a pas encore tenté l'archivage best-effort ; `archived` une
+// fois le bundle écrit en WORM (Task 5) ; `failed` si l'écriture a échoué
+// (ré-essayé par la réconciliation, Task 8 — jamais bloquant pour la
+// génération, qui reste `generated`).
+export const archiveStatus = pgEnum('archive_status', [
+  'pending',
+  'archived',
+  'failed',
+])
+
 export const invoiceLifecycleStatus = pgEnum('invoice_lifecycle_status', [
   'deposee',
   'emise',
@@ -101,6 +112,12 @@ export const invoices = pgTable(
     lifecycleStatus: invoiceLifecycleStatus('lifecycle_status')
       .notNull()
       .default('deposee'),
+    // Archivage probatoire best-effort (Task 6) : découplé du statut de
+    // génération ci-dessus — un archivage `failed` ne dégrade jamais une
+    // génération `generated` (formats déjà servis).
+    archiveStatus: archiveStatus('archive_status').notNull().default('pending'),
+    archiveLocation: text('archive_location'),
+    archiveHash: text('archive_hash'),
     canonical: jsonb('canonical').$type<Invoice>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

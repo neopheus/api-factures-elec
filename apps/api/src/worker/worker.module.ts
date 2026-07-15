@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common'
+import { ArchiveModule } from '../archive/archive.module.js'
+import { ArchiveService } from '../archive/archive.service.js'
 import { AppConfigModule } from '../config/config.module.js'
 import { DbModule } from '../db/db.module.js'
 import { FormatGenerationService } from '../invoices/format-generation.service.js'
@@ -19,10 +21,11 @@ import { WorkerQueueModule } from './worker-queue.module.js'
 // fichier et dans queue.module.ts — le worker possède sa PROPRE connexion
 // BullMQ eager, sans les flags skip* du producteur HTTP.
 @Module({
-  imports: [AppConfigModule, DbModule, WorkerQueueModule],
+  imports: [AppConfigModule, DbModule, WorkerQueueModule, ArchiveModule],
   providers: [
     InvoicesRepository,
     { provide: INVOICE_FORMAT_GENERATOR, useClass: FormatGenerationService },
+    ArchiveService,
     InvoiceGenerationProcessor,
     InvoiceReconciliationService,
     MaintenanceProcessor,

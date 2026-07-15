@@ -92,6 +92,13 @@
       "when": 1784103500000,
       "tag": "0012_ledger_seal_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784109434870,
+      "tag": "0013_invoice_archive_status",
+      "breakpoints": true
     }
   ]
 }

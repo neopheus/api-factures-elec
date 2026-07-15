@@ -205,4 +205,85 @@ describe('InvoicesRepository (e2e, Postgres réel)', () => {
       },
     ])
   })
+
+  // ── Task 6 : formats + statut d'archivage ────────────────────────────────
+
+  it('loadAllFormats returns every persisted format for the invoice', async () => {
+    const invoice = buildInvoice({ ...input, number: 'FA-REPO-ARCH-FORMATS' })
+    const { id } = await repo.insertReceived(tenantId, invoice)
+    const formats: GeneratedFormat[] = [
+      {
+        kind: 'ubl',
+        contentType: 'application/xml',
+        bodyText: '<a/>',
+        bodyBytes: null,
+        byteSize: 4,
+      },
+      {
+        kind: 'facturx',
+        contentType: 'application/pdf',
+        bodyText: null,
+        bodyBytes: Buffer.from('PDF'),
+        byteSize: 3,
+      },
+    ]
+    await repo.completeGeneration(tenantId, id, formats)
+
+    const loaded = await repo.loadAllFormats(tenantId, id)
+
+    expect(loaded).toHaveLength(2)
+    const ubl = loaded.find((f) => f.kind === 'ubl')
+    expect(ubl).toMatchObject({
+      contentType: 'application/xml',
+      bodyText: '<a/>',
+      bodyBytes: null,
+      byteSize: 4,
+    })
+    const facturx = loaded.find((f) => f.kind === 'facturx')
+    expect(facturx?.bodyBytes).toEqual(Buffer.from('PDF'))
+  })
+
+  it('findArchiveState defaults to pending, then reflects markArchiveStatus', async () => {
+    const invoice = buildInvoice({ ...input, number: 'FA-REPO-ARCH-STATE' })
+    const { id } = await repo.insertReceived(tenantId, invoice)
+
+    expect(await repo.findArchiveState(tenantId, id)).toEqual({
+      status: 'pending',
+      location: null,
+      hash: null,
+    })
+
+    await repo.markArchiveStatus(
+      tenantId,
+      id,
+      'archived',
+      `${tenantId}/${id}/v1.bundle.json`,
+      'deadbeef',
+    )
+
+    expect(await repo.findArchiveState(tenantId, id)).toEqual({
+      status: 'archived',
+      location: `${tenantId}/${id}/v1.bundle.json`,
+      hash: 'deadbeef',
+    })
+
+    // Repasser à `failed` sans location/hash efface les valeurs précédentes
+    // (best-effort : un échec ne doit pas laisser trainer une empreinte stale).
+    await repo.markArchiveStatus(tenantId, id, 'failed')
+
+    expect(await repo.findArchiveState(tenantId, id)).toEqual({
+      status: 'failed',
+      location: null,
+      hash: null,
+    })
+  })
+
+  it('findArchiveState returns null for an unknown invoice', async () => {
+    expect(
+      await repo.findArchiveState(
+        tenantId,
+        '00000000-0000-0000-0000-000000000000',
+      ),
+    ).toBeNull()
+  })
 })
