@@ -1,7 +1,12 @@
 import type { Invoice } from '@factelec/invoice-core'
 import { Injectable } from '@nestjs/common'
 import { and, desc, eq, lt, or, sql } from 'drizzle-orm'
-import { invoiceFormats, type invoiceStatus, invoices } from '../db/schema.js'
+import {
+  invoiceFormats,
+  type invoiceStatus,
+  invoiceStatusEvents,
+  invoices,
+} from '../db/schema.js'
 // biome-ignore lint/style/useImportType: TenantContextService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { TenantContextService } from '../db/tenant-context.service.js'
 import { decodeCursor, encodeCursor } from './cursor.js'
@@ -40,9 +45,18 @@ export class InvoicesRepository {
           currency: invoice.currency,
           status: 'received',
           canonical: invoice,
+          // lifecycle_status : défaut 'deposee' (colonne).
         })
         .returning({ id: invoices.id })
       if (!row) throw new Error('insert into invoices returned no row')
+      // Journal append-only : événement initial de dépôt (Déposée / code 200).
+      await db.insert(invoiceStatusEvents).values({
+        tenantId,
+        invoiceId: row.id,
+        fromStatus: null,
+        toStatus: 'deposee',
+        actor: 'platform',
+      })
       return { id: row.id }
     })
   }

@@ -50,6 +50,20 @@
       "when": 1784069000000,
       "tag": "0006_stuck_generation_reconciliation",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784073821606,
+      "tag": "0007_invoice_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784073900000,
+      "tag": "0008_lifecycle_rls",
+      "breakpoints": true
     }
   ]
 }
