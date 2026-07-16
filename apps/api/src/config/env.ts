@@ -158,6 +158,40 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(300_000),
+  // ── CDV Flux 6 / CDAR — transmission (D1/D4/D7) ──────────────────────────
+  // 'local' = LocalFilesystemCdvStore (write-once, dev/test) ;
+  // sftp/as2/as4/as4-peppol/api = adaptateurs réels (auth transport, D1/D7)
+  // ACTIVÉS AU DÉPLOIEMENT (non fournis en 3.1).
+  CDV_TRANSMISSION_DRIVER: z
+    .enum(['local', 'sftp', 'as2', 'as4', 'as4-peppol', 'api'])
+    .default('local'),
+  CDV_LOCAL_DIR: z.string().default('./var/cdv'),
+  // Périodicité de l'ordonnanceur borné (discipline 24h, §3.6.6) — horaire,
+  // très inférieur au délai réglementaire (Task 7).
+  CDV_SWEEP_EVERY_MS: z.coerce.number().int().positive().default(3_600_000),
+  // Fenêtre de rattrapage bornée du sweep (48h = 2× le SLA 24h, D8) — passée
+  // à `find_cdv_transmissions_due(p_since)` (Task 4/7).
+  CDV_TRANSMISSION_LOOKBACK_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(172_800_000),
+  // Nombre de tentatives d'un job de transmission CDV (Task 7) avant passage
+  // en `failed` — distingue une erreur OPÉRATIONNELLE (port transitoire)
+  // d'un rejet fonctionnel (601 / F6 invalide), qui ne throw jamais et n'est
+  // donc jamais rejoué.
+  CDV_TRANSMISSION_JOB_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10)
+    .default(3),
+  // Périodicité de la reprise des transmissions `parked` (Task 7, miroir
+  // ARCHIVE_RETRY_EVERY_MS / ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS).
+  CDV_STUCK_RETRY_EVERY_MS: z.coerce.number().int().positive().default(300_000),
+  // Matricule ICD 0238 du PA émetteur (déploiement — miroir EREPORTING_PA_ID) :
+  // identifie l'émetteur du F6 (`senderMatricule`, Task 2/6).
+  CDV_PA_MATRICULE: z.string().default('0000'),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

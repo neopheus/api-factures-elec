@@ -275,4 +275,72 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS/)
   })
+
+  it('applies CDV Flux 6/CDAR transmission defaults', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.CDV_TRANSMISSION_DRIVER).toBe('local')
+    expect(env.CDV_LOCAL_DIR).toBe('./var/cdv')
+    expect(env.CDV_SWEEP_EVERY_MS).toBe(3_600_000)
+    expect(env.CDV_TRANSMISSION_LOOKBACK_MS).toBe(172_800_000)
+    expect(env.CDV_TRANSMISSION_JOB_ATTEMPTS).toBe(3)
+    expect(env.CDV_STUCK_RETRY_EVERY_MS).toBe(300_000)
+    expect(env.CDV_PA_MATRICULE).toBe('0000')
+  })
+
+  it('accepts an override of CDV_TRANSMISSION_DRIVER and CDV_PA_MATRICULE', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+      CDV_TRANSMISSION_DRIVER: 'as4-peppol',
+      CDV_PA_MATRICULE: '1234',
+    })
+    expect(env.CDV_TRANSMISSION_DRIVER).toBe('as4-peppol')
+    expect(env.CDV_PA_MATRICULE).toBe('1234')
+  })
+
+  it('rejects an unknown CDV_TRANSMISSION_DRIVER', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        CDV_TRANSMISSION_DRIVER: 'ftp',
+      }),
+    ).toThrow(/CDV_TRANSMISSION_DRIVER/)
+  })
+
+  it('rejects a non-positive CDV_SWEEP_EVERY_MS/CDV_TRANSMISSION_LOOKBACK_MS/CDV_TRANSMISSION_JOB_ATTEMPTS/CDV_STUCK_RETRY_EVERY_MS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        CDV_SWEEP_EVERY_MS: '0',
+      }),
+    ).toThrow(/CDV_SWEEP_EVERY_MS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        CDV_TRANSMISSION_LOOKBACK_MS: '0',
+      }),
+    ).toThrow(/CDV_TRANSMISSION_LOOKBACK_MS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        CDV_TRANSMISSION_JOB_ATTEMPTS: '0',
+      }),
+    ).toThrow(/CDV_TRANSMISSION_JOB_ATTEMPTS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        CDV_STUCK_RETRY_EVERY_MS: '0',
+      }),
+    ).toThrow(/CDV_STUCK_RETRY_EVERY_MS/)
+  })
+
+  it('rejects a CDV_TRANSMISSION_JOB_ATTEMPTS above the cap (10)', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        CDV_TRANSMISSION_JOB_ATTEMPTS: '11',
+      }),
+    ).toThrow(/CDV_TRANSMISSION_JOB_ATTEMPTS/)
+  })
 })
