@@ -111,12 +111,23 @@ export interface Flux10PaymentInvoice {
   subtotals: Flux10PaymentSubTotal[] // TG-36, 1..n
 }
 
-// TB-3 : PaymentsReport (payment.xsd) — supporté structurellement (D10) ;
-// l'agrégation réelle des encaissements est différée (aucune source aujourd'hui).
+// TG-37/TG-38/TG-39 : forme agrégée B2C (10.4) — un enregistrement par date
+// de paiement, SANS réf facture ni catégorie (aucun axe TLB1/TPS1 dans les
+// paiements, D7) ; répartition par taux (TG-39, même forme que TG-36).
+export interface Flux10PaymentAggregate {
+  paymentDate: string // TT-96
+  subtotals: Flux10PaymentSubTotal[] // TG-39, 1..n
+}
+
+// TB-3 : PaymentsReport (payment.xsd) — DEUX sous-flux (D7, Task 7) : 10.2
+// per-facture (`invoices`, TG-34, B2Bi) et 10.4 agrégé (`transactions`,
+// TG-37, B2C) — un même rapport peut porter les deux SIMULTANÉMENT (séquence
+// XSD permissive, round-trip xmllint prouvé, tests/unit/flux10-xml.test.ts).
 export interface PaymentsReport {
   periodStart: string // TT-89
   periodEnd: string // TT-90
-  invoices: Flux10PaymentInvoice[] // TG-34, 0..n
+  invoices: Flux10PaymentInvoice[] // TG-34, 0..n (10.2)
+  transactions: Flux10PaymentAggregate[] // TG-37, 0..n (10.4)
 }
 
 // TB-0 : <Report> racine.
