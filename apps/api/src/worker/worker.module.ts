@@ -17,6 +17,7 @@ import { EreportingTransmissionModule } from '../ereporting/ereporting-transmiss
 import { FormatGenerationService } from '../invoices/format-generation.service.js'
 import { INVOICE_FORMAT_GENERATOR } from '../invoices/format-generator.port.js'
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
+import { RecipientRoutingService } from '../invoices/recipient-routing.service.js'
 import { PaymentsRepository } from '../payments/payments.repository.js'
 import { AnnuaireScheduler } from './annuaire.scheduler.js'
 import { AnnuaireSweepService } from './annuaire-sweep.service.js'
@@ -68,6 +69,7 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     PaymentsRepository,
     { provide: INVOICE_FORMAT_GENERATOR, useClass: FormatGenerationService },
     ArchiveService,
+    RecipientRoutingService,
     InvoiceGenerationProcessor,
     InvoiceReconciliationService,
     MaintenanceProcessor,
