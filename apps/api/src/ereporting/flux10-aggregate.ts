@@ -1,10 +1,15 @@
-import type { Invoice } from '@factelec/invoice-core'
+import type { Invoice, VatBreakdown } from '@factelec/invoice-core'
+import { computeVatBreakdownByNature } from '@factelec/invoice-core'
+import { Logger } from '@nestjs/common'
 import Big from 'big.js'
 import type {
   AggregatedTransaction,
   TransactionsReport,
 } from './flux10-model.js'
+import type { Flux10Category } from './nomenclature.js'
 import { mapCadreToCategories } from './nomenclature.js'
+
+const logger = new Logger('flux10-aggregate')
 
 // Dérive un TransactionsReport (TB-2) des factures d'une période, MAIS
 // uniquement pour les opérations réellement e-reportables B2C (10.3, §2.3.3).
@@ -59,6 +64,59 @@ export interface AggregateOptions {
   periodEnd: string // AAAAMMJJ
 }
 
+// Accumule une ligne de ventilation TVA (`VatBreakdown` canonique OU issue de
+// `computeVatBreakdownByNature`, même forme) dans le bucket (date‖devise‖
+// catégorie Flux 10). `category` est TOUJOURS fournie par l'appelant (TLB1/
+// TPS1/etc, nomenclature Flux 10) — jamais dérivée de `entry.category` (qui
+// porte la catégorie de TVA UNTDID 5305, ex. S/E/Z, un axe DIFFÉRENT). Big.js
+// pour les sommes (BT→TT), 2 décimales (montants `amount2`).
+//
+// Invariant (Task 2, finding-1 ; XSD minOccurs=1 sur SubTotals) : le bucket
+// est créé ET inséré dans `buckets` À L'INTÉRIEUR de cette fonction, appelée
+// une fois par entrée de ventilation (jamais vide, cf. invoiceSchema :
+// `vatBreakdown: z.array(vatBreakdownSchema).min(1)`, et `goods`/`services`
+// ne contiennent que des buckets non-vides — cf. compute.ts) -> tout
+// AggregatedTransaction émis a >= 1 subtotal. NE JAMAIS créer de bucket en
+// dehors de cette fonction (un tableau `subtotals` vide produirait du XML
+// XSD-invalide).
+function accumulateBucket(
+  buckets: Map<string, AggregatedTransaction>,
+  date: string,
+  currency: string,
+  category: Flux10Category,
+  entry: Pick<VatBreakdown, 'rate' | 'taxableAmount' | 'taxAmount'>,
+): void {
+  const key = `${date}|${currency}|${category}`
+  const bucket = buckets.get(key) ?? {
+    date,
+    currency,
+    categoryCode: category,
+    taxExclusiveAmount: '0.00',
+    taxTotal: '0.00',
+    subtotals: [],
+  }
+  bucket.taxExclusiveAmount = new Big(bucket.taxExclusiveAmount)
+    .plus(entry.taxableAmount)
+    .toFixed(2)
+  bucket.taxTotal = new Big(bucket.taxTotal).plus(entry.taxAmount).toFixed(2)
+  const subtotal = bucket.subtotals.find((s) => s.taxPercent === entry.rate)
+  if (subtotal) {
+    subtotal.taxableAmount = new Big(subtotal.taxableAmount)
+      .plus(entry.taxableAmount)
+      .toFixed(2)
+    subtotal.taxTotal = new Big(subtotal.taxTotal)
+      .plus(entry.taxAmount)
+      .toFixed(2)
+  } else {
+    bucket.subtotals.push({
+      taxPercent: entry.rate,
+      taxableAmount: entry.taxableAmount,
+      taxTotal: entry.taxAmount,
+    })
+  }
+  buckets.set(key, bucket)
+}
+
 // Dérive un TransactionsReport des factures B2C (10.3) d'une période. null si
 // aucune opération 10.3 (transmission à blanc OPTIONNELLE, D6). Chaque facture
 // est d'abord classée (`classifyEreportingOperation`) ; seules les '10.3' sont
@@ -75,6 +133,7 @@ export function aggregateTransactions(
 
   // Groupage (date ‖ devise ‖ catégorie) — Big.js pour les sommes (BT→TT).
   const buckets = new Map<string, AggregatedTransaction>()
+  let deferredMixed = 0
   for (const invoice of eligible) {
     // INTERPRÉTATION PROJET (à confirmer au go-live, Annexe 7) : la date de
     // transaction TT-77 = issueDate (BT-2) de la facture.
@@ -85,66 +144,58 @@ export function aggregateTransactions(
         // par défaut si BT-23 (cadre de facturation) absent -> TLB1 (livraison
         // de biens).
         (['TLB1'] as const)
-    // DIFFÉRÉ (revue Task 3, BLOQUEUR M*) : un cadre MIXTE (M1/M2/M4) porte
-    // les DEUX catégories (TLB1 + TPS1), mais le modèle `Invoice` n'a AUCUN
-    // discriminant biens/services au niveau LIGNE (vatBreakdown est groupé
-    // par catégorie de TVA ‖ taux) : la ventilation correcte de la base entre
-    // TLB1 et TPS1 n'est pas constructible ici, et dupliquer le vatBreakdown
-    // sur les deux catégories DOUBLERAIT la base et la TVA déclarées à la
-    // DGFiP (M1 1000/200 → 2000/400 : sur-déclaration ×2). L'Annexe 6 impose
-    // que l'opérateur distingue LB et PS *par ligne* (total conservé). On
-    // DIFFÈRE donc les factures à cadre mixte (comme 10.1/TB-3) jusqu'à une
-    // discrimination LB/PS par ligne dans le modèle — dette documentée,
-    // suivie Task 10 (go-live).
-    const category = categories.length === 1 ? categories[0] : undefined
-    if (category === undefined) continue
+
+    if (categories.length > 1) {
+      // Cadre MIXTE (M1/M2/M4, TLB1+TPS1) — Task 2, résolution du différé
+      // 2.3-T3 : avec le discriminant `nature` de ligne (Task 1), on
+      // construit la VRAIE ventilation TLB1(biens)/TPS1(services), total
+      // conservé, JAMAIS doublée (`computeVatBreakdownByNature`, total
+      // conservé par construction — cf. compute.ts). Une facture dont AU
+      // MOINS une ligne n'a pas de `nature` reste différée à l'identique de
+      // 2.3 (skip typé + log ; aucune ventilation partielle fabriquée).
+      const byNature = computeVatBreakdownByNature(invoice)
+      if (!byNature.complete) {
+        deferredMixed++
+        continue
+      }
+      // Injection T1(b) ratifiée : `goods`/`services` sont des `VatBreakdown[]`
+      // (même forme que la ventilation canonique), mais l'ASYMÉTRIE documentée
+      // dans `computeVatBreakdownByNature` (le bucket `services`, dérivé par
+      // soustraction, ne porte JAMAIS `exemptionReasonCode`/`exemptionReason`,
+      // contrairement à `goods`, recalculé) est SANS CONSÉQUENCE ici :
+      // `accumulateBucket` ne consomme QUE `rate`/`taxableAmount`/`taxAmount`,
+      // et la `category` Flux 10 (TLB1/TPS1) est TOUJOURS celle passée en
+      // paramètre par ce bloc, jamais `entry.category` (S/E/Z…, un axe TVA
+      // distinct de la nomenclature Flux 10 TT-81).
+      for (const entry of byNature.goods) {
+        accumulateBucket(buckets, date, invoice.currency, 'TLB1', entry)
+      }
+      for (const entry of byNature.services) {
+        accumulateBucket(buckets, date, invoice.currency, 'TPS1', entry)
+      }
+      continue
+    }
+
+    // `categories.length === 1` ici (mixte traité + `continue` ci-dessus ;
+    // `mapCadreToCategories`/le repli par défaut ne renvoient jamais un
+    // tableau vide) — assertion non-null au lieu d'une garde `undefined`
+    // qui introduirait une branche morte, non atteignable (100 % branches).
+    // biome-ignore lint/style/noNonNullAssertion: catégorie unique garantie non-vide par construction (cf. commentaire ci-dessus) ; une garde ici serait une branche morte non testable.
+    const category = categories[0]!
     for (const vatBreakdown of invoice.vatBreakdown) {
-      const key = `${date}|${invoice.currency}|${category}`
-      // Invariant (Task 2, finding-1 ; XSD minOccurs=1 sur SubTotals) : le
-      // bucket est créé ET inséré dans `buckets` À L'INTÉRIEUR de cette
-      // boucle sur `vatBreakdown` (jamais vide, cf. invoiceSchema :
-      // `vatBreakdown: z.array(vatBreakdownSchema).min(1)`) -> tout
-      // AggregatedTransaction émis a >= 1 subtotal. NE JAMAIS créer de
-      // bucket en dehors de cette boucle (un tableau `subtotals` vide
-      // produirait du XML XSD-invalide).
-      const bucket = buckets.get(key) ?? {
-        date,
-        currency: invoice.currency,
-        categoryCode: category,
-        taxExclusiveAmount: '0.00',
-        taxTotal: '0.00',
-        subtotals: [],
-      }
-      bucket.taxExclusiveAmount = new Big(bucket.taxExclusiveAmount)
-        .plus(vatBreakdown.taxableAmount)
-        .toFixed(2)
-      bucket.taxTotal = new Big(bucket.taxTotal)
-        .plus(vatBreakdown.taxAmount)
-        .toFixed(2)
-      const subtotal = bucket.subtotals.find(
-        (s) => s.taxPercent === vatBreakdown.rate,
-      )
-      if (subtotal) {
-        subtotal.taxableAmount = new Big(subtotal.taxableAmount)
-          .plus(vatBreakdown.taxableAmount)
-          .toFixed(2)
-        subtotal.taxTotal = new Big(subtotal.taxTotal)
-          .plus(vatBreakdown.taxAmount)
-          .toFixed(2)
-      } else {
-        bucket.subtotals.push({
-          taxPercent: vatBreakdown.rate,
-          taxableAmount: vatBreakdown.taxableAmount,
-          taxTotal: vatBreakdown.taxAmount,
-        })
-      }
-      buckets.set(key, bucket)
+      accumulateBucket(buckets, date, invoice.currency, category, vatBreakdown)
     }
   }
 
-  // Période dont les SEULES factures 10.3 sont à cadre mixte (différées
-  // ci-dessus) : aucun agrégat -> transmission à blanc (null, D6). Garantit
-  // aussi qu'un TransactionsReport émis a toujours >= 1 agrégat.
+  if (deferredMixed > 0) {
+    logger.warn(
+      `${deferredMixed} facture(s) à cadre mixte différée(s) (ligne sans nature, cf. computeVatBreakdownByNature)`,
+    )
+  }
+
+  // Période dont les SEULES factures 10.3 sont à cadre mixte différé
+  // (ligne(s) sans nature) : aucun agrégat -> transmission à blanc (null,
+  // D6). Garantit aussi qu'un TransactionsReport émis a toujours >= 1 agrégat.
   if (buckets.size === 0) return null
 
   return {
