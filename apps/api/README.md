@@ -919,9 +919,12 @@ contrainte structurelle connue — pas une valeur réglementaire vérifiée.
 
 **Coercitions défensives à l'ingestion F14** (A-MIRROR-KEY) : `Nature` et
 `TypeFlux` sont typés `xs:string` **non restreints** côté XSD — une valeur
-hors `{D,M}`/`{C,D}` validerait le XSD mais ferait échouer l'upsert du miroir
-(colonnes enum) ; rejetées explicitement (`UnknownLigneNatureError`/
-`UnknownTypeFluxError`) avant d'atteindre toute colonne enum.
+hors `{D,M}`/`{C,D}`, **y compris un élément vide** (`<Nature/>` est
+XSD-valide et désérialisé en objet vide par xmlbuilder2, normalisé par une
+garde runtime), est rejetée de façon typée (`UnknownLigneNatureError`/
+`UnknownTypeFluxError`, chemin log+skip du sync) avant d'atteindre toute
+colonne enum ; un `<Suffixe/>` vide est traité comme **absent** (jamais
+`''`, le piège des clés `coalesce`).
 `DateFinEffective` (F14 seulement, DT-7-3-3) est portée jusqu'à l'ingestion,
 qui calcule la fin **effective** (`min(dateFin, dateFinEffective)`) — une
 ligne close par anticipation ne reste jamais résolue au-delà de sa fin

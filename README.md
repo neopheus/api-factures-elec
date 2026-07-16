@@ -212,10 +212,10 @@ API publique pour les systèmes custom.
 > INSEE/Chorus/DGFiP, et **`libxml2`/`xmllint` sur l'hôte du worker**
 > (validation XSD runtime du Flux 10 **et** du Flux 13/14 — à ajouter aux
 > prérequis existants pgcrypto/S3/`TRUST_PROXY`), ainsi que le **split du
-> rôle worker** (les deux fonctions `SECURITY DEFINER` cross-tenant
-> `find_ereporting_declarants_due` **et** `find_annuaire_sync_targets`
-> exposent des identifiants de tenants au rôle applicatif partagé
-> API/worker). Reports explicites détaillés en Feuille de route ci-dessous.
+> rôle worker** (les fonctions `SECURITY DEFINER` cross-tenant
+> `find_ereporting_declarants_due`, `find_annuaire_sync_targets` **et**
+> `find_stale_annuaire_drafts` exposent des identifiants de tenants au rôle
+> applicatif partagé API/worker). Reports explicites détaillés en Feuille de route ci-dessous.
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
 

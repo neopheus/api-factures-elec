@@ -6,10 +6,8 @@ import {
   type NewDirectoryEntry,
 } from './annuaire.repository.js'
 import {
-  InvalidConsultationF14XmlError,
+  ConsultationF14RejectError,
   parseConsultationF14,
-  UnknownLigneNatureError,
-  UnknownTypeFluxError,
 } from './flux14-parse.js'
 import type { LigneAdressage } from './ligne-adressage.js'
 import type { TypeFlux } from './nomenclature.js'
@@ -46,11 +44,11 @@ export class AnnuaireSyncService {
     try {
       parsed = await parseConsultationF14(xml)
     } catch (err) {
-      if (
-        err instanceof InvalidConsultationF14XmlError ||
-        err instanceof UnknownLigneNatureError ||
-        err instanceof UnknownTypeFluxError
-      ) {
+      // Revue finale 2.4 (I1) : catch élargi à la CLASSE DE BASE des rejets
+      // sémantiques — tout futur type de rejet du parseur emprunte d'office
+      // le chemin log+skip, sans jamais avaler les erreurs d'OUTILLAGE
+      // (AnnuaireXsdToolingError propage → retry BullMQ) ni les inattendues.
+      if (err instanceof ConsultationF14RejectError) {
         this.logger.warn(
           `annuaire sync (tenant=${tenantId}, typeFlux=${typeFlux}) : F14 rejeté — ${err.message}`,
         )

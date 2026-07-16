@@ -21,7 +21,13 @@ import {
 // PII) ne sont JAMAIS lus : ils ne sont même pas typés ci-dessous, donc
 // structurellement absents du résultat (pas seulement omis par convention).
 
-export class InvalidConsultationF14XmlError extends Error {
+// Base commune des REJETS SÉMANTIQUES du F14 (revue finale 2.4, I1) : le
+// sync attrape cette classe (élargissement pérenne — tout futur type de
+// rejet est couvert d'office) SANS jamais avaler les erreurs d'OUTILLAGE
+// (AnnuaireXsdToolingError, qui doit propager → retry BullMQ).
+export class ConsultationF14RejectError extends Error {}
+
+export class InvalidConsultationF14XmlError extends ConsultationF14RejectError {
   constructor(readonly xsdErrors: string) {
     super(`flux F14 XSD-invalide — rejeté avant tout parsing :\n${xsdErrors}`)
     this.name = 'InvalidConsultationF14XmlError'
@@ -33,7 +39,7 @@ export class InvalidConsultationF14XmlError extends Error {
 // {D,M} validerait le XSD mais ferait échouer l'upsert du miroir (colonne
 // enum `annuaireNature`). Rejet typé ICI, avant que la valeur n'atteigne
 // quelque colonne enum que ce soit.
-export class UnknownLigneNatureError extends Error {
+export class UnknownLigneNatureError extends ConsultationF14RejectError {
   constructor(
     readonly rawValue: string,
     readonly ligneIndex: number,
@@ -51,7 +57,7 @@ export class UnknownLigneNatureError extends Error {
 // {C,D} validerait le XSD mais ne correspondrait à aucun `TypeFlux` de
 // nomenclature.ts consommé par l'ingestion (Task 9, choix upsert vs
 // remplacement complet).
-export class UnknownTypeFluxError extends Error {
+export class UnknownTypeFluxError extends ConsultationF14RejectError {
   constructor(readonly rawValue: string) {
     super(
       `TypeFlux "${rawValue}" hors nomenclature {C,D} — XSD xs:string non restrictif, rejet applicatif requis`,
@@ -148,17 +154,36 @@ function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value]
 }
 
+// GARDE RUNTIME (revue finale 2.4, I1) : un élément XSD-VALIDE mais VIDE
+// (`<Nature/>`, `<TypeFlux/>`, `<Suffixe/>` — tous typés xs:string NON
+// restreint côté XSD) est désérialisé par xmlbuilder2 en OBJET VIDE `{}`,
+// pas en chaîne — `decodeXmlEntities({}.replace)` lèverait un TypeError
+// NON typé qui court-circuiterait le contrat log+skip du sync (A-MIRROR-KEY)
+// et ferait échouer tout le flux du tenant en boucle. On normalise donc :
+// non-chaîne (dont `{}`) → ABSENT (undefined, jamais '' — le piège
+// coalesce('') des clés d'unicité, revue T5 #1). Les champs à pattern XSD
+// (SIREN/SIRET/matricule/dates) ne peuvent pas être vides ET valides — ils
+// n'ont pas besoin de cette garde.
+function rawText(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
 function toLigneAdressage(
   raw: RawLigneAnnuaire,
   index: number,
 ): LigneAdressage {
-  const rawNature = decodeXmlEntities(raw.Nature)
+  // Élément vide → '' → rejet TYPÉ ci-dessous (chemin skip du sync), jamais
+  // un TypeError (revue finale 2.4, I1).
+  const natureText = rawText(raw.Nature)
+  const rawNature =
+    natureText === undefined ? '' : decodeXmlEntities(natureText)
   if (!(NATURES as readonly string[]).includes(rawNature)) {
     throw new UnknownLigneNatureError(rawNature, index)
   }
   const nature = rawNature as Nature
 
   const info = raw.InfoAdressage
+  const suffixeText = rawText(info.Suffixe)
   const maille: Maille = {
     siren: textOf(info.IdLinSIREN),
     ...(info.IdLinSIRET !== undefined
@@ -167,8 +192,10 @@ function toLigneAdressage(
     ...(info.IdLinRoutage !== undefined
       ? { routageId: textOf(info.IdLinRoutage) }
       : {}),
-    ...(info.Suffixe !== undefined
-      ? { suffixe: decodeXmlEntities(info.Suffixe) }
+    // `<Suffixe/>` vide (XSD-valide) → clé ABSENTE, jamais '' (revue finale
+    // 2.4 I1 + piège coalesce('') revue T5 #1).
+    ...(suffixeText !== undefined
+      ? { suffixe: decodeXmlEntities(suffixeText) }
       : {}),
   }
 
@@ -205,7 +232,11 @@ export async function parseConsultationF14(
   const parsed = create(xml).end({ format: 'object' }) as unknown as RawRoot
   const root = parsed.AnnuaireConsultationF14
 
-  const rawTypeFlux = decodeXmlEntities(root.TypeFlux)
+  // `<TypeFlux/>` vide (XSD-valide, xs:string) → '' → rejet TYPÉ, jamais un
+  // TypeError (revue finale 2.4, I1).
+  const typeFluxText = rawText(root.TypeFlux)
+  const rawTypeFlux =
+    typeFluxText === undefined ? '' : decodeXmlEntities(typeFluxText)
   if (!(TYPE_FLUX as readonly string[]).includes(rawTypeFlux)) {
     throw new UnknownTypeFluxError(rawTypeFlux)
   }

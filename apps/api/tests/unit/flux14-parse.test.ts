@@ -69,6 +69,24 @@ const unknownNatureF14 = `<?xml version="1.0" encoding="UTF-8"?>
   </BlocLignesAnnuaire>
 </AnnuaireConsultationF14>`
 
+// Revue finale 2.4 (I1) : éléments XSD-VALIDES mais VIDES (xs:string non
+// restreint) — xmlbuilder2 les désérialise en OBJET `{}`, pas en chaîne. Le
+// parseur doit rendre un rejet TYPÉ (chemin log+skip du sync), JAMAIS un
+// TypeError ({}.replace) qui avorterait tout le flux du tenant.
+const emptyNatureF14 = unknownNatureF14.replace(
+  '<Nature>X</Nature>',
+  '<Nature/>',
+)
+const emptyTypeFluxF14 = unknownNatureF14
+  .replace('<TypeFlux>D</TypeFlux>', '<TypeFlux/>')
+  .replace('<Nature>X</Nature>', '<Nature>D</Nature>')
+const emptySuffixeF14 = unknownNatureF14
+  .replace('<Nature>X</Nature>', '<Nature>D</Nature>')
+  .replace(
+    '<IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>',
+    '<IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>\n        <Suffixe/>',
+  )
+
 // 2 lignes : IdLinSIRET/IdLinRoutage/Suffixe (flat F14 vs F13 imbriqué),
 // Nature 'D' et 'M', caractères XML dangereux dans Suffixe/Identifiant — prouve
 // à la fois la coercition Nature et le round-trip de décodage d'entités
@@ -303,6 +321,32 @@ describe('parseConsultationF14 (Annuaire_Consultation_F14.xsd)', () => {
     await expect(
       parseConsultationF14(unknownTypeFluxF14),
     ).rejects.toBeInstanceOf(UnknownTypeFluxError)
+  })
+
+  // ── Revue finale 2.4 (I1) : éléments XSD-valides mais VIDES ────────────
+  it('rejette de façon TYPÉE un <Nature/> VIDE (XSD-valide) — jamais un TypeError', async () => {
+    const { valid } = validateAgainstAnnuaireConsultationXsd(emptyNatureF14)
+    expect(valid).toBe(true) // xs:string non restreint : vide = XSD-valide
+    await expect(parseConsultationF14(emptyNatureF14)).rejects.toBeInstanceOf(
+      UnknownLigneNatureError,
+    )
+  })
+
+  it('rejette de façon TYPÉE un <TypeFlux/> VIDE (XSD-valide) — jamais un TypeError', async () => {
+    const { valid } = validateAgainstAnnuaireConsultationXsd(emptyTypeFluxF14)
+    expect(valid).toBe(true)
+    await expect(parseConsultationF14(emptyTypeFluxF14)).rejects.toBeInstanceOf(
+      UnknownTypeFluxError,
+    )
+  })
+
+  it('traite un <Suffixe/> VIDE (XSD-valide) comme ABSENT — jamais "" ni TypeError', async () => {
+    const { valid } = validateAgainstAnnuaireConsultationXsd(emptySuffixeF14)
+    expect(valid).toBe(true)
+    const parsed = await parseConsultationF14(emptySuffixeF14)
+    expect(parsed.lignes).toHaveLength(1)
+    // Clé absente (pas '') : le piège coalesce('') des clés d'unicité (T5 #1).
+    expect(parsed.lignes[0]!.maille).not.toHaveProperty('suffixe')
   })
 
   it('PII-drop (D8) : aucune trace du Nom/Adresse porté par BlocUnitesLegales/BlocEtablissements', async () => {
