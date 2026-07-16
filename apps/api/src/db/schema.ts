@@ -550,6 +550,102 @@ export const annuaireDirectoryEntries = pgTable(
   ],
 )
 
+// ── Transmission des CDV (Flux 6 / CDAR, plan 3.1 Task 4) : suivi de ───────
+// livraison + journal append-only NON scellé. Idiomes calqués sur les
+// sections e-reporting/annuaire ci-dessus. `toStatus` réutilise l'enum
+// invoiceLifecycleStatus (le statut CDV FACTURE transmis — 200/210/212/213,
+// D7) : ce n'est PAS le statut de la machine de LIVRAISON elle-même (cf.
+// cdv/cdv-transmission-lifecycle.ts, CDV_TRANSMISSION_STATUS_META, D4).
+
+export const cdvTransmissionStatus = pgEnum('cdv_transmission_status', [
+  'prepared',
+  'transmitted',
+  'parked',
+  'acknowledged',
+  'rejected',
+])
+
+// Cible de transmission (D7) : PPF (réglementaire, toujours adressable, sans
+// résolution annuaire) ou plateforme de réception (résolue par l'annuaire
+// 2.4, D6 — peut être non-adressable/ambiguë → `parked`).
+export const cdvTarget = pgEnum('cdv_target', ['ppf', 'recipient'])
+
+export const cdvTransmissions = pgTable(
+  'cdv_transmissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      // Miroir invoice_status_events (2.2, dette 2.1/D4) : une facture munie
+      // d'une transmission CDV ne peut plus être supprimée — le suivi de
+      // livraison ne se supprime pas avec sa facture.
+      .references(() => invoices.id, { onDelete: 'restrict' }),
+    toStatus: invoiceLifecycleStatus('to_status').notNull(),
+    target: cdvTarget('target').notNull(),
+    status: cdvTransmissionStatus('status').notNull().default('prepared'),
+    recipientMatricule: text('recipient_matricule'), // résolu annuaire, cible recipient seulement
+    trackingRef: text('tracking_ref'),
+    xml: text('xml'),
+    rejectReason: text('reject_reason'), // MDT-126, requis ssi status='rejected' (code 601)
+    statusHorodate: text('status_horodate').notNull(), // AAAAMMJJHHMMSS (échéance 24h, D7)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('cdv_transmissions_tenant_idx').on(t.tenantId, t.createdAt),
+    // Backstop anti-double-envoi (D8, 3e couche) : UNE ligne par (facture,
+    // statut transmis, cible), qui PROGRESSE par états — couvre TOUS les
+    // statuts, AUCUN filtre partiel (contraste
+    // annuaire_lignes_maille_date_definition_unique) : un `rejected` occupe
+    // légitimement le slot (D8 — un false-reject se corrige par reset manuel
+    // hors-bande, runbook différé T9). Table NEUVE (migration 0021) → aucun
+    // risque de backfill (contraste migration 0011/2.2-0011).
+    uniqueIndex('cdv_transmissions_invoice_status_target_unique').on(
+      t.invoiceId,
+      t.toStatus,
+      t.target,
+    ),
+  ],
+)
+
+// Journal APPEND-ONLY du cycle de vie de LIVRAISON — NON scellé (D4 : la
+// transmission est authentifiée au niveau transport, comme
+// ereporting_status_events et annuaire_ligne_events ; le scellement 2.2 ne
+// s'applique qu'au journal CDV FACTURE invoice_status_events, jamais
+// re-scellé ni re-validé ici).
+export const cdvTransmissionEvents = pgTable(
+  'cdv_transmission_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    transmissionId: uuid('transmission_id')
+      .notNull()
+      .references(() => cdvTransmissions.id, { onDelete: 'restrict' }),
+    fromStatus: cdvTransmissionStatus('from_status'), // NULL pour l'événement genèse ('prepared')
+    toStatus: cdvTransmissionStatus('to_status').notNull(),
+    motif: text('motif'), // libre (MDT-126), requis ssi to_status='rejected'
+    actor: text('actor').notNull(), // 'platform' | 'ppf' | 'recipient'
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('cdv_transmission_events_transmission_idx').on(
+      t.transmissionId,
+      t.createdAt,
+    ),
+  ],
+)
+
 export const userRole = pgEnum('user_role', [
   'owner',
   'admin',

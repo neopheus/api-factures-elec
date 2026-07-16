@@ -148,6 +148,20 @@
       "when": 1784161900000,
       "tag": "0020_annuaire_stale_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1784184292660,
+      "tag": "0021_cdv_transmissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1784184392660,
+      "tag": "0022_cdv_rls",
+      "breakpoints": true
     }
   ]
 }
