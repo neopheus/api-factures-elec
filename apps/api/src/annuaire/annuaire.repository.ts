@@ -9,6 +9,7 @@ import {
   notInArray,
   sql,
 } from 'drizzle-orm'
+import { CasStaleError } from '../common/cas-error.js'
 import type { Db } from '../db/client.js'
 import {
   annuaireConsents,
@@ -374,9 +375,12 @@ export class AnnuaireRepository {
         )
         .returning({ id: annuaireLignes.id })
       if (updated.length === 0) {
-        throw new Error(
-          `markPublished: ligne ${id} is not in 'draft' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'ligne',
+          id,
+          expectedStatus: 'draft',
+          message: `markPublished: ligne ${id} is not in 'draft' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(annuaireLigneEvents).values({
         tenantId,
@@ -420,9 +424,12 @@ export class AnnuaireRepository {
         .where(and(eq(annuaireLignes.id, id), eq(annuaireLignes.status, from)))
         .returning({ id: annuaireLignes.id })
       if (updated.length === 0) {
-        throw new Error(
-          `appendLigneEvent: ligne ${id} is not in '${from}' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'ligne',
+          id,
+          expectedStatus: from,
+          message: `appendLigneEvent: ligne ${id} is not in '${from}' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(annuaireLigneEvents).values({
         tenantId,

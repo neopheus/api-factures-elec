@@ -3,6 +3,7 @@ import {
   Injectable,
   UnprocessableEntityException,
 } from '@nestjs/common'
+import { CasStaleError } from '../common/cas-error.js'
 import { ProblemType, problem } from '../common/problem.js'
 // biome-ignore lint/style/useImportType: EreportingRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { EreportingRepository } from './ereporting.repository.js'
@@ -10,12 +11,6 @@ import { motifRequired } from './ereporting-lifecycle.js'
 import type { RejectMotif } from './nomenclature.js'
 
 export type PpfOutcome = 'deposee' | 'rejetee'
-
-// Message émis par EreportingRepository.appendStatusEvent quand le CAS
-// (UPDATE ... WHERE status = 'transmitted') n'affecte aucune ligne — motif
-// exact figé dans le repository (Task 5/9, `from` est TOUJOURS 'transmitted'
-// ici, seul prédécesseur valide pour 300/301).
-const CAS_STALE_RE = /is not in 'transmitted' status/
 
 // Acquittement PPF (300 Déposée / 301 Rejetée, spec §3.7.10, Tableaux 5/6) —
 // frontière D7 (plan 2.3, Task 9) : la SOURCE réelle de l'acquittement (push
@@ -73,7 +68,7 @@ export class EreportingStatusService {
         motif,
       )
     } catch (err) {
-      if (err instanceof Error && CAS_STALE_RE.test(err.message)) {
+      if (err instanceof CasStaleError) {
         throw new ConflictException(
           problem(409, ProblemType.conflict, 'PPF acknowledgement refused', {
             detail:

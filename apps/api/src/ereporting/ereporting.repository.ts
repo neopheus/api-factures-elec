@@ -1,6 +1,7 @@
 import type { Invoice } from '@factelec/invoice-core'
 import { Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, gte, lte, sql } from 'drizzle-orm'
+import { CasStaleError } from '../common/cas-error.js'
 import {
   ereportingDeclarants,
   ereportingStatusEvents,
@@ -260,9 +261,12 @@ export class EreportingRepository {
         )
         .returning({ id: ereportingTransmissions.id })
       if (updated.length === 0) {
-        throw new Error(
-          `markTransmitted: transmission ${id} is not in 'prepared' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'transmission',
+          id,
+          expectedStatus: 'prepared',
+          message: `markTransmitted: transmission ${id} is not in 'prepared' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(ereportingStatusEvents).values({
         tenantId,
@@ -304,9 +308,12 @@ export class EreportingRepository {
         )
         .returning({ id: ereportingTransmissions.id })
       if (updated.length === 0) {
-        throw new Error(
-          `appendStatusEvent: transmission ${id} is not in '${from}' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'transmission',
+          id,
+          expectedStatus: from,
+          message: `appendStatusEvent: transmission ${id} is not in '${from}' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(ereportingStatusEvents).values({
         tenantId,
