@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// computeDuePeriods (period.ts, pure) est déjà 100 % couvert et testé sur
-// vecteurs fixes (tests/unit/period.test.ts). Ici, on teste UNIQUEMENT
-// l'orchestration du sweep (déclarants dus → périodes → enfilement) — le
-// mock évite toute dépendance à l'horloge système réelle (`new Date()` est
-// appelé DANS le service, cf. son commentaire). Nom préfixé `mock` requis
-// par Vitest pour être référencé dans la factory hoistée.
+// computeDuePeriods/computeDuePaymentPeriods (period.ts, pures) sont déjà
+// 100 % couvertes et testées sur vecteurs fixes (tests/unit/period.test.ts).
+// Ici, on teste UNIQUEMENT l'orchestration du sweep (déclarants dus →
+// périodes (transactions ET payments) → enfilement) — le mock évite toute
+// dépendance à l'horloge système réelle (`new Date()` est appelé DANS le
+// service, cf. son commentaire). Noms préfixés `mock` requis par Vitest pour
+// être référencés dans la factory hoistée.
 const mockComputeDuePeriods = vi.fn()
+const mockComputeDuePaymentPeriods = vi.fn()
 vi.mock('../../src/ereporting/period.js', () => ({
   computeDuePeriods: (...args: unknown[]) => mockComputeDuePeriods(...args),
+  computeDuePaymentPeriods: (...args: unknown[]) =>
+    mockComputeDuePaymentPeriods(...args),
 }))
 
 const { EreportingSweepService } = await import(
@@ -25,6 +29,10 @@ function build(rows: unknown[]) {
 describe('EreportingSweepService.sweep', () => {
   beforeEach(() => {
     mockComputeDuePeriods.mockReset()
+    mockComputeDuePaymentPeriods.mockReset()
+    // Défaut neutre (aucune période payment due) pour ne pas casser les tests
+    // qui ne s'intéressent qu'à la passe transactions.
+    mockComputeDuePaymentPeriods.mockReturnValue([])
   })
 
   it('is a no-op (returns 0) when no declarant is due', async () => {
@@ -37,6 +45,7 @@ describe('EreportingSweepService.sweep', () => {
     )
     expect(queue.add).not.toHaveBeenCalled()
     expect(mockComputeDuePeriods).not.toHaveBeenCalled()
+    expect(mockComputeDuePaymentPeriods).not.toHaveBeenCalled()
     expect(n).toBe(0)
   })
 
@@ -132,14 +141,59 @@ describe('EreportingSweepService.sweep', () => {
     expect(n).toBe(1)
   })
 
-  it('never enqueues a payments flux (TB-3 différé, D10) — fluxKind toujours "transactions"', async () => {
-    mockComputeDuePeriods.mockReturnValue([
-      { periodStart: '20260901', periodEnd: '20260910' },
+  it('enqueues a payments job per due payment period, jobId dash-separated, distinct from the transactions slot (D7, Task 8)', async () => {
+    mockComputeDuePeriods.mockReturnValue([])
+    mockComputeDuePaymentPeriods.mockReturnValue([
+      { periodStart: '20260801', periodEnd: '20260831' },
     ])
     const rows = [
       {
         tenant_id: 't1',
-        id: 'd1',
+        id: 'decl-1',
+        vat_regime: 'reel_normal_mensuel',
+        role: 'SE',
+        siren: '111111111',
+        name: 'V',
+      },
+    ]
+    const { service, queue } = build(rows)
+
+    const n = await service.sweep()
+
+    expect(mockComputeDuePaymentPeriods).toHaveBeenCalledWith(
+      'reel_normal_mensuel',
+      expect.any(Date),
+    )
+    expect(queue.add).toHaveBeenCalledTimes(1)
+    expect(queue.add).toHaveBeenNthCalledWith(
+      1,
+      'ereporting-generate',
+      {
+        tenantId: 't1',
+        declarantId: 'decl-1',
+        siren: '111111111',
+        role: 'SE',
+        fluxKind: 'payments',
+        periodStart: '20260801',
+        periodEnd: '20260831',
+        type: 'IN',
+      },
+      { jobId: 'decl-1-payments-20260801' },
+    )
+    expect(n).toBe(1)
+  })
+
+  it('enqueues BOTH a transactions job and a payments job for the same declarant when both cadences are due, on disjoint jobIds', async () => {
+    mockComputeDuePeriods.mockReturnValue([
+      { periodStart: '20260901', periodEnd: '20260910' },
+    ])
+    mockComputeDuePaymentPeriods.mockReturnValue([
+      { periodStart: '20260801', periodEnd: '20260831' },
+    ])
+    const rows = [
+      {
+        tenant_id: 't1',
+        id: 'decl-1',
         vat_regime: 'simplifie',
         role: 'SE',
         siren: '1',
@@ -148,10 +202,40 @@ describe('EreportingSweepService.sweep', () => {
     ]
     const { service, queue } = build(rows)
 
-    await service.sweep()
+    const n = await service.sweep()
 
-    const [, payload] = queue.add.mock.calls[0]!
-    expect(payload.fluxKind).toBe('transactions')
-    expect(payload.type).toBe('IN')
+    expect(queue.add).toHaveBeenCalledTimes(2)
+    const jobIds = queue.add.mock.calls.map((call) => call[2].jobId)
+    expect(jobIds).toEqual([
+      'decl-1:transactions:20260901',
+      'decl-1-payments-20260801',
+    ])
+    const fluxKinds = queue.add.mock.calls.map((call) => call[1].fluxKind)
+    expect(fluxKinds).toEqual(['transactions', 'payments'])
+    expect(n).toBe(2)
+  })
+
+  it('a due payment period with no due transaction period still enqueues (passes are independent)', async () => {
+    mockComputeDuePeriods.mockReturnValue([])
+    mockComputeDuePaymentPeriods.mockReturnValue([
+      { periodStart: '20260801', periodEnd: '20260831' },
+    ])
+    const rows = [
+      {
+        tenant_id: 't1',
+        id: 'decl-1',
+        vat_regime: 'franchise',
+        role: 'SE',
+        siren: '1',
+        name: 'A',
+      },
+    ]
+    const { service, queue } = build(rows)
+
+    const n = await service.sweep()
+
+    expect(queue.add).toHaveBeenCalledTimes(1)
+    expect(queue.add.mock.calls[0]![1]).toMatchObject({ fluxKind: 'payments' })
+    expect(n).toBe(1)
   })
 })
