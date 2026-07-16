@@ -6,6 +6,8 @@ import {
   ANNUAIRE_SYNC_DIFF_JOB,
   ANNUAIRE_SYNC_FULL_JOB,
   ARCHIVE_RETRY_JOB,
+  CDV_STUCK_RETRY_JOB,
+  CDV_TRANSMISSION_SWEEP_JOB,
   EREPORTING_SWEEP_JOB,
   PURGE_SESSIONS_JOB,
   RECONCILE_INVOICES_JOB,
@@ -15,6 +17,10 @@ import { MAINTENANCE_QUEUE } from '../queue/queue.constants.js'
 import { AnnuaireSweepService } from './annuaire-sweep.service.js'
 // biome-ignore lint/style/useImportType: ArchiveRetryService résolu par Nest via design:paramtypes.
 import { ArchiveRetryService } from './archive-retry.service.js'
+// biome-ignore lint/style/useImportType: CdvStuckRetryService résolu par Nest via design:paramtypes.
+import { CdvStuckRetryService } from './cdv-stuck-retry.service.js'
+// biome-ignore lint/style/useImportType: CdvTransmissionSweepService résolu par Nest via design:paramtypes.
+import { CdvTransmissionSweepService } from './cdv-transmission-sweep.service.js'
 // biome-ignore lint/style/useImportType: EreportingSweepService résolu par Nest via design:paramtypes.
 import { EreportingSweepService } from './ereporting-sweep.service.js'
 // biome-ignore lint/style/useImportType: InvoiceReconciliationService résolu par Nest via design:paramtypes.
@@ -41,6 +47,8 @@ export class MaintenanceProcessor extends WorkerHost {
     private readonly archiveRetry: ArchiveRetryService,
     private readonly ereportingSweep: EreportingSweepService,
     private readonly annuaireSweep: AnnuaireSweepService,
+    private readonly cdvSweep: CdvTransmissionSweepService,
+    private readonly cdvStuckRetry: CdvStuckRetryService,
   ) {
     super()
   }
@@ -79,6 +87,16 @@ export class MaintenanceProcessor extends WorkerHost {
     if (job.name === ANNUAIRE_REPUBLISH_SWEEP_JOB) {
       const n = await this.annuaireSweep.sweepStuckDrafts()
       this.logger.log(`annuaire stuck-draft sweep: ${n} republish job(s)`)
+      return
+    }
+    if (job.name === CDV_TRANSMISSION_SWEEP_JOB) {
+      const n = await this.cdvSweep.sweep()
+      this.logger.log(`cdv sweep: ${n} event×cible job(s)`)
+      return
+    }
+    if (job.name === CDV_STUCK_RETRY_JOB) {
+      const n = await this.cdvStuckRetry.retryParked()
+      this.logger.log(`cdv stuck-retry: ${n} transmission(s)`)
       return
     }
     this.logger.warn(`unknown maintenance job: ${job.name}`)

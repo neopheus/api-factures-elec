@@ -129,20 +129,23 @@ describe('LifecycleService.transition', () => {
     repo.recordTransition.mockResolvedValue(true)
     const service = new LifecycleService(repo as never)
 
+    // deposee → prise_en_charge (DAG Task 1) : sous la matrice DAG, deposee
+    // ne va plus directement à approuvee (chronologie : prise_en_charge
+    // d'abord — cf. A1, plan-3-1-review.md).
     const result = await service.transition(
       'tenant-1',
       VALID_ID,
-      'approuvee',
+      'prise_en_charge',
       'user:1',
       undefined,
     )
 
-    expect(result).toEqual({ status: 'approuvee' })
+    expect(result).toEqual({ status: 'prise_en_charge' })
     expect(repo.recordTransition).toHaveBeenCalledWith(
       'tenant-1',
       VALID_ID,
       'deposee',
-      'approuvee',
+      'prise_en_charge',
       'user:1',
       undefined,
     )
@@ -179,11 +182,12 @@ describe('LifecycleService.transition', () => {
     repo.recordTransition.mockResolvedValue(false)
     const service = new LifecycleService(repo as never)
 
+    // deposee → prise_en_charge (DAG Task 1, cf. commentaire ci-dessus).
     await expect(
       service.transition(
         'tenant-1',
         VALID_ID,
-        'approuvee',
+        'prise_en_charge',
         'user:1',
         undefined,
       ),

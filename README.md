@@ -9,9 +9,10 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (16/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1, 2.2 et
-> 2.3 terminés et mergés ; plan 2.4 (annuaire Flux 13/14) terminé sur cette
-> branche ; dettes héritées soldées avant chaque plan suivant.**
+> **État du projet (16/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1, 2.2,
+> 2.3 et 2.4 terminés et mergés ; plan 3.1 (transmission des CDV & matrice
+> DAG) terminé sur cette branche ; dettes héritées soldées avant chaque plan
+> suivant.**
 > `invoice-core` (v0.3.1 — patch BT-9) livre les **formats du socle** : UBL 2.1
 > Invoice **et** CreditNote (avoir), extraits de flux DGFiP F1 (facture et
 > avoir), CII D16B (avec échéance de paiement BT-9) et Factur-X PDF/A-3 (CII
@@ -196,26 +197,77 @@ API publique pour les systèmes custom.
 > à 97.71/94.51/95.75/98.2 % (statements/branches/fonctions/lignes) ·
 > `apps/web` 48 à 100/96.66/100/100 %). Détail complet : `apps/api/README.md`.
 >
-> **Reprise — prochaine étape : phase 3** : transmission Peppol des statuts
-> CDV, point d'accès Peppol interne, remplacement de la matrice de
-> transitions CDV contre la norme AFNOR XP Z12-012 (bloqueur go-live PDP) —
-> **ce même bloqueur s'applique à l'immatriculation PDP côté e-reporting**
-> (Peppol + matrice CDV AFNOR restent la dépendance de mise en production
-> réelle), et **câblage de la résolution de routage annuaire dans
-> l'émetteur de factures** (brique 2.4 prête, non consommée). **Horizon
-> 2.x** : journal d'audit des authentifications (distinct du journal CDV).
+> **3.1 — Transmission des CDV (Flux 6) & matrice de cycle de vie** livre :
+> **RÉSOLU — le bloqueur go-live de la matrice CDV** (chronologie
+> **monotone** 2.1, fausse sur 4 règles métier mandatées) est **remplacé**
+> par une **matrice DAG data-driven** (`src/invoices/lifecycle-status.ts`)
+> corrigeant les 4 anomalies mandatées nommément (**interdit** `212 Encaissée
+> → 213 Rejetée`, CGI 290 A ; **autorisés** `207→205`, `208→204`, `206→205`)
+> et **paramétrée** (le reste du code n'appelle jamais que
+> `canTransition`/`requiresReason` — un futur remplacement par la norme
+> **AFNOR XP Z12-012** ne touchera que la table + les vecteurs de test) ; le
+> bloqueur devient donc une **interprétation en attente d'achat AFNOR**
+> (**item Xavier**), plus une matrice **fausse** — amendement A3 documenté
+> (`encaissee` rendu entièrement terminal, sur-ensemble du mandat dur qui
+> n'exige que `¬(212→213)`) ; le swap ne touche **pas** au journal scellé
+> 2.2 (`verifyTenantChain` ne re-valide jamais les transitions historiques,
+> seules les futures transitions changent de garde). **Transmission des CDV
+> de bout en bout** pour les **4 statuts obligatoires** (200/210/212/213)
+> vers **deux cibles indépendantes** (PPF réglementaire + destinataire résolu
+> par l'annuaire 2.4, succès partiel au grain facture×statut×cible) : le
+> message de statut Flux 6, au format sémantique **CDAR** (UN/CEFACT SCRDM
+> CI, Annexe 2 V2.3) — **aucun XSD DGFiP n'existe pour ce flux**, validation
+> **structurelle en code** honnête (posture PAF), sous-ensemble MINIMAL de
+> MDT émis (7 MDT Requis-PPF non émis, à compléter à l'homologation) ;
+> machine de **livraison** distincte du CDV facture (`prepared→transmitted→
+> {acknowledged (acceptation implicite), rejected (601, seul code F6
+> documenté)}`, `parked` retryable — destinataire non adressable/ambigu) ;
+> ordonnanceur BullMQ **borné 24h** (§3.6.6, fenêtre de rattrapage 48h) avec
+> 3 couches anti-double-envoi (fenêtre bornée, `jobId` déterministe, index
+> unique DB) ; frontière d'acquittement (601/accept implicite) refusant
+> correctement un 601 tardif après acceptation implicite (409, sans
+> événement fantôme) ; endpoints de consultation dual-auth. **DIFFÉRÉS
+> EXPLICITES** : adaptateurs de transport réels
+> (sftp/as2/as4/**as4-peppol**/api), adhésion **OpenPeppol** + PKI test/prod
+> + SMP + stack AS4, acquittements réseau/PPF réels (push), statuts CDV
+> **facultatifs**, ingestion F6 entrante, MDT Requis-PPF non émis, code
+> interface `FFE0614A` à confirmer. **RUNBOOK nouveau** : une panne worker
+> CDV **> 48h** manque silencieusement les événements sortis de la fenêtre
+> de rattrapage (procédure manuelle de rattrapage, élargissement ponctuel de
+> `p_since`) ; un faux-`rejected` occupe définitivement son slot
+> `(invoice_id, to_status, target)` (reset manuel hors-bande, même motif que
+> le slot A2 e-reporting 2.3) ; horodate **UTC** (vs heure de Paris) =
+> interprétation ouverte. **1100 tests** au total (`invoice-core` 129
+> 100 % · `apps/api` 923 à 97.69/94.37/95.6/98.08 %
+> (statements/branches/fonctions/lignes) · `apps/web` 48 à
+> 100/96.66/100/100 %). Détail complet : `apps/api/README.md`.
+>
+> **Reprise — prochaine étape : phase 3 (suite)** : adhésion **OpenPeppol**
+> + PKI test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport
+> CDV réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne,
+> **achat de la norme AFNOR XP Z12-012** pour remplacer l'interprétation
+> projet de la matrice DAG (bloqueur go-live PDP restant — **ce même
+> bloqueur s'applique à l'immatriculation PDP côté e-reporting**), et
+> **câblage de la résolution de routage annuaire dans l'émetteur de
+> factures** (brique 2.4 prête, non consommée). **Horizon 2.x** : journal
+> d'audit des authentifications (distinct du journal CDV).
 > **Déploiement** : confirmer `CREATE EXTENSION pgcrypto` sur le Postgres
 > managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`,
 > adaptateurs de transmission e-reporting réels (sftp/as2/as4/api),
 > adaptateurs de transport annuaire réels (API PISTE-OAuth2, EDI
-> SFTP/AS2/AS4) et identifiants PPF associés, feeds d'initialisation annuaire
-> INSEE/Chorus/DGFiP, et **`libxml2`/`xmllint` sur l'hôte du worker**
-> (validation XSD runtime du Flux 10 **et** du Flux 13/14 — à ajouter aux
-> prérequis existants pgcrypto/S3/`TRUST_PROXY`), ainsi que le **split du
-> rôle worker** (les fonctions `SECURITY DEFINER` cross-tenant
-> `find_ereporting_declarants_due`, `find_annuaire_sync_targets` **et**
-> `find_stale_annuaire_drafts` exposent des identifiants de tenants au rôle
-> applicatif partagé API/worker). Reports explicites détaillés en Feuille de route ci-dessous.
+> SFTP/AS2/AS4) et identifiants PPF associés, adaptateurs de transport CDV
+> réels (sftp/as2/as4/as4-peppol/api) et adhésion OpenPeppol (PKI/SMP/stack
+> AS4), feeds d'initialisation annuaire INSEE/Chorus/DGFiP, matricule PA réel
+> (`CDV_PA_MATRICULE`, ICD 0238), confirmation du code interface `FFE0614A`,
+> et **`libxml2`/`xmllint` sur l'hôte du worker** (validation XSD runtime du
+> Flux 10 **et** du Flux 13/14 — **pas** le Flux 6/CDAR, structurellement
+> validé en code, aucun XSD DGFiP disponible — à ajouter aux prérequis
+> existants pgcrypto/S3/`TRUST_PROXY`), ainsi que le **split du rôle
+> worker** (les fonctions `SECURITY DEFINER` cross-tenant
+> `find_ereporting_declarants_due`, `find_annuaire_sync_targets`,
+> `find_stale_annuaire_drafts`, `find_cdv_transmissions_due` **et**
+> `find_parked_cdv_transmissions` exposent des identifiants de tenants au
+> rôle applicatif partagé API/worker). Reports explicites détaillés en Feuille de route ci-dessous.
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
 
@@ -285,17 +337,22 @@ fichiers (hors tests).
 
 ## `@factelec/api`
 
-API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4** :
+API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4 + 3.1** :
 ingestion et lecture des factures (consommant `@factelec/invoice-core`),
 authentification utilisateur (sessions httpOnly + CSRF), signup self-service
 transactionnel, gestion des clés API par session, super admin plateforme
 minimal, **workers BullMQ de génération asynchrone**, **cycle de vie des
-statuts CDV**, **e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, machine
-à états 300/301 distincte, cadence par régime TVA, transmission différée au
-déploiement) et **annuaire central Flux 13/14** (domaine PA : ligne
-d'adressage 4 mailles, résolution de routage, génération F13/parsing F14
-validés XSD, miroir de consultation PII-minimal, publication consent-gated,
-synchronisation bornée — transport réel et câblage dans l'émetteur différés).
+statuts CDV** (désormais **matrice DAG data-driven**, 3.1 — remplace la
+chronologie monotone 2.1, bloqueur go-live devenu interprétation en attente
+d'AFNOR XP Z12-012), **transmission des CDV (Flux 6/CDAR)** vers PPF et
+destinataire (3.1, machine de livraison distincte, ordonnanceur borné 24h,
+adaptateurs de transport réels/OpenPeppol différés au déploiement),
+**e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, machine à états 300/301
+distincte, cadence par régime TVA, transmission différée au déploiement) et
+**annuaire central Flux 13/14** (domaine PA : ligne d'adressage 4 mailles,
+résolution de routage, génération F13/parsing F14 validés XSD, miroir de
+consultation PII-minimal, publication consent-gated, synchronisation bornée
+— transport réel et câblage dans l'émetteur différés).
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -315,8 +372,9 @@ cohérente hors périmètre du hash-chain seul, cf. `apps/api/README.md`).
 Documentation complète — architecture & compromis (ESM +
 typecheck tsgo + émission SWC), workers, sécurité multi-tenant et auth,
 scellement/archivage/PAF/DLQ détaillés, **e-reporting Flux 10 (périmètre,
-runbook opérationnel, différés)**, variables d'environnement,
-endpoints, tests, limites — dans
+runbook opérationnel, différés)**, **transmission des CDV Flux 6 (matrice
+DAG, format CDAR, runbook opérationnel, différés)**, variables
+d'environnement, endpoints, tests, limites — dans
 [`apps/api/README.md`](apps/api/README.md).
 
 ## `@factelec/web`
@@ -513,12 +571,35 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       confirmer** : qualifiant de routage `'9999'` (placeholder structurel,
       aucune valeur positive normée par la DGFiP). Détail complet :
       `apps/api/README.md`.
+- [x] **3.1 — Transmission des CDV (Flux 6) & matrice de cycle de vie**
+      (terminé) : **RÉSOLU** le bloqueur go-live de la matrice CDV —
+      chronologie **monotone** 2.1 (fausse sur 4 règles métier mandatées)
+      **remplacée** par une **matrice DAG data-driven** paramétrée (4
+      anomalies corrigées nommément : `212→213` interdit, `207→205`/
+      `208→204`/`206→205` autorisés), le bloqueur devenant une
+      **interprétation projet en attente d'achat AFNOR XP Z12-012** (item
+      Xavier) plutôt qu'une matrice fausse ; swap sans impact sur le journal
+      scellé 2.2. **Transmission des CDV de bout en bout** pour les 4
+      statuts obligatoires vers PPF **et** destinataire (annuaire 2.4) :
+      Flux 6 au format CDAR (aucun XSD DGFiP → validation structurelle
+      honnête), machine de livraison distincte (`prepared→transmitted→
+      {acknowledged,rejected(601)}`, `parked` retryable), ordonnanceur
+      borné 24h (fenêtre 48h) à 3 couches anti-double-envoi, frontière
+      d'acquittement et endpoints de consultation dual-auth. **Différés
+      explicites** : adaptateurs de transport réels
+      (sftp/as2/as4/as4-peppol/api), adhésion OpenPeppol + PKI/SMP/AS4,
+      acquittements réseau réels, statuts CDV facultatifs, ingestion F6
+      entrante. **Runbook nouveau** : rattrapage manuel d'une panne worker
+      > 48h, reset manuel d'un faux-`rejected` occupant son slot, horodate
+      UTC = interprétation ouverte. Détail complet : `apps/api/README.md`.
 
-> **Point de reprise → phase 3** : transmission Peppol des statuts CDV,
-> point d'accès Peppol interne, remplacement de la matrice de transitions
-> CDV contre la norme AFNOR XP Z12-012 (bloqueur go-live PDP, s'applique
-> aussi à l'immatriculation PDP côté e-reporting), et câblage de la
-> résolution de routage annuaire (2.4) dans l'émetteur de factures.
+> **Point de reprise → phase 3 (suite)** : adhésion OpenPeppol + PKI
+> test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport CDV
+> réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne, **achat
+> de la norme AFNOR XP Z12-012** pour lever l'interprétation projet restante
+> de la matrice DAG (bloqueur go-live PDP, s'applique aussi à
+> l'immatriculation PDP côté e-reporting), et câblage de la résolution de
+> routage annuaire (2.4) dans l'émetteur de factures.
 
 ### Prérequis pré-production / pré-DGFiP
 
@@ -543,9 +624,13 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
 - **Validation et unicité du SIREN (KYB)** — seul le format est vérifié (9
   chiffres) ; ni la clé de contrôle (Luhn), ni l'existence, ni l'unicité
   réelle de l'entreprise ne sont vérifiées à ce jour.
-- **Machine à états CDV = interprétation projet** (2.1) — à durcir contre la
-  norme AFNOR XP Z12-012 avant mise en production réelle (aucune matrice de
-  transitions formelle publiée par la DGFiP dans le dépôt). Détail :
+- **Matrice de cycle de vie CDV = interprétation projet en attente d'AFNOR**
+  (2.1 → **DAG paramétré depuis 3.1**) — la chronologie **monotone** 2.1
+  (fausse sur 4 règles métier) est remplacée par une matrice DAG corrigeant
+  ces 4 anomalies, mais **la table entière** reste une interprétation projet
+  jusqu'à l'**achat de la norme AFNOR XP Z12-012** (**item Xavier**), seule
+  source qui l'énumère formellement ; le remplacement futur ne touchera que
+  la table + les vecteurs de test (paramétrisation vérifiée). Détail :
   `apps/api/README.md`.
 - **Ancrage de tête WORM non effectif** (2.2) — le scellement du journal ne
   détecte pas la troncature de queue ni une réécriture complète cohérente
@@ -593,6 +678,38 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
   validation XSD F13/F14 s'exécute en **runtime**, à chaque publication et
   synchronisation, au même titre que le Flux 10 (2.3, prérequis déjà noté
   ci-dessus).
+- **Achat de la norme AFNOR XP Z12-012** (3.1, **NOUVEAU**, item Xavier) —
+  seule source qui énumère formellement la matrice de transitions CDV et
+  ses sémantiques ; la table `ALLOWED_TRANSITIONS` reste une interprétation
+  projet jusqu'à son acquisition (paramétrisation vérifiée pour absorber le
+  remplacement sans retoucher le code).
+- **Adhésion OpenPeppol + PKI test/prod + SMP + stack AS4** (3.1,
+  **NOUVEAU**, item Xavier) — préalable à tout adaptateur `as4-peppol` réel
+  et au point d'accès Peppol interne (phase 3, suite).
+- **Adaptateurs de transport CDV réels** (3.1, **NOUVEAU**) —
+  sftp/as2/as4/as4-peppol/api restent à fournir et activer
+  (`CDV_TRANSMISSION_DRIVER`) ; seul `local` est câblé à ce jour.
+- **`CDV_PA_MATRICULE` réel** (3.1, **NOUVEAU**, ICD 0238) — placeholder
+  `'0000'` en dev/test, à configurer avant production.
+- **Confirmation du code interface `FFE0614A`** (3.1, **NOUVEAU**) —
+  introuvable dans les sources primaires (Annexe 2 / Dossier général),
+  présent seulement au dossier de recherche interne ; non contraignant dans
+  ce plan, à confirmer avant prod.
+- **Panne worker CDV > 48h non rattrapée automatiquement** (3.1,
+  **NOUVEAU**, MEDIUM, fail-safe) — un événement de statut obligatoire sorti
+  de la fenêtre de rattrapage bornée (48h, `CDV_TRANSMISSION_LOOKBACK_MS`)
+  avant le retour du worker n'est jamais rattrapé par le sweep suivant ;
+  procédure manuelle documentée (runbook) dans `apps/api/README.md`.
+- **Slot CDV occupé par un faux-`rejected`** (3.1, **NOUVEAU**, même motif
+  que le slot A2 e-reporting 2.3) — un faux-rejet (601 erroné, ou F6 invalide
+  corrigé depuis) occupe définitivement son slot `(invoice_id, to_status,
+  target)` ; reset manuel hors-bande requis, procédure documentée (runbook)
+  dans `apps/api/README.md`.
+- **Durcissement du rôle SD CDV** (3.1, **NOUVEAU**, même dette que
+  e-reporting 2.3/annuaire 2.4) — `find_cdv_transmissions_due` et
+  `find_parked_cdv_transmissions` exposent des identifiants de tenants
+  **cross-tenant** au rôle applicatif partagé API/worker ; à durcir au même
+  split du rôle worker.
 
 Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
 
@@ -639,12 +756,23 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
   Xavier, non testable sans bucket S3 réel) ; tant qu'il n'est pas fourni,
   l'ancrage de tête (seul rempart contre la troncature/réécriture du
   journal scellé, cf. `apps/api/README.md`) n'est pas effectif.
-- **Transmission Peppol des statuts CDV** et apposition automatique des
-  transitions par un connecteur/le réseau → **phase 3** (les transitions
-  2.1 sont exclusivement pilotées par session utilisateur).
+- **Transmission des CDV au-delà du socle 3.1** : adaptateurs de transport
+  réels (sftp/as2/as4/as4-peppol/api), adhésion OpenPeppol + PKI test/prod +
+  SMP + stack AS4, acquittements réseau/PPF réels (push), statuts CDV
+  **facultatifs**, ingestion F6 entrante, MDT Requis-PPF non émis (4/5/21/
+  40/91/95/97), confirmation du code interface `FFE0614A` — tous différés,
+  aucun n'est fabriqué. **L'apposition automatique** des transitions CDV
+  **facture** par un connecteur/le réseau reste différée : les transitions
+  2.1 (`POST /invoices/:id/status`) demeurent exclusivement pilotées par
+  session utilisateur — 3.1 ne livre que la **transmission** des statuts
+  déjà décidés, pas leur déclenchement réseau. Détail : `apps/api/README.md`.
 - **Remplacement de la matrice de transitions CDV** contre la norme AFNOR XP
-  Z12-012 (payante, hors dépôt) → **phase 3**, **bloqueur go-live PDP** — la
-  matrice monotone 2.1 reste une interprétation projet documentée.
+  Z12-012 (payante, hors dépôt, **item Xavier : achat requis**) —
+  **bloqueur go-live PDP partiellement résolu en 3.1** : la matrice
+  **monotone fausse** de 2.1 est remplacée par une **matrice DAG** corrigeant
+  les 4 anomalies mandatées et **paramétrée** pour absorber AFNOR sans
+  retoucher le code, mais la table **reste** une interprétation projet en
+  attente de la norme (amendement A3 documenté).
 - **Horizon 2.x** : journal d'audit persistant des **authentifications**
   (distinct du journal CDV à valeur probante, livré en substrat par 2.1).
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan

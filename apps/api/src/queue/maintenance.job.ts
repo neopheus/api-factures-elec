@@ -38,3 +38,25 @@ export const ANNUAIRE_SYNC_FULL_JOB = 'annuaire-sync-full'
 // Dispatché par MaintenanceProcessor (branche dédiée), planifié par
 // AnnuaireScheduler.
 export const ANNUAIRE_REPUBLISH_SWEEP_JOB = 'annuaire-republish-sweep'
+// CDV_TRANSMISSION_SWEEP_JOB : ordonnanceur borné 24h de transmission CDV
+// (plan 3.1, Task 7) — énumère les statuts CDV FACTURE obligatoires dus
+// (find_cdv_transmissions_due, SD cross-tenant, migration 0022, fenêtre
+// bornée `dueSince`, cdv-deadline.ts/amendement A5) puis enfile un job
+// `cdv-transmission` par (facture, statut, cible)
+// (worker/cdv-transmission-sweep.service.ts,
+// `CdvTransmissionSweepService.sweep`). Dispatché par MaintenanceProcessor
+// (branche dédiée), planifié par CdvTransmissionScheduler
+// (worker/cdv-transmission.scheduler.ts).
+export const CDV_TRANSMISSION_SWEEP_JOB = 'cdv-transmission-sweep'
+// CDV_STUCK_RETRY_JOB : reprise des transmissions CDV `parked` (Task 7,
+// amendement A5 — batch borné, miroir ArchiveRetryService.sweepFailedArchives)
+// — énumère les lignes `parked` tous tenants confondus
+// (find_parked_cdv_transmissions, SD cross-tenant, migration 0023) puis
+// rejoue DIRECTEMENT `CdvTransmissionService.transmitStatus` par ligne
+// (worker/cdv-stuck-retry.service.ts, `CdvStuckRetryService.retryParked` —
+// PAS d'enfilement, contrairement à CDV_TRANSMISSION_SWEEP_JOB ci-dessus :
+// la reprise est idempotente par construction, motif ArchiveRetryService,
+// PAS AnnuaireSweepService.sweepStuckDrafts). Dispatché par
+// MaintenanceProcessor (branche dédiée), planifié par
+// CdvTransmissionScheduler.
+export const CDV_STUCK_RETRY_JOB = 'cdv-stuck-retry'
