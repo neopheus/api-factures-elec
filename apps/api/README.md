@@ -28,6 +28,22 @@ miroir de consultation tenant-scopé **PII-minimal**, publication
 PPF et synchronisation **bornée** (différentiel quotidien / complet
 hebdomadaire, avec sweep de reprise des publications figées). Adaptateurs de
 transport réels et câblage dans l'émetteur de factures différés au
+déploiement, puis en **3.1** avec la **transmission des CDV (message de
+statut Flux 6/CDAR)** et le **remplacement de la matrice de transitions du
+cycle de vie facture** : la matrice **monotone** 2.1 (bloqueur go-live
+documenté) est remplacée par une **matrice DAG data-driven** corrigeant les 4
+anomalies mandatées, **paramétrée** pour absorber la norme **AFNOR
+XP Z12-012** (payante, hors dépôt — achat Xavier) sans toucher au reste du
+code — le bloqueur devient une **interprétation en attente d'AFNOR**, plus
+une matrice **fausse**. Le Flux 6 est généré au format **CDAR** (UN/CEFACT
+SCRDM CI, aucun XSD DGFiP disponible → **validation structurelle** honnête,
+posture PAF) et transmis vers **deux cibles indépendantes** (PPF réglementaire
++ plateforme de réception résolue par l'annuaire 2.4), sous un délai **24h**
+borné par un ordonnanceur BullMQ (fenêtre de rattrapage 48h), avec une machine
+de livraison **distincte** du CDV facture (`prepared → transmitted →
+{acknowledged, rejected(601)}`, `parked` retryable) et une **frontière
+d'acquittement** dédiée. Adhésion **OpenPeppol** + PKI + SMP + stack AS4 et
+adaptateurs de transport réels (sftp/as2/as4/as4-peppol/api) différés au
 déploiement. Consomme
 `@factelec/invoice-core` (validation, calculs, génération des formats du socle)
 et expose l'ensemble derrière une couche d'authentification et d'isolation
@@ -209,24 +225,55 @@ restants sont facultatifs (`emise`/`recue`/
 `paiement_transmis`). Chaque facture démarre à `deposee` (200, **obligatoire**)
 à l'ingestion (événement initial inscrit dans le journal, cf. ci-dessous).
 
-**Machine à états** (`src/invoices/lifecycle-status.ts`) — chronologie
-monotone : une transition `from → to` n'est valide que si `to` a un code
-strictement supérieur à `from`, et si `from` n'est pas terminal (`refusee`
-210 et `rejetee` 213, exception l'un vers l'autre y compris) ; motif
-(`reason`) **obligatoire** pour `refusee`/`suspendue` (règle G7.25).
+**Machine à états — matrice DAG data-driven** (`src/invoices/lifecycle-status.ts`,
+**remplace en 3.1** la chronologie monotone de 2.1) : une transition
+`from → to` n'est valide que si l'arête `to` figure dans
+`ALLOWED_TRANSITIONS[from]` (`Record<LifecycleStatus, LifecycleStatus[]>`,
+paramétrée — le reste du code, `LifecycleService`/`InvoicesController`/…,
+n'appelle jamais que `canTransition`/`requiresReason`, jamais la table
+directement) ; motif (`reason`) **obligatoire** pour `refusee`/`suspendue`
+(règle G7.25) ; terminaux : `refusee` (210), `encaissee` (212) et `rejetee`
+(213) — aucune transition sortante, y compris entre eux.
 
-> ⚠️ **Interprétation projet, à durcir avant mise en production.** La DGFiP
-> ne publie, dans le Dossier général, aucune matrice de transitions
-> autorisées (les figures 48/49 du circuit de transmission sont purement
-> graphiques, non extractibles en règles machine) — seule la contrainte
-> « respect de la chronologie » (G7.19/G7.25/G7.45) est documentée. La
-> machine à états ci-dessus encode donc une interprétation **projet**
-> (chronologie stricte du code numérique) qui doit être recoupée avec la
-> norme **AFNOR XP Z12-012** (hors dépôt DGFiP, à se procurer) avant tout
-> passage en production réelle. Cas notable resté ouvert : `212 Encaissée →
-> 213 Rejetée` est autorisé par la règle monotone (une facture encaissée
-> peut être ultérieurement rejetée pour anomalie détectée après paiement) ;
-> AFNOR pourrait l'interdire — à réexaminer lors du durcissement.
+**4 anomalies mandatées, corrigées contre le modèle monotone 2.1** (ledger
+2.1, appliquées à la table ci-dessus) :
+- **`212 Encaissée → 213 Rejetée` INTERDIT** (`encaissee` rendu terminal —
+  CGI art. 290 A : une facture encaissée n'est plus rejetable) — le monotone
+  l'autorisait à tort (code strictement croissant).
+- **`207 En litige → 205 Approuvée` AUTORISÉ** (dispute résolue) — le
+  monotone le refusait (205 < 207).
+- **`208 Suspendue → 204 Prise en charge` AUTORISÉ** (reprise
+  post-suspension) — le monotone le refusait (204 < 208).
+- **`206 Approuvée partiellement → 205 Approuvée` AUTORISÉ** (complétion) —
+  le monotone le refusait (205 < 206).
+
+> ⚠️ **INTERPRÉTATION PROJET — la table ENTIÈRE, en attente d'AFNOR
+> XP Z12-012.** La DGFiP ne publie, dans le Dossier général, aucune matrice
+> de transitions autorisées (les figures 48/49 du circuit de transmission
+> sont purement graphiques, non extractibles en règles machine) — seule la
+> contrainte « respect de la chronologie » (G7.19/G7.25/G7.45) est
+> documentée, complétée par les 4 corrections mandatées ci-dessus (ledger
+> 2.1). La norme qui énumère formellement ces transitions — **AFNOR
+> XP Z12-012** — est **payante et hors dépôt** (**item Xavier : achat
+> requis** avant tout passage en production réelle). La table est
+> **paramétrée** précisément pour que ce remplacement futur ne touche QUE
+> `ALLOWED_TRANSITIONS` + `REASON_REQUIRED` + les vecteurs de test — aucun
+> autre fichier consommateur. **Amendement A3 (revue plan 3.1, binding) :**
+> `encaissee` est rendu **entièrement** terminal (aucune arête sortante,
+> pas seulement `¬(212→213)`) — un **sur-ensemble** du mandat dur, défendable
+> (CGI 290 A ; aucune source publique n'ancre de transition sortante de 212)
+> mais **plus strict que l'exigence mandatée**, donc **révisable** à
+> l'acquisition d'AFNOR. **Le remplacement du monotone par ce DAG NE
+> TOUCHE PAS au journal scellé (2.2)** : `verifyTenantChain` ne re-valide
+> jamais les transitions historiques (seul le hash-chain est vérifié) — les
+> lignes déjà inscrites sous l'ancienne matrice monotone restent
+> intégralement valides après le swap ; seul le **garde de service** change
+> pour les futures transitions. **Filet anti-régression indépendant** : les
+> tests de complétude (14×14 arêtes) comparent `ALLOWED_TRANSITIONS` à un
+> littéral `EXPECTED_TRANSITIONS` retranscrit à la main du plan — **pas** à
+> lui-même — pour qu'une future erreur de retranscription AFNOR (typo de
+> table) reste détectable plutôt que de valider silencieusement contre son
+> propre sujet.
 
 **Endpoints** :
 
@@ -1042,6 +1089,320 @@ doit d'abord masquer/attendre le rejet) et non une réouverture automatique.
   **runtime**, à chaque publication et chaque synchronisation, pas
   seulement en test/CI.
 
+## Transmission des CDV (Flux 6) — 3.1
+
+Le **Flux 6** transmet le **message CDV** (compte-rendu du cycle de vie
+d'**une** facture, statuts 200-213 — § Cycle de vie CDV ci-dessus) au **PPF**
+et à la **plateforme de réception** du destinataire — **distinct** de la
+facture elle-même (Flux 1-9), de l'e-reporting (Flux 10, 2.3) et de
+l'annuaire (Flux 13/14, 2.4). Sous-domaine `apps/api/src/cdv/*` : génération/
+validation CDAR (`flux6-cdar.ts`), machine de **livraison** pure
+(`cdv-transmission-lifecycle.ts`), fenêtre/échéance (`cdv-deadline.ts`),
+persistance (`cdv-transmission.repository.ts`), port de transmission
+(`cdv-transmission.port.ts`, `local-filesystem-cdv-store.ts`), service
+d'émission (`cdv-transmission.service.ts`), frontière d'acquittement
+(`cdv-status.service.ts`) et endpoints de consultation (`cdv.controller.ts`) ;
+côté worker : `cdv-transmission-sweep.service.ts` (ordonnanceur 24h borné),
+`cdv-transmission.processor.ts`/`.scheduler.ts` et `cdv-stuck-retry.service.ts`
+(reprise des `parked`).
+
+### Périmètre livré et honnêteté — lecture obligatoire
+
+**LIVRÉ de bout en bout : la transmission des 4 statuts CDV obligatoires
+(200/210/212/213) vers les deux cibles (PPF + destinataire), du déclenchement
+par le journal scellé 2.2 jusqu'à l'acquittement et la consultation.**
+**DIFFÉRÉS EXPLICITES — ne pas surpromettre « réseau Peppol livré »** :
+
+- **Adaptateurs de transport réels** (`sftp`/`as2`/`as4`/`as4-peppol`/`api`)
+  — `CdvTransmissionModule` lève une erreur explicite et testée tant qu'un de
+  ces drivers est sélectionné sans implémentation ; seul `local` (write-once
+  testable) est câblé en 3.1. Activation **au déploiement**.
+- **Acquittements réseau/PPF réels** — `CdvStatusService.recordAck` est la
+  **frontière** qu'un futur adaptateur webhook/Peppol appliquera ; elle est
+  exercée **directement par les e2e** (aucune route HTTP entrante ne reçoit
+  d'acquittement push dans ce plan — miroir exact `EreportingStatusService
+  .recordPpfStatus`, 2.3).
+- **Statuts CDV facultatifs** (10 des 14, hors socle obligatoire) et
+  **ingestion d'un F6 entrant** (accusés de réception détaillés du réseau)
+  — non transmis/consommés à ce jour, seuls les 4 statuts obligatoires
+  sortants sont couverts.
+- **Habilitation OpenPeppol** (adhésion, PKI test/prod, SMP, stack AS4) —
+  aucune de ces briques n'existe dans ce plan ; le fallback Peppol (§2.3.10)
+  reste une **cible**, pas une implémentation.
+- **Aucune dette de dépendances** — `xmlbuilder2`/Node purs, réutilisés
+  (aucun package ajouté pour le Flux 6).
+
+**Aucun scellement ni signature au niveau message** (contraste avec 2.2,
+même posture que 2.3/2.4) : le journal `cdv_transmission_events` est
+**append-only** (grants `SELECT`+`INSERT` seulement) mais **non scellé** —
+le scellement/PAF 2.2 protège le journal **CDV facture**
+(`invoice_status_events`), pas ce journal de **livraison**, dont le SD de
+balayage (ci-dessous) ne fait que **lire** le journal scellé sans jamais y
+écrire.
+
+### Format F6 / CDAR — validation structurelle (D3)
+
+`generateFlux6Cdar` (`flux6-cdar.ts`) émet un message
+`CrossIndustryApplicationResponse` au format sémantique **CDAR** (UN/CEFACT
+SCRDM CI, Dossier général v3.2 §3.6.4 footnote 102, mapping vérifié contre
+`Annexe 2 - Format sémantique FE CDV - Flux 6 - V2.3.xlsx`).
+
+> ⚠️ **AUCUN XSD DGFiP pour le Flux 6/CDV/CDAR** (l'arbre
+> `3- XSD_v3.2/` ne couvre que Annuaire + E-reporting + E-invoicing —
+> `Changelog_XSD.md` n'énumère que ces 3 familles ; l'XSD UN/CEFACT CDAR
+> externe n'est **pas vendorisé**). `validateFlux6Structure` est donc une
+> validation **STRUCTURELLE EN CODE** (chemins obligatoires par présence de
+> balises, code ∈ Tableau 8, horodates `^[0-9]{14}$`, `@schemeID` ∈ ICD 6523)
+> — **pas** une validation de schéma. Contraste explicite avec les Flux
+> 10/13/14 (2.3/2.4), qui **disposent** d'un XSD DGFiP réel (posture PAF,
+> 2.2) — et donc `xmllint` n'est **pas** invoqué pour le Flux 6 (rien à
+> valider contre).
+
+**Sous-ensemble MINIMAL émis, honnêtement borné** :
+
+- Parties (`Sender`/`Issuer`/`RecipientTradeParty`) nichées sous
+  `/rsm:ExchangedDocument/` (amendement A2, corrigé contre le xlsx réel — le
+  plan initial les plaçait à tort sous `AcknowledgementDocument`) ; champs de
+  statut (MDT-78/87/105/126) sous `/rsm:AcknowledgementDocument/`.
+- **MDT-74** (`MultipleReferencesIndicator`) — Requis 1..1, **valeur FIXE
+  `'False'`**, premier enfant d'`AcknowledgementDocument` (revue Task 2,
+  finding F-1 : initialement omis, corrigé + verrouillé par test).
+- **MDT Requis-PPF NON émis** (interface figée du plan, à compléter si le
+  PPF les exige à l'homologation) : **MDT-4, 5, 21, 40, 91, 95, 97**.
+- **Issuer/Recipient optionnels** dans l'interface `Flux6Message`, alors que
+  la source xlsx les note `R` (Requis, 1..n côté CDAR) — assoupli sciemment
+  tant que l'adaptateur transport réel (différé) n'impose pas la forme
+  finale ; à resserrer à l'homologation.
+- **Namespaces `rsm:`/`ram:`/`udt:` — INTERPRÉTATION PROJET (amendement A1)**
+  : l'Annexe 2 donne les chemins mais **aucune URN** (grep négatif exhaustif
+  sur `urn:`/`xmlns` du classeur) — les URN suivent la convention UN/CEFACT
+  CII/SCRDM standard, défendable mais non normée par la DGFiP ; sans effet
+  sur `validateFlux6Structure` (structurel, pas XSD).
+- **`601` — seul code F6 réellement documenté** (Annexe 2, onglet
+  « Statuts », objet « message CDV (Flux 6) ») ; toute acceptation est
+  **implicite** (aucune absence de rejet dans le délai ⇒ acquittement, cf.
+  § Machine de livraison ci-dessous) — interprétation projet, D4/D7.
+- **`CDV_INVOICE_PROFILE_ID = 'FACTURE'`** (MDT-3, colonne « Liste valeurs »
+  vide dans l'Annexe 2, aucune valeur normée) — littéral stable identifiant
+  le profil « cycle de vie facture » (par opposition à annuaire/e-reporting),
+  à confirmer avec la DGFiP/PPF avant production (miroir
+  `ROUTAGE_SCHEME_ID_PLACEHOLDER`, 2.4).
+
+### Machine de livraison (distincte du CDV facture)
+
+Cycle de vie de la **transmission** du message F6 (`cdv-transmission-lifecycle.ts`)
+— **3ᵉ instance** de ce patron (miroir structurel de `ereporting-lifecycle.ts`
+2.3 / `annuaire-lifecycle.ts` 2.4), **séparée sans conflation** du CDV facture
+ci-dessus :
+
+```
+prepared → transmitted → { acknowledged (implicite) | rejected (601) }
+parked  ⇄ (retry) transmitted   [ parked → rejected si sweep épuisé ]
+```
+
+- **Genèse** (`null → prepared`, hors table) à l'insertion de la ligne
+  (Task 4) ; `acknowledged`/`rejected` sont **terminaux**, `parked` est
+  **délibérément non terminal** — état d'attente **retryable** (destinataire
+  non adressable/ambigu à la résolution annuaire), repris par le sweep
+  `cdv-stuck-retry.service.ts`.
+- **`code`** : seul `rejected` porte un code DGFiP réel (**601**) ;
+  `prepared`/`transmitted`/`parked`/`acknowledged` portent `code: null`
+  (jamais un code inventé pour un état interne à la plateforme — leçon
+  2.3-A3).
+- **Rejet LOCAL pré-envoi vs rejet PPF/réseau, désambiguïsés** : un F6
+  structurellement invalide (bug de génération local) emprunte l'arête
+  **réelle** `prepared → rejected` (ou `parked → rejected` sur reprise
+  infructueuse), via `assertTransition` — **pas** un événement de genèse
+  hors table (retouche de commentaire livrée en 3.1-T9, la logique T3/T6
+  était déjà correcte, cf. `cdv-transmission-lifecycle.ts`) ; un rejet
+  PPF/réseau porteur du 601 emprunte l'arête `transmitted → rejected`.
+
+### Routage à deux cibles (PPF / destinataire) et résolution annuaire
+
+`CdvTransmissionService.transmitStatus` fait progresser **deux cibles
+indépendantes** par événement de statut obligatoire — **succès partiel au
+grain** (facture × statut × cible) :
+
+- **`ppf`** — toujours adressable, **aucune résolution** (matricule PPF
+  interne, D7).
+- **`recipient`** — résolu via `AnnuaireConsultationService.resolveRecipient`
+  (2.4), maille dérivée du **`buyer`** de l'`Invoice` canonique
+  (`buildMailleFromBuyer` : SIREN+SIRET si 14 chiffres, SIREN seul si 9,
+  `''`→`undefined` — amendement A4) à la date `issueDate` (convertie
+  ISO→AAAAMMJJ, `isoDateToYmd` — une comparaison lexicographique naïve avec
+  le format ISO littéral aurait cassé silencieusement, corrigé en Task 6).
+  Non-adressable/ambigu (`RecipientUnaddressableError`/
+  `AmbiguousResolutionError`) ou buyer sans identifiant
+  (`BuyerIdentifierMissingError`) → **`parked`** + reprise bornée
+  (`cdv-stuck-retry.service.ts`), jamais un throw non typé absorbé à tort.
+
+### Ordonnancement 24h et anti double-envoi (3 couches)
+
+`CdvTransmissionSweepService` (job répétable, `CDV_SWEEP_EVERY_MS`) énumère,
+**cross-tenant**, les événements de statut obligatoires dus via la fonction
+`SECURITY DEFINER` `find_cdv_transmissions_due(p_since)` (migration `0022`,
+**structurellement read-only** du journal scellé 2.2 — `LANGUAGE sql`, un
+seul `SELECT`, jamais `seq`/`prev_hash`/`hash` projetés) et enfile un job
+`cdv-transmission` par (facture, statut, **cible**). **3 couches de défense,
+aucune suffisante seule** (miroir 2.3/2.4) :
+
+1. **Fenêtre bornée** `dueSince(now, CDV_TRANSMISSION_LOOKBACK_MS)`
+   (`cdv-deadline.ts`, défaut **48h = 2× le SLA 24h**, §3.6.6) — le sweep ne
+   relit jamais tout le journal scellé, quelle que soit l'ancienneté du
+   dernier passage réussi (**voir le runbook ci-dessous pour la limite de
+   cette borne**).
+2. **`jobId` déterministe** `${invoiceId}-${toStatus}-${target}` (séparateur
+   `-`, jamais `:` — leçon 2.4) — BullMQ déduplique tant que le job existe
+   dans Redis.
+3. **Backstop base de données** — index unique `(invoice_id, to_status,
+   target)` (migration `0021`) + `insertTransmission` idempotent (Task 4) :
+   si les couches 1/2 laissent passer un doublon, `findResumable` le
+   détecte et saute la transmission déjà `transmitted`/terminale.
+
+**Échéance 24h (§3.6.6)** : `isPastDeadline` (`cdv-deadline.ts`) est un
+**drapeau purement observationnel** (log de dépassement) — amendement A6,
+**aucun** comportement de rejet ou de blocage n'en dépend ; le fuseau
+(**UTC**, vs heure de Paris) reste une interprétation ouverte (§ Runbook).
+`CdvStuckRetryService` (job répétable, `CDV_STUCK_RETRY_EVERY_MS`) reprend
+les `parked` par lot **borné** (`RETRY_BATCH=100`, migration `0023`,
+`find_parked_cdv_transmissions`, miroir `ArchiveRetryService` 2.2) —
+rejeu **direct** dans le process worker (pas d'enfilement sur une file :
+`transmitStatus` est idempotent par construction).
+
+### Frontière d'acquittement (601 / acceptation implicite)
+
+`CdvStatusService.recordAck(tenantId, transmissionId, outcome, actor, motif?)`
+— miroir exact `EreportingStatusService.recordPpfStatus` (2.3) : **frontière**
+applicable par un futur adaptateur réseau/Peppol, exercée directement par les
+e2e. CAS atomique : l'`UPDATE` conditionne sur `status='transmitted'` — 0
+ligne affectée (déjà terminale, jamais transmise, id inconnu ou cross-tenant,
+invisible sous RLS `FORCE`) ⇒ **409**, transaction annulée **avant** tout
+`INSERT` journal (**aucun événement fantôme**). Rejet (`outcome:'rejected'`)
+exige un motif (MDT-126) — **422 avant toute écriture**, aucune tentative CAS
+si absent.
+
+**Endpoints** (dual-auth, `TenantAuthGuard` — clé API **ou** session, jamais
+admin) :
+
+- `GET /cdv/transmissions?invoiceId=…` — liste des transmissions d'une
+  facture (résumés, **sans** le XML), `statusLabel`/`dgfipCode` (anti-fuite :
+  `null` pour les états internes).
+- `GET /cdv/transmissions/:id/xml` — XML `text/xml` (`null` si `parked`,
+  résolution jamais aboutie) — 404 byte-identique inconnu/hors-tenant.
+- `GET /cdv/transmissions/:id/events` — journal des statuts
+  (`fromStatus`/`toStatus`/`motif`/`actor`), désambiguïsant rejet local
+  (`actor:'platform'`, `fromStatus:'prepared'|'parked'`) vs acquittement
+  réel (`actor:'ppf'|'recipient'`, `fromStatus:'transmitted'`).
+
+### Persistance
+
+Deux tables tenant-scopées sous RLS **`ENABLE`+`FORCE`** (migrations `0021`
+Drizzle / `0022` hand) : `cdv_transmissions` (slot unique
+`(invoice_id, to_status, target)`, **sans filtre partiel** — `rejected`
+occupe le slot **à dessein**, cf. runbook) et `cdv_transmission_events`
+(journal **append-only**, `SELECT`+`INSERT` seulement, **non scellé** — voir
+§ Périmètre ci-dessus). Migration `0023` (hand) ajoute
+`find_parked_cdv_transmissions` (`SECURITY DEFINER`, reprise bornée).
+
+## Runbook opérationnel — Transmission CDV
+
+Section dédiée aux **dettes opérationnelles** de la transmission CDV
+(injections de revue Tasks 3/6/7/8), à connaître **avant** toute exploitation
+réelle — mêmes principes que le runbook e-reporting (§ ci-dessus).
+
+### Panne totale du worker CDV > 48h — rattrapage manuel requis
+
+**Symptôme.** Le sweep ne regarde jamais plus loin que
+`dueSince(now, CDV_TRANSMISSION_LOOKBACK_MS)` (défaut **48h**, 1ʳᵉ couche de
+la défense anti-double-envoi ci-dessus). Si le worker (ou Redis) est
+**indisponible pendant plus de 48h d'affilée**, un événement de statut
+obligatoire dont l'horodate `created_at` (journal scellé 2.2) sort de cette
+fenêtre au moment où le worker revient **ne sera plus jamais sélectionné**
+par `find_cdv_transmissions_due` — **manqué silencieusement**, sans log
+(`isPastDeadline` n'est évalué que sur les lignes effectivement retournées
+par la requête, jamais sur celles qui n'y entrent plus). Le sweep reprend
+normalement son activité, mais cet événement précis reste orphelin.
+
+**Procédure manuelle de rattrapage** (jusqu'à un futur outil dédié — non
+livré en 3.1) :
+
+1. Identifier la fenêtre de panne exacte (logs worker/infra).
+2. Requêter directement `invoice_status_events` (journal scellé 2.2, lecture
+   seule) pour les statuts obligatoires (200/210/212/213) créés dans la
+   fenêtre de panne, sans ligne `cdv_transmissions` correspondante
+   (`(invoice_id, to_status)` absent des deux cibles).
+3. Ré-enfiler manuellement (appel direct à
+   `CdvTransmissionService.transmitStatus` en console d'administration, ou
+   invoquer `find_cdv_transmissions_due` avec un `p_since` **élargi
+   ponctuellement** au-delà des 48h par défaut) — geste d'exploitation
+   explicite, jamais automatisé (élargir la fenêtre par défaut réouvrirait
+   la protection anti-relecture totale du journal scellé, 1ʳᵉ couche
+   ci-dessus).
+4. Vérifier via `GET /cdv/transmissions?invoiceId=…` que la transmission
+   rattrapée progresse normalement.
+
+### `rejected` = terminal occupant le slot — faux-rejet : reset manuel hors-bande
+
+Comme le slot A2 e-reporting (2.3), le slot unique `(invoice_id, to_status,
+target)` **n'exclut pas** `rejected` : c'est ce qui garantit l'idempotence
+anti-double-envoi (backstop DB, 3ᵉ couche ci-dessus) sur un crash entre
+insertion et transmission. Conséquence assumée : `rejected` étant
+**terminal** (`isTerminal`), une transmission qui y atterrit (601 réel, ou
+born-rejetée sur F6 invalide) **occupe définitivement son slot** — **aucune
+récupération in-band**. Si le rejet s'avère être un **faux-rejet** (601
+erroné du réseau/destinataire, ou bug de génération local depuis corrigé),
+la remise en circulation exige un **reset manuel hors-bande** (accès DB
+direct, rôle propriétaire — comme la procédure du slot A2 e-reporting) ;
+aucun endpoint de redrive n'est fourni en 3.1.
+
+### 601 tardif après acceptation implicite — refus correct, sans événement fantôme
+
+`acknowledged` (acceptation implicite) est **terminal** et **aucune** arête
+`acknowledged → rejected` n'existe dans la machine de livraison (Task 3) : un
+601 arrivant **après** que l'absence de rejet a été interprétée comme une
+acceptation échoue en **409** (`CdvStatusService.recordAck`, CAS sur
+`status='transmitted'`) **sans écrire d'événement** — comportement **voulu**,
+pas un bug à corriger : l'interprétation projet (acceptation implicite, D4/D7)
+ne permet pas à un rejet tardif de revenir sur un acquittement déjà réputé
+acquis. À documenter côté exploitation (un 601 en échec 409 sur une
+transmission `acknowledged` n'est pas une anomalie applicative).
+
+### Horodate UTC vs heure de Paris — interprétation ouverte
+
+`formatMessageHorodate`/l'horodate de statut sont calculés en **UTC**
+(`getUTC*`), comme le précédent e-reporting « 08h00 UTC » (2.3, amendement
+A6) — **à confirmer au go-live** si le PPF/Peppol attend une sémantique
+heure de Paris pour l'échéance 24h ou l'horodatage du message MDT-8/MDT-78.
+
+### Durcissement du rôle SD cross-tenant (dette sécurité, même motif 2.3/2.4)
+
+`find_cdv_transmissions_due()` **et** `find_parked_cdv_transmissions()`
+(fonctions `SECURITY DEFINER`) exposent, au rôle applicatif `factelec_app`
+(partagé API + worker), la colonne `tenant_id` de **tous les tenants** — même
+dette que `find_ereporting_declarants_due` (2.3) et
+`find_annuaire_sync_targets`/`find_stale_annuaire_drafts` (2.4), **aucun
+privilège supplémentaire réel** n'étant accessible depuis l'API HTTP
+aujourd'hui (même rôle Postgres). **À durcir au déploiement**, dans le même
+chantier de split du rôle worker que 2.3/2.4 (API et worker sur deux rôles
+Postgres distincts, `EXECUTE` retiré au rôle HTTP) — non fait dans ce plan.
+
+### Items Xavier (déploiement)
+
+- **Achat AFNOR XP Z12-012** — seule source qui formalise la matrice de
+  transitions CDV et ses sémantiques (§ Cycle de vie CDV ci-dessus).
+- **Adhésion OpenPeppol + PKI test/prod + SMP + stack AS4** — préalable à
+  tout adaptateur `as4-peppol` réel.
+- **`CDV_PA_MATRICULE`** (ICD 0238) — matricule réel du PA à configurer
+  avant production (défaut `'0000'`, placeholder dev/test).
+- **Confirmation du code interface `FFE0614A`** — introuvable dans les
+  sources primaires (Annexe 2 / Dossier général), présent seulement au
+  dossier de recherche interne ; non contraignant dans ce plan (§3.4
+  enveloppe / Chorus Pro, à vérifier avant prod).
+- **Éventuelle vendorisation de l'XSD UN/CEFACT CDAR externe** — permettrait
+  de faire passer `validateFlux6Structure` d'une validation structurelle en
+  code à une validation `xmllint` réelle, si la DGFiP/UN/CEFACT publie un
+  registre stable.
+
 ## Sécurité / multi-tenant
 
 Cette section documente les mécanismes de sécurité destinés à figurer au
@@ -1207,6 +1568,13 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `ANNUAIRE_COMPLETE_EVERY_MS` | Périodicité (ms) de l'ordonnanceur de synchronisation complète (Flux 14, remplacement du miroir du tenant, hebdomadaire) | `604800000` (7 j) |
 | `ANNUAIRE_PUBLISH_JOB_ATTEMPTS` | Tentatives max d'un job de la file `annuaire-sync` (ingestion F14 et reprise de draft figé) avant `failed` | `3` |
 | `ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS` | Périodicité (ms) du sweep de reprise des publications figées (drafts âgés > 15 min, `find_stale_annuaire_drafts`) | `300000` (5 min) |
+| `CDV_TRANSMISSION_DRIVER` | Adaptateur de transmission CDV Flux 6 : `local` (`LocalFilesystemCdvStore`, testable) \| `sftp`\|`as2`\|`as4`\|`as4-peppol`\|`api` (auth transport réelle, **activés au déploiement**, lèvent une erreur explicite tant que non fournis) | `local` |
+| `CDV_LOCAL_DIR` | Répertoire local du driver `local` | `./var/cdv` |
+| `CDV_SWEEP_EVERY_MS` | Périodicité (ms) de l'ordonnanceur CDV borné 24h (`CdvTransmissionSweepService`) | `3600000` (1 h) |
+| `CDV_TRANSMISSION_LOOKBACK_MS` | Fenêtre de rattrapage bornée du sweep CDV (48h = 2× le SLA 24h, §3.6.6, D8) — passée à `find_cdv_transmissions_due(p_since)` ; **voir le runbook** pour la limite d'une panne worker plus longue | `172800000` (48 h) |
+| `CDV_TRANSMISSION_JOB_ATTEMPTS` | Tentatives max d'un job de transmission CDV avant `failed` — distingue une erreur **opérationnelle** (port transitoire) d'un rejet fonctionnel (601 / F6 invalide, qui ne throw jamais et n'est donc jamais rejoué) | `3` |
+| `CDV_STUCK_RETRY_EVERY_MS` | Périodicité (ms) de la reprise des transmissions CDV `parked` (`CdvStuckRetryService`) | `300000` (5 min) |
+| `CDV_PA_MATRICULE` | Matricule ICD 0238 du PA émetteur du F6 (`senderMatricule`) — **item Xavier au déploiement** | `'0000'` (placeholder dev/test) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -1284,6 +1652,9 @@ README racine.
 | `POST /annuaire/lignes` | Publication d'une ligne d'adressage (D/M) — gate consentement (422), F13 XSD-validé et transmis via le port ; succès partiel au grain ligne (201 même si le statut interne devient `rejetee`) | 201, 401, 422 |
 | `PUT /annuaire/lignes/:id` | Fin d'effet : positionne `dateFin` sur une ligne existante du tenant | 200, 401, 404, 409, 422 |
 | `DELETE /annuaire/lignes/:id` | Masquage d'une ligne déposée (`deposee → masked`) | 204, 401, 404, 409 |
+| `GET /cdv/transmissions?invoiceId=…` | Liste des transmissions CDV (Flux 6) d'une facture (résumés — **sans** le XML), `dgfipCode`/`statusLabel` dérivés | 200, 401 |
+| `GET /cdv/transmissions/:id/xml` | XML `text/xml` de la transmission (absent si `parked`) — 404 anti-fuite (inconnue ou d'un autre tenant) | 200, 401, 404 |
+| `GET /cdv/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
 
 **Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
 route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
@@ -1298,7 +1669,8 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   `Authorization: Bearer fk_<prefix>.<secret>`, sans repli possible.
 - **`GET /invoices`, `GET /invoices/:id`, `GET /invoices/:id/formats/:format`,
   `GET /invoices/:id/status`, `GET /invoices/:id/ledger`, `GET
-  /invoices/:id/paf`, `GET /ereporting/transmissions*`** (lecture) acceptent
+  /invoices/:id/paf`, `GET /ereporting/transmissions*`, `GET
+  /cdv/transmissions*`** (lecture) acceptent
   **soit une clé API, soit une session utilisateur** du même tenant
   (`TenantAuthGuard`, dual-auth) — jamais une session **admin** plateforme,
   refusée par ce guard. Un en-tête
@@ -1429,10 +1801,29 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   (remplacement du miroir du tenant) testées séparément, y compris le
   no-op sur F14 vide ; worker bouclé en-process (`createTestWorker`)
   exerçant le pipeline complet ingestion Flux 14 → miroir.
+- **Transmission des CDV / Flux 6** (plan 3.1) : matrice DAG vérifiée par un
+  oracle `EXPECTED_TRANSITIONS` **indépendant** de `ALLOWED_TRANSITIONS`
+  (retranscrit à la main, jamais une boucle auto-référente — filet du futur
+  swap AFNOR), les 4 anomalies mandatées testées nommément
+  (`212→213` refusé, `207→205`/`208→204`/`206→205` acceptés) ; génération F6
+  vérifiée chemin par chemin contre le xlsx source (MDT-74 premier enfant,
+  format fixe `'False'`) ; validation structurelle testée en positif **et**
+  en négatif (F6 réellement malformé → rejeté) ; machine de livraison à
+  oracle indépendant (`prepared→transmitted→{acknowledged,rejected}`,
+  `parked` non terminal) ; anti-double-envoi (3 couches) prouvé au niveau SQL
+  réel (index unique `(invoice_id, to_status, target)`, deux insertions
+  concurrentes → une seule ligne) ; désambiguïsation rejet local
+  (`prepared/parked → rejected`) vs 601 réel (`transmitted → rejected`)
+  vérifiée aux deux niveaux (repository et e2e) ; late-601-après-acceptation-
+  implicite prouvé refusé en 409 **sans** événement fantôme ; reprise
+  `parked→transmitted` avec persistance de `xml`/`recipientMatricule` au
+  resume (fix injecté revue Task 6/7) ; worker bouclé en-process exerçant le
+  pipeline complet sweep→génération→port→persistance, y compris le
+  stuck-retry des `parked`.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
-  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 121
-  fichiers, **782 tests**, couverture **97.71 / 94.51 / 95.75 / 98.2 %**
+  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 131
+  fichiers, **923 tests**, couverture **97.69 / 94.37 / 95.6 / 98.08 %**
   (statements/branches/functions/lines).
 
 ```sh
@@ -1479,10 +1870,14 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   laisse la facture bloquée jusqu'au balayage suivant — bornée à
   `RECONCILIATION_GENERATING_STALE_MS` (~15 min par défaut), jamais
   indéfiniment. Voir § Architecture workers.
-- **Machine à états CDV = interprétation projet** (2.1, chronologie
-  monotone du code DGFiP) — **à durcir contre la norme AFNOR XP Z12-012**
-  avant mise en production réelle ; aucune matrice de transitions formelle
-  n'est publiée par la DGFiP dans le dépôt. Voir § Cycle de vie CDV.
+- **Résolu en 3.1** : la machine à états CDV **chronologie monotone** de
+  2.1 (bloqueur go-live documenté, matrice **fausse** sur 4 points) est
+  **remplacée** par une **matrice DAG data-driven** (4 anomalies mandatées
+  corrigées, paramétrée pour un futur swap AFNOR sans toucher au reste du
+  code). **Reste une interprétation projet, en attente d'AFNOR XP Z12-012**
+  (achat, item Xavier) — **la table entière**, pas seulement les 4
+  corrections ; amendement A3 documenté (212-terminal, sur-ensemble du
+  mandat dur). Voir § Cycle de vie CDV.
 - **`last_used_at` : contention potentielle sous forte concurrence** (2.1)
   — `authenticate_api_key` exécute désormais un `UPDATE ... RETURNING` à
   **chaque** authentification (verrou de ligne implicite sur la clé API
@@ -1557,8 +1952,36 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   cross-tenant** (2.4, même dette que `find_ereporting_declarants_due`
   2.3) — exposent des identifiants de tenants au rôle applicatif partagé
   API/worker ; à durcir au même split du rôle worker que 2.3.
+- **Résolu en 3.1** : transmission des CDV (message de statut Flux 6/CDAR)
+  de bout en bout pour les **4 statuts obligatoires** (200/210/212/213) vers
+  les **deux cibles** (PPF réglementaire + destinataire résolu par
+  l'annuaire 2.4) — machine de livraison distincte (`prepared→transmitted→
+  {acknowledged,rejected(601)}`, `parked` retryable), ordonnanceur borné 24h
+  (fenêtre de rattrapage 48h), anti-double-envoi 3 couches, frontière
+  d'acquittement (accept implicite/601) et endpoints de consultation
+  dual-auth. Voir §§ Transmission des CDV / Runbook opérationnel —
+  Transmission CDV ci-dessus pour le détail complet et les différés.
+- **Aucun XSD DGFiP pour le Flux 6/CDAR** (3.1, honnêteté) — validation
+  **structurelle en code** uniquement (posture PAF) ; sous-ensemble MINIMAL
+  de MDT émis (7 MDT Requis-PPF non émis, à compléter à l'homologation) ;
+  Issuer/Recipient assouplis vs la source (`R`→optionnels). Voir § Format
+  F6 / CDAR.
+- **Panne worker CDV > 48h non rattrapée automatiquement** (3.1, MEDIUM,
+  fail-safe) — un événement de statut obligatoire sorti de la fenêtre de
+  rattrapage bornée (48h) avant le retour du worker n'est jamais rattrapé
+  par le sweep suivant ; procédure manuelle documentée (élargissement
+  ponctuel de `p_since`). Voir § Runbook opérationnel — Transmission CDV.
+- **Slot CDV occupé par un `rejected`** (3.1, même motif que le slot A2
+  e-reporting 2.3) — un faux-rejet (601 erroné, ou F6 invalide corrigé
+  depuis) occupe définitivement son slot `(invoice_id, to_status, target)` ;
+  reset manuel hors-bande requis, aucun endpoint de redrive. Voir § Runbook
+  opérationnel — Transmission CDV.
+- **Rôle SD `find_cdv_transmissions_due`/`find_parked_cdv_transmissions`
+  cross-tenant** (3.1, même dette que 2.3/2.4) — exposent `tenant_id` de
+  tous les tenants au rôle applicatif partagé API/worker ; à durcir au même
+  split du rôle worker.
 
-### Différé explicitement (hors périmètre 2.4)
+### Différé explicitement (hors périmètre 2.4/3.1)
 
 - **E-reporting DGFiP au-delà du 10.3** (Flux 10, plan 2.3) : 10.1/10.2 B2Bi
   (classifiées mais non émises), TB-3 paiements (10.2/10.4, aucun modèle de
@@ -1587,13 +2010,29 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   (dev/CI/Testcontainers) ; **à confirmer** sur le Postgres managé Scaleway
   visé en production (extension contrib standard, généralement disponible
   sur les offres managées, mais non vérifiée sur l'infra réelle à ce jour).
-- **Transmission Peppol des statuts CDV** et **apposition automatique** des
-  transitions par un connecteur/le réseau → **phase 3**. Les transitions
-  2.1 sont exclusivement pilotées par session utilisateur.
+- **Transmission CDV au-delà du socle 3.1** : adaptateurs de transport réels
+  (`sftp`/`as2`/`as4`/`as4-peppol`/`api`, D1/D7), adhésion **OpenPeppol** +
+  PKI test/prod + SMP + stack AS4 (préalable à `as4-peppol` réel),
+  acquittements réseau/PPF réels (push — `CdvStatusService.recordAck` reste
+  la frontière, exercée par les e2e), transmission des 10 statuts CDV
+  **facultatifs**, ingestion d'un F6 entrant, MDT Requis-PPF non émis (4/5/
+  21/40/91/95/97, à compléter à l'homologation), confirmation du code
+  interface `FFE0614A`, éventuelle vendorisation de l'XSD UN/CEFACT CDAR
+  externe — voir § Transmission des CDV pour le détail de chaque point.
+  **L'apposition automatique** des transitions CDV **facture** par un
+  connecteur/le réseau reste différée : les transitions 2.1 (`POST
+  /invoices/:id/status`) demeurent exclusivement pilotées par session
+  utilisateur — 3.1 ne livre que la **transmission** des statuts déjà
+  décidés, pas leur déclenchement réseau.
 - **Remplacement de la matrice de transitions CDV** contre la norme **AFNOR
-  XP Z12-012** (payante, hors dépôt) → **phase 3**, **bloqueur go-live PDP**
-  (D7) — la matrice monotone 2.1 reste une interprétation projet documentée ;
-  ce même bloqueur couvre l'immatriculation PDP côté e-reporting (2.3).
+  XP Z12-012** (payante, hors dépôt, **item Xavier : achat requis**) —
+  **bloqueur go-live PDP partiellement résolu en 3.1** : la matrice
+  **monotone fausse** de 2.1 est remplacée par une **matrice DAG** corrigeant
+  les 4 anomalies mandatées et **paramétrée** pour absorber AFNOR sans
+  retoucher le code — mais la table **reste** une interprétation projet en
+  attente de la norme (amendement A3 : `encaissee`-terminal, sur-ensemble du
+  mandat dur). Ce même bloqueur couvre l'immatriculation PDP côté
+  e-reporting (2.3).
 - **Journal d'audit des authentifications** (connexions, échecs,
   révocations de session — distinct du journal CDV 2.1) → **horizon 2.x**.
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan

@@ -31,8 +31,9 @@ const CAS_STALE_RE = /is not in 'transmitted' status/
 // `actor` désambiguïse la SOURCE de l'acquittement — TOUJOURS le
 // `CdvTarget` ('ppf' | 'recipient') de la ligne acquittée (D4 :
 // désambiguïsation actor/fromStatus, jamais un 601 ambigu). Un rejet LOCAL
-// pré-envoi (F6 structurellement invalide) naît `rejected` par GENÈSE
-// (`from=null`, `actor='platform'`, Task 6) — HORS PÉRIMÈTRE de cette
+// pré-envoi (F6 structurellement invalide) emprunte l'arête RÉELLE
+// `prepared → rejected` (ou `parked → rejected`, `actor='platform'`,
+// Task 6, cf. cdv-transmission-lifecycle.ts) — HORS PÉRIMÈTRE de cette
 // méthode, qui ne gère QUE la transition `transmitted` → acquittement.
 @Injectable()
 export class CdvStatusService {

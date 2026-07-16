@@ -26,11 +26,17 @@
 // (interprétation projet documentée, cf. plan D4/D7).
 //
 // Désambiguïsation genèse vs transmission (D4, miroir 2.3-T9, exercée par
-// Tasks 4/6/8, HORS PÉRIMÈTRE de ce module pur) : un rejet LOCAL pré-envoi
-// (F6 structurellement invalide, `validateFlux6Structure` Task 2) naît
-// `rejected` par GENÈSE (jamais via `assertTransition`, donc hors de la
-// table ci-dessous) ; un rejet PPF/réseau porteur du code 601 EST, lui, la
-// transition `transmitted → rejected` déclarée ici.
+// Tasks 4/6/8, HORS PÉRIMÈTRE de ce module pur ; retouche commentaire revue
+// T8, cf. progress.md — AUCUN changement de logique) : la GENÈSE réelle
+// (`from: null → to: 'prepared'`, hors de la table ci-dessous) a lieu à
+// l'INSERTION de la ligne (Task 4, `insertTransmission`), avant toute
+// décision de rejet. Un rejet LOCAL pré-envoi (F6 structurellement invalide,
+// `validateFlux6Structure` Task 2) emprunte ENSUITE l'arête RÉELLE
+// `prepared → rejected` (ou `parked → rejected` sur reprise infructueuse) DE
+// la table ci-dessous, via `assertTransition` (Task 6,
+// `CdvTransmissionService`, ligne 55 ci-dessous) — ce n'est PAS un événement
+// de genèse `null → rejected` hors table. Un rejet PPF/réseau porteur du
+// code 601 emprunte, lui, l'arête `transmitted → rejected`.
 //
 // Miroir structurel de `ereporting-lifecycle.ts` (transitions `ALLOWED`,
 // `Object.hasOwn`, discipline motif/erreur typée) — SÉPARÉ, sans conflation
