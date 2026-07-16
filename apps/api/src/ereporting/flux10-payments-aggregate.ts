@@ -6,7 +6,7 @@ import type {
   PaymentRow,
   PaymentSubtotalRow,
 } from '../payments/payments.repository.js'
-import { classifyEreportingOperation } from './flux10-aggregate.js'
+import { classifyEreportingOperation, isExportB2C } from './flux10-aggregate.js'
 import type {
   Flux10PaymentAggregate,
   Flux10PaymentInvoice,
@@ -156,6 +156,7 @@ export async function aggregatePayments(
   const invoiceForms: Flux10PaymentInvoice[] = []
   const aggregateBuckets = new Map<string, Flux10PaymentAggregate>()
   let deferredIncomplete = 0
+  let exportB2CCount = 0
 
   for (const row of rows) {
     const invoice = await opts.loadInvoice(row.invoiceId)
@@ -192,19 +193,27 @@ export async function aggregatePayments(
       continue
     }
 
-    // '10.3' -> agrégé par (paymentDate, taxPercent), SANS réf facture ni
-    // catégorie (D7). Groupage par date au niveau du bucket (un
+    // '10.3' -> agrégé par (paymentDate, taxPercent, devise), SANS réf
+    // facture ni catégorie (D7). Groupage par date au niveau du bucket (un
     // `Flux10PaymentAggregate` = un `<Transactions>`, un seul `Payment/Date`
     // structurellement, motif TG-37/38) ; les sous-totaux à l'intérieur sont
-    // fusionnés (big.js) par taux, y compris entre factures DIFFÉRENTES
-    // (aucune réf facture dans la forme agrégée).
+    // fusionnés (big.js) par (taux NORMALISÉ, devise) — la DEVISE fait partie
+    // de la clé (revue T7, MEDIUM-1) : deux encaissements même date/taux en
+    // devises différentes (EUR domestique + USD export-B2C) restent deux
+    // sous-totaux distincts, chacun sous son CurrencyCode TT-98 — les sommer
+    // sous une seule devise fausserait la figure réglementaire. Le taux est
+    // comparé NORMALISÉ (revue T7, LOW : « 20.0 » ≡ « 20.00 », motif T5),
+    // la forme émise reste celle du premier sous-total rencontré.
+    if (isExportB2C(invoice)) exportB2CCount++
     const bucket = aggregateBuckets.get(row.paymentDate) ?? {
       paymentDate: row.paymentDate,
       subtotals: [],
     }
     for (const st of serviceSubtotals) {
       const existing = bucket.subtotals.find(
-        (s) => s.taxPercent === st.taxPercent,
+        (s) =>
+          normalizeRate(s.taxPercent) === normalizeRate(st.taxPercent) &&
+          s.currency === row.currency,
       )
       if (existing) {
         existing.amount = new Big(existing.amount).plus(st.amount).toFixed(2)
@@ -217,6 +226,15 @@ export async function aggregatePayments(
       }
     }
     aggregateBuckets.set(row.paymentDate, bucket)
+  }
+
+  // Miroir du compteur d'audit d'`aggregateTransactions` (revue T7, LOW) :
+  // les encaissements d'exports B2C fusionnés au 10.4 domestique restent
+  // tracés (interprétation à confirmer Annexe 7, go-live).
+  if (exportB2CCount > 0) {
+    logger.warn(
+      `${exportB2CCount} encaissement(s) d'export B2C (vendeur FR, acheteur étranger non-assujetti) agrégé(s) dans le 10.4 domestique (interprétation à confirmer Annexe 7, go-live).`,
+    )
   }
 
   if (deferredIncomplete > 0) {

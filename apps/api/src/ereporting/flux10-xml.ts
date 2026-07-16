@@ -19,6 +19,16 @@ import type {
 // targetNamespace mais ereporting.xsd, qui déclare l'élément racine <Report>,
 // n'en a pas). Confirmé empiriquement par xmllint (tests/unit/flux10-xml).
 export function generateEreportingXml(report: Flux10Report): string {
+  // XOR (D7, revue T7 MEDIUM-2) : un Report porte transactions OU payments,
+  // jamais les deux — le type ne l'impose pas (discipline d'appelant, T8).
+  // Sans ce garde, un appelant fautif verrait son PaymentsReport PERDU en
+  // silence (l'ancien `else if` avalait payments quand transactions était
+  // non-null).
+  if (report.transactions && report.payments) {
+    throw new Error(
+      'generateEreportingXml: un Flux10Report doit porter transactions OU payments, jamais les deux (XOR, D7)',
+    )
+  }
   const doc = create({ version: '1.0', encoding: 'UTF-8' })
   const root = doc.ele('Report')
   appendReportDocument(root, report.document)

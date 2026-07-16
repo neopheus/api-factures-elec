@@ -76,7 +76,9 @@ export function classifyEreportingOperation(
 // fonction (classé '10.1'). Détecté et compté SÉPARÉMENT (log dédié dans
 // `aggregateTransactions`) même s'il finit agrégé ET ÉMIS dans le MÊME bucket
 // 10.3 (date‖devise‖catégorie) que le B2C domestique — cf. bannière ci-dessus.
-function isExportB2C(invoice: Invoice): boolean {
+// Exporté pour le miroir d'audit côté paiements (flux10-payments-aggregate,
+// revue T7 LOW) — même définition, même sémantique (appelé sur du '10.3' only).
+export function isExportB2C(invoice: Invoice): boolean {
   return (
     invoice.seller.address.countryCode === 'FR' &&
     invoice.buyer.address.countryCode !== 'FR'

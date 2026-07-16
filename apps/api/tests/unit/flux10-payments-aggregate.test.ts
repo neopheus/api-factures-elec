@@ -127,6 +127,86 @@ describe('aggregatePayments — TB-3 (10.2 per-facture / 10.4 agrégé, services
     ])
   })
 
+  it('NE fusionne PAS deux encaissements même (date, taux) en devises DIFFÉRENTES — la devise fait partie de la clé (revue T7, MEDIUM-1)', async () => {
+    const invoiceEur = inv({ number: 'FAC-B2C-EUR' })
+    const invoiceUsd = inv({ number: 'FAC-B2C-USD', currency: 'USD' })
+    const rowEur = paymentRow({
+      id: 'pay-EUR',
+      invoiceId: 'inv-EUR',
+      reference: 'REF-EUR',
+      currency: 'EUR',
+      subtotals: [{ taxPercent: '20.00', amount: '300.00' }],
+    })
+    const rowUsd = paymentRow({
+      id: 'pay-USD',
+      invoiceId: 'inv-USD',
+      reference: 'REF-USD',
+      currency: 'USD',
+      subtotals: [{ taxPercent: '20.00', amount: '150.00' }],
+    })
+    const report = await aggregatePayments([rowEur, rowUsd], {
+      ...opts,
+      loadInvoice: loaderFor({ 'inv-EUR': invoiceEur, 'inv-USD': invoiceUsd }),
+    })
+
+    // Oracle indépendant : DEUX sous-totaux distincts (300.00 EUR, 150.00
+    // USD), JAMAIS 450.00 sous une devise unique — sommer des devises
+    // différentes fausserait la figure réglementaire.
+    expect(report?.transactions).toEqual([
+      {
+        paymentDate: '20260915',
+        subtotals: [
+          { taxPercent: '20.00', amount: '300.00', currency: 'EUR' },
+          { taxPercent: '20.00', amount: '150.00', currency: 'USD' },
+        ],
+      },
+    ])
+  })
+
+  it('fusionne des taux de FORMES différentes mais de même VALEUR (« 20.0 » vs « 20.00 ») dans le même sous-total (revue T7, LOW — clé normalisée)', async () => {
+    const invoiceA = inv({ number: 'FAC-B2C-F1' })
+    const invoiceB = inv({
+      number: 'FAC-B2C-F2',
+      lines: [
+        {
+          id: '1',
+          name: 'x',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '100.00',
+          vatCategory: 'S',
+          vatRate: '20.0',
+          nature: 'services',
+        },
+      ],
+    })
+    const rowA = paymentRow({
+      id: 'pay-F1',
+      invoiceId: 'inv-F1',
+      reference: 'REF-F1',
+      subtotals: [{ taxPercent: '20.00', amount: '100.00' }],
+    })
+    const rowB = paymentRow({
+      id: 'pay-F2',
+      invoiceId: 'inv-F2',
+      reference: 'REF-F2',
+      subtotals: [{ taxPercent: '20.0', amount: '50.00' }],
+    })
+    const report = await aggregatePayments([rowA, rowB], {
+      ...opts,
+      loadInvoice: loaderFor({ 'inv-F1': invoiceA, 'inv-F2': invoiceB }),
+    })
+
+    // Oracle indépendant : 100.00 + 50.00 = 150.00, UN seul sous-total (la
+    // forme émise est celle du premier rencontré : « 20.00 »).
+    expect(report?.transactions).toEqual([
+      {
+        paymentDate: '20260915',
+        subtotals: [{ taxPercent: '20.00', amount: '150.00', currency: 'EUR' }],
+      },
+    ])
+  })
+
   it("exclut un encaissement lié à une facture classée 'out' (B2B domestique, e-invoicing) ; renvoie null si rien d'imposable", async () => {
     const domesticB2B = inv({
       seller: { name: 'V', siren: '123456789', address: { countryCode: 'FR' } },

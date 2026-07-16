@@ -53,6 +53,28 @@ describe('generateEreportingXml', () => {
     expect(valid).toBe(true)
   })
 
+  it('REFUSE (throw) un Report portant transactions ET payments simultanément — XOR D7 (revue T7, MEDIUM-2)', () => {
+    const both: Flux10Report = {
+      ...report,
+      payments: {
+        periodStart: '20260901',
+        periodEnd: '20260910',
+        invoices: [],
+        transactions: [
+          {
+            paymentDate: '20260905',
+            subtotals: [
+              { taxPercent: '20.00', amount: '100.00', currency: 'EUR' },
+            ],
+          },
+        ],
+      },
+    }
+    // Sans le garde, l'ancien `else if` générait le TransactionsReport et
+    // PERDAIT le PaymentsReport en silence.
+    expect(() => generateEreportingXml(both)).toThrow(/XOR/)
+  })
+
   it('sérialise TB-1 (ReportDocument) obligatoire et TB-2 (période + agrégat)', () => {
     const xml = generateEreportingXml(report)
     expect(xml).toContain('<Report')
