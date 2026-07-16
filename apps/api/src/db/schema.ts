@@ -646,6 +646,65 @@ export const cdvTransmissionEvents = pgTable(
   ],
 )
 
+// Capture EXPLICITE des encaissements (D5, plan 3.2 Task 4) : PAS d'auto-seed
+// depuis le statut 212 « encaissée » du journal scellé 2.2 (ne porte ni
+// montant, ni taux, ni date — un seeder fabriquerait la ventilation).
+// Immutable après capture (grants SELECT,INSERT seulement — pas
+// d'UPDATE/DELETE, migration 0025). FK invoice **restrict** (miroir
+// cdvTransmissions/invoice_status_events, 2.2/3.1) : une facture munie d'un
+// encaissement ne se supprime pas.
+export const payments = pgTable(
+  'payments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoices.id, { onDelete: 'restrict' }),
+    paymentDate: text('payment_date').notNull(), // AAAAMMJJ (TT-92/TT-102)
+    currency: text('currency').notNull().default('EUR'),
+    reference: text('reference').notNull(), // référence client, porte l'idempotence de capture (D5)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Idempotence de capture (D5, amendement binding) : UNE seule clé,
+    // (invoice_id, reference) — portée ICI et par l'ON CONFLICT du
+    // repository (payments.repository.ts), aucune divergence.
+    uniqueIndex('payments_invoice_reference_unique').on(
+      t.invoiceId,
+      t.reference,
+    ),
+    index('payments_tenant_idx').on(t.tenantId, t.createdAt),
+  ],
+)
+
+// Répartition par taux d'un encaissement (TG-36/TG-39, 1..n) — paiements
+// partiels multiples par facture supportés (TVA à l'encaissement, D5).
+// Montant en `text` (précédent DGFiP : aucun montant Flux 10 en colonne
+// numérique, comme tous les montants du domaine e-reporting).
+export const paymentSubtotals = pgTable(
+  'payment_subtotals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    paymentId: uuid('payment_id')
+      .notNull()
+      .references(() => payments.id, { onDelete: 'restrict' }),
+    taxPercent: text('tax_percent').notNull(), // TT-93/TT-97, POURCENTAGE 3.2
+    amount: text('amount').notNull(), // TT-95/TT-99, MONTANT 19.6
+  },
+  (t) => [index('payment_subtotals_payment_idx').on(t.paymentId)],
+)
+
 export const userRole = pgEnum('user_role', [
   'owner',
   'admin',

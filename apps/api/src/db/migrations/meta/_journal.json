@@ -169,6 +169,20 @@
       "when": 1784184492660,
       "tag": "0023_cdv_parked_retry",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784203652276,
+      "tag": "0024_payments",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784203752276,
+      "tag": "0025_payments_rls",
+      "breakpoints": true
     }
   ]
 }
