@@ -126,6 +126,27 @@ export const envSchema = z.object({
     .positive()
     .max(10)
     .default(3),
+  // ── Annuaire Flux 13/14 (D1/D7) ──────────────────────────────────────────
+  // 'local' = LocalFilesystemAnnuaireStore (write-once, dev/test) ; api/edi =
+  // adaptateurs réels (PISTE-OAuth2 / SFTP-AS2-AS4, D1/D7) ACTIVÉS AU
+  // DÉPLOIEMENT (non fournis en 2.4).
+  ANNUAIRE_DRIVER: z.enum(['local', 'api', 'edi']).default('local'),
+  ANNUAIRE_LOCAL_DIR: z.string().default('./var/annuaire'),
+  // Périodicité de l'ordonnanceur de synchronisation : différentiel
+  // ~quotidien / complet ~hebdomadaire (borné, discipline de balayage 2.3).
+  ANNUAIRE_SYNC_EVERY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(86_400_000),
+  ANNUAIRE_COMPLETE_EVERY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(604_800_000),
+  // Nombre de tentatives d'un job de publication annuaire (Task 8) avant
+  // passage en `failed` (D13).
+  ANNUAIRE_PUBLISH_JOB_ATTEMPTS: z.coerce.number().int().positive().default(3),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
