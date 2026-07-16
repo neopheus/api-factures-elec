@@ -97,3 +97,59 @@ export function buildInvoice(input: InvoiceInput): Invoice {
   const totals = computeTotals(lines, vatBreakdown)
   return invoiceSchema.parse({ ...input, lines, vatBreakdown, totals })
 }
+
+// Ventilation de la ventilation TVA canonique (vatBreakdown, par (catégorie, taux))
+// entre biens et services, à partir du discriminant `nature` de ligne (D1/D2, plan
+// 3.2). Total conservé, EXACT, jamais doublé :
+// - `complete` = false dès qu'UNE ligne n'a pas de `nature` → aucune fabrication,
+//   le consommateur (agrégation e-reporting M*) diffère la facture (D3).
+// - assiette (`taxableAmount`) : somme de `lineNetAmount` (déjà 2 décimales) par
+//   bucket → `goodsTaxable + servicesTaxable = canonicalTaxable` SANS arrondi.
+// - taxe (`taxAmount`) : `goods` recalculée réellement sur les lignes biens ;
+//   `services` DÉRIVÉE PAR SOUSTRACTION (`canonicalTax - goodsTax`) — le bucket
+//   services absorbe le résidu d'arrondi ≤ 1 centime, garantissant
+//   `goodsTax + servicesTax = canonicalTax` exactement (jamais un arrondi
+//   indépendant des deux côtés, qui doublerait le résidu comme en 2.3).
+// - buckets vides (aucune ligne de la nature dans ce (catégorie, taux)) omis.
+function bucketKey(entry: Pick<VatBreakdown, 'category' | 'rate'>): string {
+  return `${entry.category}|${entry.rate}`
+}
+
+export function computeVatBreakdownByNature(invoice: Invoice): {
+  complete: boolean
+  goods: VatBreakdown[]
+  services: VatBreakdown[]
+} {
+  const complete = invoice.lines.every((line) => line.nature !== undefined)
+  if (!complete) {
+    return { complete: false, goods: [], services: [] }
+  }
+
+  const goods = computeVatBreakdown(
+    invoice.lines.filter((line) => line.nature === 'goods'),
+  )
+  const goodsByBucket = new Map(goods.map((entry) => [bucketKey(entry), entry]))
+
+  const services = invoice.vatBreakdown.flatMap((canonicalEntry) => {
+    const goodsEntry = goodsByBucket.get(bucketKey(canonicalEntry))
+    const goodsTaxable = big(goodsEntry?.taxableAmount ?? '0.00')
+    const goodsTax = big(goodsEntry?.taxAmount ?? '0.00')
+    const servicesTaxable = big(canonicalEntry.taxableAmount).minus(
+      goodsTaxable,
+    )
+    if (servicesTaxable.eq(0)) {
+      return []
+    }
+    const servicesTax = big(canonicalEntry.taxAmount).minus(goodsTax)
+    return [
+      {
+        category: canonicalEntry.category,
+        rate: canonicalEntry.rate,
+        taxableAmount: round2(servicesTaxable),
+        taxAmount: round2(servicesTax),
+      },
+    ]
+  })
+
+  return { complete: true, goods, services }
+}

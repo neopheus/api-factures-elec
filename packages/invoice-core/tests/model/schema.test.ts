@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   businessProcessTypeSchema,
+  invoiceLineNatureSchema,
+  invoiceSchema,
   parseInvoiceInput,
 } from '../../src/model/schema.js'
 import { multiRateInvoiceInput, simpleInvoiceInput } from '../fixtures.js'
@@ -169,5 +171,80 @@ describe('businessProcessTypeSchema', () => {
     expect(() =>
       parseInvoiceInput({ ...simpleInvoiceInput, businessProcessType: 'X1' }),
     ).toThrow()
+  })
+})
+
+describe('nature (D1 — discriminant biens/services de ligne, optionnel)', () => {
+  it.each(['goods', 'services'] as const)(
+    'accepts the nature value %s',
+    (value) => {
+      expect(invoiceLineNatureSchema.parse(value)).toBe(value)
+    },
+  )
+
+  it('rejects a value outside the goods/services enum', () => {
+    expect(() => invoiceLineNatureSchema.parse('other')).toThrow()
+  })
+
+  it('leaves nature optional on a line (absent field parses fine)', () => {
+    // La fixture de base ne porte déjà pas `nature` — reproduit une ligne
+    // historique (avant plan 3.2).
+    const parsed = parseInvoiceInput(simpleInvoiceInput)
+    expect(parsed.lines[0]!.nature).toBeUndefined()
+  })
+
+  it('accepts a line carrying a valid nature', () => {
+    const parsed = parseInvoiceInput({
+      ...simpleInvoiceInput,
+      lines: [{ ...simpleInvoiceInput.lines[0]!, nature: 'goods' }],
+    })
+    expect(parsed.lines[0]!.nature).toBe('goods')
+  })
+
+  it('rejects a line carrying an invalid nature', () => {
+    expect(() =>
+      parseInvoiceInput({
+        ...simpleInvoiceInput,
+        lines: [{ ...simpleInvoiceInput.lines[0]!, nature: 'other' }],
+      }),
+    ).toThrow()
+  })
+
+  it('rétro-compat SANS migration : une facture canonique historique (JSONB, sans `nature` sur aucune ligne) reste valide par le schéma complet (invoiceSchema), tel que lu sans re-parse en base', () => {
+    // Reproduit la forme d'une ligne AVANT le plan 3.2 : aucune clé `nature`.
+    const historicalCanonical = {
+      ...simpleInvoiceInput,
+      lines: [
+        {
+          id: '1',
+          name: 'Prestation de développement',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '1000.00',
+          vatCategory: 'S',
+          vatRate: '20.00',
+          lineNetAmount: '1000.00',
+        },
+      ],
+      vatBreakdown: [
+        {
+          category: 'S',
+          rate: '20.00',
+          taxableAmount: '1000.00',
+          taxAmount: '200.00',
+        },
+      ],
+      totals: {
+        sumOfLines: '1000.00',
+        taxExclusive: '1000.00',
+        taxAmount: '200.00',
+        taxInclusive: '1200.00',
+        payable: '1200.00',
+      },
+    }
+    expect(() => invoiceSchema.parse(historicalCanonical)).not.toThrow()
+    expect(
+      invoiceSchema.parse(historicalCanonical).lines[0],
+    ).not.toHaveProperty('nature')
   })
 })

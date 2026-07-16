@@ -97,6 +97,15 @@ export const partySchema = z.object({
   address: postalAddressSchema, // BG-5/BG-8
 })
 
+// Discriminant biens/services de ligne (plan 3.2, décision D1) — extension interne
+// (hors EN 16931/BT-x), miroir du template `businessProcessTypeSchema` : enum fermé
+// + `.optional()`. `goods` → TLB1 (livraisons de biens), `services` → TPS1
+// (prestations de services) — Annexe 6 « Correspondance ». Consommé en aval par
+// `computeVatBreakdownByNature` et par l'agrégation e-reporting (`apps/api`) ; le
+// mapping nature→catégorie Flux 10 reste hors invoice-core (séparation des
+// responsabilités, D1).
+export const invoiceLineNatureSchema = z.enum(['goods', 'services'])
+
 export const invoiceLineInputSchema = z.object({
   id: z.string().min(1), // BT-126
   name: z.string().min(1), // BT-153
@@ -107,6 +116,9 @@ export const invoiceLineInputSchema = z.object({
   vatRate: decimal4, // BT-152 (pourcentage)
   exemptionReasonCode: vatexCode.optional(), // BT-121 (VATEX)
   exemptionReason: z.string().min(1).optional(), // BT-120 (texte libre)
+  // OPTIONNEL : une facture canonique historique (JSONB, sans ce champ) reste
+  // valide sans migration DB (rétro-compat D1, plan 3.2).
+  nature: invoiceLineNatureSchema.optional(),
 })
 
 export const invoiceInputSchema = z.object({
@@ -150,6 +162,7 @@ export const invoiceSchema = invoiceInputSchema.extend({
 
 export type VatCategory = z.infer<typeof vatCategorySchema>
 export type BusinessProcessType = z.infer<typeof businessProcessTypeSchema>
+export type InvoiceLineNature = z.infer<typeof invoiceLineNatureSchema>
 export type PostalAddress = z.infer<typeof postalAddressSchema>
 export type Party = z.infer<typeof partySchema>
 export type InvoiceLineInput = z.infer<typeof invoiceLineInputSchema>
