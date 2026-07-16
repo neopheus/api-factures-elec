@@ -56,7 +56,19 @@ TB-3 (10.2 per-facture / 10.4 agrégé) selon la règle **SERVICES-ONLY**
 (note 119, autoliquidation et option débits exclues), sur une **2ᵉ cadence
 de transmission dédiée** (le Tableau 13 distingue paiements et
 transactions pour le régime réel normal mensuel) et un ordonnanceur à 3
-couches étendu (`flux_kind='payments'`). Consomme
+couches étendu (`flux_kind='payments'`), puis en **3.3** avec la **couture
+du routage destinataire à l'émission** (D1/D2/D4 — résolution annuaire
+câblée dans le **worker de génération**, best-effort **strict** jamais
+throw, métadonnée de routage **mutable** `routing_status`/
+`recipient_platform` sur `invoices`, **sans jamais muter le cycle de vie CDV
+scellé**), l'**énumération des codes-routage publiés par le tenant**
+(`GET /annuaire/codes-routage`, D6, POST autonome refusé) et des
+**durcissements transversaux 100 % code-interne** (validation UUID
+harmonisée en 404 anti-fuite byte-identique sur 8 routes, erreurs CAS
+typées `CasStaleError`, verrou d'architecture — un **ralentisseur**, pas une
+barrière — sur le footgun `apiKeyId`, stabilisation e2e par split Vitest
+`heavy`/`light`) — voir §§ Couture annuaire → émission / Durcissements
+transverses ci-dessous. Consomme
 `@factelec/invoice-core` (validation, calculs, génération des formats du socle)
 et expose l'ensemble derrière une couche d'authentification et d'isolation
 multi-tenant Postgres.
@@ -1086,7 +1098,10 @@ tête lors de l'ajout d'une nouvelle mutation dual-auth : le bypass est
 correct pour une clé API (pas de notion de rôle utilisateur applicatif, pas
 de cookie CSRF à vérifier), mais suppose que **rien** entre
 `TenantAuthGuard` et ces deux guards ne pose `req.apiKeyId` sur un chemin
-non authentifié.
+non authentifié. **Ce dernier point est désormais surveillé par un verrou
+d'architecture** (plan 3.3, D9 — voir § Durcissements transverses ci-dessous
+pour le détail et son honnêteté assumée : un **ralentisseur**, pas une
+barrière d'exécution).
 
 ### `libxml2`/`xmllint` — prérequis de l'hôte du **worker**
 
@@ -1739,6 +1754,279 @@ Postgres distincts, `EXECUTE` retiré au rôle HTTP) — non fait dans ce plan.
   code à une validation `xmllint` réelle, si la DGFiP/UN/CEFACT publie un
   registre stable.
 
+## Couture annuaire → émission de facture (routage destinataire) — 3.3
+
+**Le trou fonctionnel hérité de 2.4** : l'annuaire (Flux 13/14) sait résoudre
+le destinataire d'une facture (`AnnuaireConsultationService.resolveRecipient`,
+2.4), mais **rien ne l'appelait** depuis le pipeline d'émission Flux 1-9.
+Fermé en 3.3 : `RecipientRoutingService.resolveAndRecord`
+(`src/invoices/recipient-routing.service.ts`) est appelé par
+`InvoiceGenerationProcessor` (`src/worker/invoice-generation.processor.ts`),
+**après** `archive.archiveInvoice(...)`, dernier pas d'un job de génération
+déjà réussi.
+
+### Point de couture : le worker de génération, pas l'ingestion HTTP (D1)
+
+Quatre points de couture candidats (ingestion `POST /invoices`, contrôleur
+HTTP, worker de génération, transition de cycle de vie) ont été évalués sur
+trois critères : non-régression, sémantique d'erreurs, idempotence. Retenu :
+**le worker**, parce qu'une résolution synchrone à l'ingestion couplerait le
+chemin chaud HTTP à une lecture annuaire — soit en rejetant une facture
+valide simplement non-routable *pour l'instant* (une ligne d'annuaire peut
+entrer en vigueur plus tard), soit en dégradant la latence d'ingestion pour
+une info molle sans effet persistant. Le worker résout **après** que la
+génération a réussi : les formats du socle sont produits **exactement comme
+avant** la couture, la résolution est un rider additif qui **ne peut jamais**
+faire échouer l'émission.
+
+### Best-effort strict — jamais throw, aucune mutation du CDV scellé (D2)
+
+`resolveAndRecord` encapsule un **try/catch total**, miroir mot pour mot
+d'`ArchiveService.archiveInvoice` (2.2) : une panne annuaire (opérationnelle)
+ne fait **jamais** échouer un job de génération déjà réussi. Résoudre un
+destinataire **≠** émettre **≠** transmettre : le résultat de résolution est
+une **métadonnée de routage mutable** sur `invoices` (`routing_status`/
+`recipient_platform`), **jamais** un événement écrit dans le journal
+`invoice_status_events` (append-only et probatoire, scellé depuis 2.2) — la
+mutation légitime vers `emise` (statut CDV 201) surviendra à l'**émission
+réelle** (adaptateurs de transport, 3.4+, items Xavier), qui consommera
+`recipient_platform`.
+
+### Persistance : 2 colonnes additives, migration 0026 seule (D3)
+
+Calque exact d'`archive_status`/`archive_location` (2.2) : `routing_status`
+(`pgEnum` `'pending' | 'resolved' | 'unaddressable' | 'ambiguous'`,
+`NOT NULL DEFAULT 'pending'`) et `recipient_platform` (`text`, nullable).
+**Migration `0026_invoice_routing.sql` seule** — `CREATE TYPE` +
+`ALTER TABLE invoices ADD COLUMN` ×2, **aucune** RLS/grant nouvelle
+(`invoices` est déjà `ENABLE`+`FORCE`, `UPDATE` déjà accordé à
+`factelec_app`, réutilisé par `markGenerationStatus`/`markArchiveStatus`).
+Les factures antérieures à 3.3 obtiennent `'pending'` par défaut — honnête,
+elles précèdent la fonctionnalité. Repo (miroir `markArchiveStatus`/
+`findArchiveState`) : `markRoutingStatus(tenantId, invoiceId, status,
+platform?)`, `findRoutingState(tenantId, invoiceId)`. Exposé en lecture
+**uniquement** sur `GET /invoices/:id` (`InvoiceDetail` étend
+`InvoiceSummary` de `routingStatus`/`recipientPlatform`) — **volontairement
+pas** sur `GET /invoices` (on ne widen pas le DTO de liste).
+
+### Sémantique d'erreur de la résolution (D4)
+
+| Résultat | Effet |
+| --- | --- |
+| Succès | `markRoutingStatus('resolved', plateforme)` |
+| `RecipientUnaddressableError` | `markRoutingStatus('unaddressable')` + `logger.warn` (retriable — la ligne d'annuaire peut entrer en vigueur plus tard) |
+| `AmbiguousResolutionError` | `markRoutingStatus('ambiguous')` + `logger.warn` (nécessite un nettoyage de l'annuaire par l'opérateur) |
+| `BuyerIdentifierMissingError` (acheteur sans SIREN/SIRET, défensif — `partySchema.siren` est `.optional()`) | Traité comme `'unaddressable'` + `logger.warn` |
+| Erreur **opérationnelle** (annuaire/DB indisponible) | `logger.error`, `routing_status` laissé **inchangé** (`'pending'`), **jamais** de throw |
+
+**Idempotent** : un rejeu (retry BullMQ, réconciliation) re-résout et
+**écrase** un résultat déterministe — aucun CAS, aucun journal, exactement
+comme `markArchiveStatus`.
+
+### ⚠️ AMENDEMENT M1 (BINDING) — aucun sweep de reprise en 3.3, lecture obligatoire
+
+Contrairement aux autres best-effort du projet (`ArchiveRetryService` pour
+l'archive, le sweep annuaire de 2.4), **le routage n'a aucun mécanisme de
+reprise automatique en 3.3** : `InvoiceReconciliationService.sweep` ne
+balaie **que** `received`/`generating` — une facture `generated` dont le
+routage est resté `'pending'` après une panne annuaire **n'est jamais
+reprise** (le job de génération a réussi, aucun retry BullMQ ne se
+redéclenche). Un `'pending'` opérationnel persiste donc **jusqu'au sweep
+dédié (3.4+, miroir `ArchiveRetryService`) ou à un re-enfilement manuel** du
+job de génération (qui re-résout, la résolution étant idempotente).
+
+**Observabilité** : `'pending'`/`'unaddressable'`/`'ambiguous'` ne sont
+visibles **que** via `GET /invoices/:id`, facture par facture — **aucun
+filtre de liste** par `routing_status` n'existe (`GET /invoices` reste
+volontairement inchangé, D3). Un opérateur qui veut identifier les factures
+en attente ou non-routées doit interroger directement la base :
+
+```sql
+SELECT id, number FROM invoices
+WHERE routing_status IN ('pending', 'unaddressable', 'ambiguous');
+```
+
+Ce trou (absence de sweep, absence de filtre de liste) est **nommé et
+assumé** — voir § Limites v1 / TODO.
+
+### Extraction du helper *Party → Maille* (D5)
+
+`buildMailleFromBuyer`/`isoDateToYmd`/`normalizeToUndefined`/
+`BuyerIdentifierMissingError`, auparavant définis dans
+`cdv-transmission.service.ts` (consommateur historique du cycle de vie CDV),
+sont **déplacés** vers `src/annuaire/maille-from-buyer.ts` — extraction
+**strictement comportement-préservante** (aucun changement de sortie, tests
+CDV inchangés). Motif : séparation de domaine — l'émission (`invoices`/
+`worker`) et le CDV (`cdv`) dépendent tous deux de l'**annuaire**
+(fournisseur de la primitive *Party→Maille*), l'émission **ne doit jamais**
+dépendre du domaine CDV (consommateur aval du cycle de vie, pas fournisseur
+de primitives). `RecipientRoutingService` et `CdvTransmissionService`
+importent désormais tous deux depuis `annuaire/maille-from-buyer.ts` — une
+seule définition.
+
+### `GET /annuaire/codes-routage?siren=` — énumération de gestion (D6)
+
+**Le vrai trou de gestion HTTP comblé** : `GET /annuaire/lignes` (2.4) lit le
+**miroir de consultation** (`annuaire_directory_entries` — ce que le tenant
+peut *chercher*) ; **aucun endpoint** n'exposait `annuaire_lignes` (les
+lignes que le tenant a lui-même **publiées**) — `listLignes` existait déjà
+au repo, sans route.
+
+`GET /annuaire/codes-routage?siren=` (dual-auth `TenantAuthGuard`, zod query
+calqué sur `lignesQuerySchema`) renvoie `{ codes: [{ routageId, siret,
+plateforme, status, dateDebut, dateFin }] }` : les codes-routage
+**publiés par le tenant** (`annuaire_lignes` où `siren = …` **et**
+`routageId IS NOT NULL`), **vue de gestion honnête** — **tous** les statuts
+(`draft`/`published`/`deposee`/`rejetee`/`masked`), aucun filtre, à la
+différence de `GET /annuaire/resolution` qui ne considère que ce qui est
+effectivement adressable aujourd'hui. **Tableau vide, jamais 404**
+(énumération) ; non-fuite RLS identique à `GET /annuaire/lignes` — un SIREN
+d'un autre tenant renvoie un tableau vide, jamais une fuite d'existence.
+
+**POST create autonome REFUSÉ** — décision ferme, pas un oubli : un
+code-routage **n'est pas** une entité indépendante, c'est un composant de
+maille (`SIREN_SIRET_ROUTAGE`) créé via `POST /annuaire/lignes` (2.4). Un
+POST « create code » fabriquerait une entité absente du modèle et
+dupliquerait le cycle de vie des lignes (aucune nouvelle table — contrainte
+du plan). Réexaminable en 3.4+ si un besoin métier autonome émerge.
+
+## Durcissements transverses — 3.3
+
+Quatre durcissements 100 % code-interne (aucune extraction réglementaire
+nouvelle), soldés dans le même plan que la couture ci-dessus.
+
+### Validation UUID harmonisée — 404 anti-fuite byte-identique, jamais 500 (D7)
+
+`isUuid` (regex `^[0-9a-f]{8}-…-…12$/i`, désormais `src/common/uuid.ts`,
+source unique) était déjà appliqué en couche service pour
+`invoices`/`lifecycle`/`api-keys` (404 **avant** toute requête SQL) mais
+**absent** sur 4 contrôleurs (8 routes) qui passaient `:id` brut à
+`eq(table.id, id)` (colonne `uuid`) — un cast Postgres échouait alors en
+**500** :
+
+- `cdv.controller` : `GET transmissions/:id/xml`, `GET transmissions/:id/events`
+- `ereporting.controller` : `GET transmissions/:id/xml`, `GET transmissions/:id/events`
+- `annuaire.controller` : `PUT lignes/:id`, `DELETE lignes/:id`
+- `ledger.controller` : `GET :id/ledger`, `GET :id/paf`
+
+Chaque contrôleur pose désormais `if (!isUuid(id)) throw <son 404 existant>`
+**au point exact** où il produit déjà son 404, réutilisant la **même**
+fabrique → **corps byte-identique** entre un `:id` malformé et un `:id`
+inconnu/cross-tenant (anti-fuite préservée, prouvé `toEqual` en e2e).
+`ledger.controller` n'avait **pas** de fabrique `notFound()` réutilisable
+(404 dupliqué inline) : extraite d'abord en fabrique locale
+(comportement-préservant), `isUuid` branché ensuite.
+
+### Erreurs CAS typées — `CasStaleError` remplace 3 regex divergentes (D8)
+
+**État antérieur, fragile** : trois déclarations distinctes de
+`CAS_STALE_RE`, aux **regex divergentes**
+(`/is not in 'transmitted' status/` vs `/is not in '.*' status/`), chacune
+faisant `.test(err.message)` sur une `Error` générique — couplage
+service↔wording du repo, assumé mais fragile.
+
+`CasStaleError` (`src/common/cas-error.ts`, `extends Error`, champs
+`readonly { entity, id, expectedStatus }`, message conservé dans `super(...)`
+pour les logs) est désormais levée aux **7 sites CAS des repos**
+(`cdv-transmission.repository.ts` ×3, `annuaire.repository.ts` ×2,
+`ereporting.repository.ts` ×2) au lieu du `throw new Error(...)` textuel. Les
+services catchent `instanceof CasStaleError` — **suppression** des 3
+`CAS_STALE_RE`.
+
+**Sortie HTTP strictement inchangée — 5 catch, 3 sorties distinctes**
+(amendement M2, inventaire exhaustif) :
+
+| Site | Sortie inchangée |
+| --- | --- |
+| `cdv-status.service` | **409** |
+| `ereporting-status.service` | **409** |
+| `annuaire-publication.service` / `recordAck` | `throw StaleLigneTransitionError` |
+| `annuaire-publication.service` / `maskLigne` | `throw StaleLigneTransitionError` |
+| `annuaire-publication.service` / `republishDraft` | `return 'skipped'` |
+
+Seule la **détection** passe du texte au type ; la conflation voulue
+« stale / id inconnu / cross-tenant » (indiscernable côté HTTP) est
+préservée.
+
+### Verrou d'architecture apiKeyId — un RALENTISSEUR, pas une barrière (D9 + amendement M3)
+
+**Le footgun** : `req.apiKeyId`, posé par `api-key.guard.ts`/
+`tenant-auth.guard.ts` **après** vérification cryptographique de la clé API,
+est lu pour **bypass** par `csrf.guard.ts`/`roles.guard.ts`
+(`if (req.apiKeyId) return true`) sur la seule route dual-auth-mutation à ce
+jour (`POST /payments`, 3.2). Un **nouveau** code posant/lisant `apiKeyId`
+hors de ces 4 fichiers court-circuiterait silencieusement un contrôle de
+rôle/CSRF attendu.
+
+`apps/api/tests/unit/apikeyid-setters.arch.test.ts` grep-structurel les
+sources : (1) **seuls** `api-key.guard.ts`/`tenant-auth.guard.ts` peuvent
+**écrire** `apiKeyId` ; (2) **seuls** `roles.guard.ts`/`csrf.guard.ts`
+peuvent le **lire** pour bypass — 3 formes syntaxiques minimum matchées
+(`.apiKeyId =`, `['apiKeyId'] =`, `["apiKeyId"] =`, idem en lecture), sur
+**tout** `apps/api/src`, pas seulement les guards.
+
+**⚠️ Honnêteté (amendement M3, BINDING)** : ce test est un **RALENTISSEUR**,
+**pas** un « asservissement » — un grep multi-formes reste contournable par
+un renommage de propriété, un helper construisant l'objet ailleurs, ou toute
+transformation n'empruntant aucune des formes syntaxiques matchées. Il
+échoue volontairement au moindre nouveau poseur/lecteur **textuel** — son
+seul objectif est de ralentir une régression silencieuse, pas de la rendre
+impossible. La **vraie** barrière d'exécution — un garde composé
+`DualAuthMutationGuard` encapsulant « clé API OU session ; si session → rôle
+∈ X ET CSRF » — reste **différée** (friction NestJS-idiomatique, touche la
+route qui marche, gain marginal pour une seule route) jusqu'à l'apparition
+d'une **seconde** route dual-auth-mutation.
+
+**+ unification de type** : `apiKeyId?: string` vit désormais en **une
+seule** source (`WithApiKeyId`, `src/auth/auth.types.ts`), réutilisée par
+`SessionRequest`/`TenantRequest` — **pas** une augmentation globale
+`declare module 'express'` (élargirait `apiKeyId` à **toute** `Request` du
+projet, l'inverse de l'objectif), une interface **étroite** explicitement
+importée par les seuls guards concernés. Zéro changement de comportement
+runtime.
+
+### Stabilisation e2e — teardown idempotent + split Vitest heavy/light (D10/D11)
+
+**Teardown idempotent du pool** (`DbModule.onModuleDestroy`) : `pg-pool`
+rejette « Called end on pool more than once » si `end()` est rappelé — NestJS
+peut invoquer les hooks de shutdown plusieurs fois selon la combinaison de
+signaux OS reçus. Garde `private ended = false` : double-destroy = no-op.
+`createPool` (`src/db/client.ts`) ajoute un écouteur `pool.on('error', …)`
+qui **avale et journalise** (jamais throw) le bruit `57P01` (admin shutdown)
+émis par une connexion inactive pendant le teardown testcontainers.
+
+**Split Vitest `heavy`/`light`** (`test.projects`, natif Vitest 4,
+`vitest.config.ts`) : les **8 suites** qui démarrent Postgres + Redis + des
+Workers BullMQ (chacune = un jeu **complet** de conteneurs testcontainers) —
+plus `invoice-routing.e2e.test.ts` (Task 2, même profil lourd) — tombent
+dans le projet `heavy`, exécuté en **série** (`fileParallelism: false`, au
+plus un jeu de conteneurs lourds à la fois : élimine la source dominante de
+la contention testcontainers observée depuis 3.2). Tout le reste
+(Postgres-seul/léger) reste dans `light`, parallèle. **Sans retry** — la
+contention est traitée à la racine, pas masquée.
+
+**⚠️ Amendement m6 (BINDING)** : en `test.projects`, la config racine **ne
+cascade pas** vers les projets (`extends: false`, comportement Vitest 4 par
+défaut) — `setupFiles`/`hookTimeout`/`testTimeout` sont **redéclarés dans
+chaque projet** (sans quoi `tests/setup.ts`, qui pose `DATABASE_URL`/
+`LOG_LEVEL`/`*_LOCAL_DIR` **avant** le chargement eager de `ConfigModule`,
+cesserait silencieusement de s'appliquer — rupture d'hermétisme). Seule
+`coverage` reste définie une fois à la racine (Vitest l'exige au niveau
+racine, non supporté en config de projet) ; les seuils s'appliquent à
+l'**agrégat** heavy+light.
+
+**⚠️ Amendement m7 (BINDING) — fallback appliqué** : `maxWorkers: 5` (aligné
+CI) a **re-flaké en pratique** lors de la vérification empirique — le VM
+Docker local mesure exactement **5 vCPU** (`docker info`), et 5 conteneurs
+Postgres démarrés simultanément saturent le budget CPU du démon ;
+`invoices-repository.e2e.test.ts` (un des 4 fichiers historiquement flaky
+3.2 — avec `health-redis`/`paf-export`/`annuaire-consultation`, explicitement
+surveillés) **et 2 autres suites `light`** ont échoué simultanément sur
+« Timed out … while waiting for container ports to be bound to the host ».
+**Fallback documenté et appliqué** : `maxWorkers: 3` pour le projet `light`
+(headroom sous le plafond Docker), plutôt que de conclure « vert » sur un
+run simplement plus chanceux.
+
 ## Sécurité / multi-tenant
 
 Cette section documente les mécanismes de sécurité destinés à figurer au
@@ -1966,7 +2254,7 @@ README racine.
 | `GET /health/ready` | Readiness (ping Postgres **et Redis**, `@nestjs/terminus`, chacun borné 2 s) | 200, 503 |
 | `POST /invoices` | Ingestion : validation `invoice-core`, persistance transactionnelle, **enfilement** du job de génération (asynchrone, 2.1 — voir § Nouvelle sémantique) | 201, 401, 409, 422 |
 | `GET /invoices` | Liste paginée (keyset), tenant-scopée | 200, 401 |
-| `GET /invoices/:id` | Métadonnées d'une facture (`status` de génération, `lifecycleStatus` CDV) + formats disponibles | 200, 401, 404 |
+| `GET /invoices/:id` | Métadonnées d'une facture (`status` de génération, `lifecycleStatus` CDV, `routingStatus`/`recipientPlatform` — routage destinataire résolu à l'émission, 3.3, § Couture annuaire → émission) + formats disponibles | 200, 401, 404 |
 | `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) — **404 tant que `status ≠ 'generated'`** | 200, 401, 404 |
 | `POST /invoices/:id/status` | Transition de statut CDV (`{ toStatus, reason? }`) — session owner/admin/accountant + CSRF, CAS anti-race | 201, 401, 403, 404, 409, 422 |
 | `GET /invoices/:id/status` | Statut CDV courant + historique complet (journal `invoice_status_events`) | 200, 401, 404 |
@@ -1986,6 +2274,7 @@ README racine.
 | `GET /ereporting/transmissions/:id/xml` | XML de la transmission (`text/xml`) — 404 si absente ou d'un autre tenant | 200, 401, 404 |
 | `GET /ereporting/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
 | `GET /annuaire/lignes` | Recherche dans le miroir de consultation (Flux 14) du tenant, filtrée par SIREN | 200, 401 |
+| `GET /annuaire/codes-routage?siren=` | Énumération de gestion des codes-routage **publiés par le tenant** (`annuaire_lignes`, tous statuts, 3.3 D6) — tableau vide si aucun (pas 404) ; POST autonome refusé (composant de maille, créé via `POST /annuaire/lignes`) | 200, 401, 422 |
 | `GET /annuaire/resolution` | Résolution du matricule de plateforme destinataire pour une maille à une date donnée (`?siren&siret?&routageId?&suffixe?&date`) — 404 anti-fuite (inconnu/hors période/hors tenant), 409 si résolution ambiguë | 200, 401, 404, 409 |
 | `POST /annuaire/lignes` | Publication d'une ligne d'adressage (D/M) — gate consentement (422), F13 XSD-validé et transmis via le port ; succès partiel au grain ligne (201 même si le statut interne devient `rejetee`) | 201, 401, 422 |
 | `PUT /annuaire/lignes/:id` | Fin d'effet : positionne `dateFin` sur une ligne existante du tenant | 200, 401, 404, 409, 422 |
@@ -2168,11 +2457,34 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   resume (fix injecté revue Task 6/7) ; worker bouclé en-process exerçant le
   pipeline complet sweep→génération→port→persistance, y compris le
   stuck-retry des `parked`.
+- **Couture annuaire → émission** (plan 3.3, Task 1/2) : oracle **indépendant**
+  (seed d'une ligne d'annuaire à plateforme connue → `recipient_platform` ==
+  cette plateforme ; pas de ligne → `'unaddressable'`) ; les 4 branches de
+  `resolveAndRecord` testées séparément (résolu/unaddressable/ambiguous/
+  erreur opérationnelle), y compris l'idempotence (deux appels → même
+  écriture déterministe) ; e2e worker bouclé en-process
+  (`invoice-routing.e2e.test.ts`) prouvant la résolution **et** la
+  non-régression (les formats sont générés et servis indépendamment du
+  routage) ; isolation RLS par tenant sur `routing_status`/
+  `recipient_platform` ; extraction *Party→Maille* (D5) vérifiée
+  **comportement-préservante** — la suite CDV reste verte, inchangée.
+- **Codes-routage** (Task 3) : liste filtrée par tenant/SIREN, tableau vide
+  (pas 404) si aucun code ou SIREN cross-tenant (non-fuite RLS), dual-auth,
+  422 sur SIREN malformé.
+- **Durcissements transverses** (Tasks 4-7) : les **8 routes** UUID
+  harmonisées prouvées `toEqual` entre `:id` malformé et UUID inconnu (corps
+  byte-identique, jamais 500) ; `CasStaleError` testée aux **7 sites CAS**
+  des repos et aux **5 catch** des 3 services, un témoin par sortie (409 /
+  `StaleLigneTransitionError` / `'skipped'`) prouvant la non-régression de
+  contrat ; verrou d'architecture apiKeyId exercé contre les sources réelles
+  (`apikeyid-setters.arch.test.ts`) ; teardown du pool prouvé idempotent
+  (`onModuleDestroy` appelé deux fois → `pool.end` invoqué une seule fois).
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
-  `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
-  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 131
-  fichiers, **923 tests**, couverture **97.69 / 94.37 / 95.6 / 98.08 %**
-  (statements/branches/functions/lines).
+  `vitest.config.ts`, seuils fusionnés sur l'agrégat des projets `heavy` +
+  `light`, § Durcissements transverses), exclusions limitées au bootstrap et
+  au câblage DI pur (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`).
+  État actuel : 145 fichiers, **1051 tests**, couverture
+  **97.78 / 94.33 / 95.47 / 98.1 %** (statements/branches/functions/lines).
 
 ```sh
 pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docker requis)
@@ -2355,8 +2667,42 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   consommées** (3.2) — la passe paiements partage aujourd'hui le
   planificateur/la fenêtre bornée des transactions ; variables réservées à
   un futur découplage. Voir § Variables d'environnement.
+- **Résolu en 3.3** : couture `resolveRecipient` à l'émission — **le trou
+  fonctionnel PDP hérité de 2.4 est fermé** (résolution câblée dans le
+  worker de génération, best-effort strict, métadonnée de routage mutable
+  sans mutation du CDV scellé) ; endpoint `GET /annuaire/codes-routage`
+  (énumération de gestion, POST autonome refusé) ; validation UUID
+  harmonisée (404 anti-fuite byte-identique sur 8 routes, jamais 500) ;
+  erreurs CAS typées (`CasStaleError`, 3 `CAS_STALE_RE` supprimées) ; verrou
+  d'architecture sur le footgun `apiKeyId` ; teardown de pool idempotent +
+  split Vitest heavy/light. Voir §§ Couture annuaire → émission /
+  Durcissements transverses ci-dessus.
+- **Sweep de reprise du routage absent (3.3, MEDIUM, fail-safe, amendement
+  M1 BINDING)** — un `routing_status='pending'` **opérationnel** (annuaire/DB
+  indisponible au moment de la résolution) n'est **jamais** repris
+  automatiquement : `InvoiceReconciliationService.sweep` ne balaie que
+  `received`/`generating`, pas une facture déjà `generated`. Persiste jusqu'à
+  un sweep dédié (3.4+, miroir `ArchiveRetryService`) ou un re-enfilement
+  manuel du job de génération. **Aucun filtre de liste** par `routing_status`
+  n'existe non plus (`GET /invoices` inchangé, D3) — un opérateur doit
+  interroger directement la base (requête SQL au § Couture annuaire →
+  émission, amendement M1). Aucune des deux lacunes n'est masquée.
+- **Garde composé `DualAuthMutationGuard` différé** (3.3, D9) — le verrou
+  d'architecture apiKeyId (`apikeyid-setters.arch.test.ts`) est un
+  **ralentisseur** (grep multi-formes, contournable), pas la barrière
+  d'exécution réelle qu'offrirait un garde composé dédié ; différé jusqu'à
+  l'apparition d'une **seconde** route dual-auth-mutation (`POST /payments`
+  reste la seule à ce jour).
+- **Worker-role split toujours différé (3.3, confirme la dette déjà
+  tracée)** — 3.3 n'introduit **aucune** nouvelle fonction `SECURITY
+  DEFINER` cross-tenant (migration 0026 = colonnes additives seules) ; la
+  séparation des privilèges du process worker reste l'unique remède
+  structurel aux dettes de rôle SD cross-tenant déjà documentées
+  (`find_ereporting_declarants_due` 2.3, `find_annuaire_sync_targets`/
+  `find_stale_annuaire_drafts` 2.4, `find_cdv_transmissions_due`/
+  `find_parked_cdv_transmissions` 3.1 ci-dessus).
 
-### Différé explicitement (hors périmètre 2.4/3.1/3.2)
+### Différé explicitement (hors périmètre 2.4/3.1/3.2/3.3)
 
 - **E-reporting DGFiP au-delà du 10.1/10.3/TB-3** (Flux 10, plans 2.3/3.2) :
   cadres de facturation mixtes M1/M2/M4 **non naturés** (au moins une ligne
@@ -2374,10 +2720,16 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   transport réels (API PISTE-OAuth2, EDI SFTP/AS2/AS4), feeds
   d'initialisation INSEE/Chorus/DGFiP (lignes par défaut 9998/Chorus non
   chargées), habilitations réelles, codes routage standalone (6 endpoints
-  Swagger différés, `RoutageID` inline seulement), connecteur de signature
-  électronique du consentement, câblage de la résolution de routage dans
-  l'émetteur de factures (phase 3), endpoint de révocation de consentement —
-  voir § Annuaire central pour le détail de chaque point.
+  Swagger différés, `RoutageID` inline seulement — l'**énumération** de
+  gestion, elle, est livrée en 3.3, `GET /annuaire/codes-routage`), connecteur
+  de signature électronique du consentement, endpoint de révocation de
+  consentement — voir § Annuaire central pour le détail de chaque point.
+  **Câblage de la résolution de routage dans l'émetteur de factures : RÉSOLU
+  en 3.3** (§ Couture annuaire → émission ci-dessus) — restent différés le
+  **sweep de reprise** d'un `routing_status='pending'` opérationnel, le
+  **garde composé** `DualAuthMutationGuard`, le **POST codes-routage**
+  autonome (refusé, décision projet — D6) et la mutation `emise`/transport
+  réel (adaptateurs de transport, items Xavier).
 - **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway
   Object Storage, mode `COMPLIANCE`, rétention 10 ans) — **spécifié** (même
   contrat que `ArchiveStore`) mais **non écrit** en 2.2 : infra à la main de
