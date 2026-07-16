@@ -15,3 +15,9 @@ export function parseBody<T>(schema: ZodType<T>, body: unknown): T {
   }
   return r.data
 }
+
+// Les query params HTTP sont un objet `unknown` au même titre qu'un body —
+// réutilise EXACTEMENT la même validation zod (422 problem+json). Nommé
+// distinctement pour la lisibilité au point d'appel des contrôleurs
+// (`@Query() query: unknown` vs `@Body() body: unknown`, Task 7 annuaire).
+export const parseQuery = parseBody
