@@ -19,9 +19,16 @@ import { TenantContextService } from './tenant-context.service.js'
   exports: [APP_POOL, TenantContextService],
 })
 export class DbModule implements OnModuleDestroy {
+  private ended = false
+
   constructor(@Inject(APP_POOL) private readonly pool: pg.Pool) {}
 
+  // Garde d'idempotence (D10) : `pg-pool` rejette « Called end on pool more
+  // than once » si `end()` est rappelé — NestJS peut invoquer les hooks de
+  // shutdown plusieurs fois selon la combinaison de signaux OS reçus.
   async onModuleDestroy(): Promise<void> {
+    if (this.ended) return
+    this.ended = true
     await this.pool.end() // fermeture du pool à l'arrêt (enableShutdownHooks)
   }
 }
