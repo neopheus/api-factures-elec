@@ -22,14 +22,9 @@ vi.mock('../../src/cdv/flux6-cdar.js', async (importOriginal) => {
   }
 })
 
-const {
-  CdvTransmissionService,
-  BuyerIdentifierMissingError,
-  buildMailleFromBuyer,
-  formatMessageHorodate,
-  isoDateToYmd,
-  normalizeToUndefined,
-} = await import('../../src/cdv/cdv-transmission.service.js')
+const { CdvTransmissionService, formatMessageHorodate } = await import(
+  '../../src/cdv/cdv-transmission.service.js'
+)
 
 function fakeInvoice(overrides: Partial<Invoice> = {}): Invoice {
   return {
@@ -121,61 +116,16 @@ function build(
   return { service, repo, annuaire, invoicesRepo, port }
 }
 
-describe('fonctions pures (formatMessageHorodate / isoDateToYmd / normalizeToUndefined / buildMailleFromBuyer)', () => {
-  it('formatMessageHorodate sérialise AAAAMMJJHHMMSS en UTC', () => {
+// isoDateToYmd/normalizeToUndefined/buildMailleFromBuyer/
+// BuyerIdentifierMissingError ont migré vers `annuaire/maille-from-buyer.ts`
+// (D5, plan 3.3 Task 2) — leurs tests vivent désormais dans
+// `maille-from-buyer.test.ts`. `formatMessageHorodate` reste ICI (pas
+// extrait, propre au domaine de transmission CDV).
+describe('formatMessageHorodate (pure)', () => {
+  it('sérialise AAAAMMJJHHMMSS en UTC', () => {
     expect(
       formatMessageHorodate(new Date(Date.UTC(2026, 6, 16, 9, 3, 7))),
     ).toBe('20260716090307')
-  })
-
-  it('isoDateToYmd convertit AAAA-MM-JJ -> AAAAMMJJ (retire les tirets)', () => {
-    expect(isoDateToYmd('2026-07-16')).toBe('20260716')
-  })
-
-  it('normalizeToUndefined normalise la chaîne vide en undefined, laisse le reste intact', () => {
-    expect(normalizeToUndefined('')).toBeUndefined()
-    expect(normalizeToUndefined(undefined)).toBeUndefined()
-    expect(normalizeToUndefined('123456789')).toBe('123456789')
-  })
-
-  describe('buildMailleFromBuyer (amendement A4)', () => {
-    it('SIREN (9 chiffres) -> { siren }, siret ABSENT (jamais vide)', () => {
-      const maille = buildMailleFromBuyer({
-        name: 'x',
-        siren: '123456789',
-        address: { countryCode: 'FR' },
-      })
-      expect(maille).toEqual({ siren: '123456789' })
-      expect('siret' in maille).toBe(false)
-    })
-
-    it('SIRET (14 chiffres) -> { siren: 9 premiers chiffres, siret: valeur complète }', () => {
-      const maille = buildMailleFromBuyer({
-        name: 'x',
-        siren: '12345678900014',
-        address: { countryCode: 'FR' },
-      })
-      expect(maille).toEqual({
-        siren: '123456789',
-        siret: '12345678900014',
-      })
-    })
-
-    it('buyer sans siren (undefined) -> BuyerIdentifierMissingError', () => {
-      expect(() =>
-        buildMailleFromBuyer({ name: 'x', address: { countryCode: 'FR' } }),
-      ).toThrow(BuyerIdentifierMissingError)
-    })
-
-    it("buyer avec siren='' (coalesce trap, A4) -> BuyerIdentifierMissingError, PAS une maille siren=''", () => {
-      expect(() =>
-        buildMailleFromBuyer({
-          name: 'x',
-          siren: '',
-          address: { countryCode: 'FR' },
-        }),
-      ).toThrow(BuyerIdentifierMissingError)
-    })
   })
 })
 
