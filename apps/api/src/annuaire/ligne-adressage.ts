@@ -156,7 +156,15 @@ function rankOf(ligne: LigneAdressage): number {
 // propres au niveau correspondent EXACTEMENT à ceux de la cible. Une ligne
 // SIREN couvre donc toute cible du même SIREN (repli le plus général) ;
 // une ligne SIREN_SIRET_ROUTAGE ne couvre que la cible exacte SIRET+routage.
-function coversTarget(target: Maille, ligneMaille: Maille): boolean {
+//
+// Exportée (Task 5, amendement A-CONSENT) : `findActiveConsent` réutilise
+// EXACTEMENT cette même notion de couverture « maille égale ou plus large »
+// pour le consentement — même hiérarchie SIREN < SIREN_SIRET <
+// {SIREN_SIRET_ROUTAGE, SIREN_SUFFIXE} que la résolution de routage, plutôt
+// que de redériver une définition subtilement différente dans le
+// repository. Marqué INTERPRÉTATION go-live comme A-CONSENT (§3.5.5.5, la
+// spec ne norme pas la granularité de couverture du consentement).
+export function coversTarget(target: Maille, ligneMaille: Maille): boolean {
   if (ligneMaille.siren !== target.siren) return false
   const level = mailleLevelOf(ligneMaille)
   if (level === 'SIREN') return true
