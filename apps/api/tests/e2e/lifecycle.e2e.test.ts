@@ -82,20 +82,26 @@ describe('invoice lifecycle transitions (e2e)', () => {
       .set('X-CSRF-Token', csrf)
       .send(body)
 
-  it('records a valid forward transition (deposee → approuvee)', async () => {
-    const res = await post(invoiceId, { toStatus: 'approuvee' }).expect(201)
-    expect(res.body.status).toBe('approuvee')
+  it('records a valid forward transition (deposee → prise_en_charge)', async () => {
+    // Sous la matrice DAG (Task 1, plan 3.1), deposee ne va plus directement
+    // à approuvee : la chronologie exige prise_en_charge d'abord (A1,
+    // plan-3-1-review.md — canTransition('deposee','prise_en_charge')===true
+    // est asserté par le test unitaire de lifecycle-status).
+    const res = await post(invoiceId, { toStatus: 'prise_en_charge' }).expect(
+      201,
+    )
+    expect(res.body.status).toBe('prise_en_charge')
     const hist = await request(app.getHttpServer())
       .get(`/invoices/${invoiceId}/status`)
       .set('Cookie', cookie)
       .expect(200)
-    expect(hist.body.current).toBe('approuvee')
+    expect(hist.body.current).toBe('prise_en_charge')
     expect(
       hist.body.events.map((e: { toStatus: string }) => e.toStatus),
-    ).toEqual(['deposee', 'approuvee'])
+    ).toEqual(['deposee', 'prise_en_charge'])
   })
 
-  it('rejects a backward transition (approuvee → deposee) → 422', async () => {
+  it('rejects a backward transition (prise_en_charge → deposee) → 422', async () => {
     const res = await post(invoiceId, { toStatus: 'deposee' }).expect(422)
     expect(res.body.type).toBe('urn:factelec:problem:invalid-status-transition')
   })
