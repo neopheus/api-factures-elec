@@ -6,6 +6,7 @@ import {
   type NewLigne,
 } from '../../src/annuaire/annuaire.repository.js'
 import { InvalidAnnuaireTransitionError } from '../../src/annuaire/annuaire-lifecycle.js'
+import { CasStaleError } from '../../src/common/cas-error.js'
 import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
 
@@ -631,9 +632,9 @@ describe('annuaire persistence (e2e)', () => {
       const events = await repo.listLigneEvents(t, id)
       expect(events.map((e) => e.toStatus)).toEqual(['draft', 'published'])
 
-      await expect(repo.markPublished(t, id, 'TRACK-B')).rejects.toThrow(
-        /not in 'draft' status/,
-      )
+      const stalePublish = repo.markPublished(t, id, 'TRACK-B')
+      await expect(stalePublish).rejects.toBeInstanceOf(CasStaleError)
+      await expect(stalePublish).rejects.toThrow(/not in 'draft' status/)
       expect(await repo.listLigneEvents(t, id)).toHaveLength(2)
     })
 
@@ -718,17 +719,18 @@ describe('annuaire persistence (e2e)', () => {
         rejectReason: 'motif libre annuaire',
       })
 
-      // CAS périmé : la ligne n'est plus `published`.
-      await expect(
-        repo.appendLigneEvent(
-          t,
-          idRejetee,
-          'published',
-          'rejetee',
-          'ppf',
-          'autre motif',
-        ),
-      ).rejects.toThrow(/not in 'published' status/)
+      // CAS périmé : la ligne n'est plus `published` → CasStaleError (D8,
+      // détection par type).
+      const staleAppend = repo.appendLigneEvent(
+        t,
+        idRejetee,
+        'published',
+        'rejetee',
+        'ppf',
+        'autre motif',
+      )
+      await expect(staleAppend).rejects.toBeInstanceOf(CasStaleError)
+      await expect(staleAppend).rejects.toThrow(/not in 'published' status/)
     })
   })
 })

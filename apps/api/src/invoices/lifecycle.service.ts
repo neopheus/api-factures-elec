@@ -5,7 +5,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common'
 import { ProblemType, problem } from '../common/problem.js'
-import { isUuid } from './format-kind.js'
+import { isUuid } from '../common/uuid.js'
 // biome-ignore lint/style/useImportType: InvoicesRepository résolu par Nest via design:paramtypes.
 import { InvoicesRepository } from './invoices.repository.js'
 import {

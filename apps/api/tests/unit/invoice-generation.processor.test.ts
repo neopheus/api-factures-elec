@@ -14,10 +14,12 @@ describe('InvoiceGenerationProcessor.process', () => {
     }
     const generator = { generate: vi.fn() }
     const archive = { archiveInvoice: vi.fn() }
+    const routing = { resolveAndRecord: vi.fn() }
     const processor = new InvoiceGenerationProcessor(
       repo as never,
       generator as never,
       archive as never,
+      routing as never,
     )
 
     await processor.process(job({ tenantId: 't', invoiceId: 'i' }))
@@ -26,6 +28,7 @@ describe('InvoiceGenerationProcessor.process', () => {
     expect(generator.generate).not.toHaveBeenCalled()
     expect(repo.completeGeneration).not.toHaveBeenCalled()
     expect(archive.archiveInvoice).not.toHaveBeenCalled()
+    expect(routing.resolveAndRecord).not.toHaveBeenCalled()
   })
 
   it('marks generating, generates, then completes atomically on success', async () => {
@@ -38,10 +41,14 @@ describe('InvoiceGenerationProcessor.process', () => {
     }
     const generator = { generate: vi.fn().mockResolvedValue(formats) }
     const archive = { archiveInvoice: vi.fn().mockResolvedValue(undefined) }
+    const routing = {
+      resolveAndRecord: vi.fn().mockResolvedValue(undefined),
+    }
     const processor = new InvoiceGenerationProcessor(
       repo as never,
       generator as never,
       archive as never,
+      routing as never,
     )
 
     await processor.process(job({ tenantId: 't', invoiceId: 'i' }))
@@ -58,9 +65,13 @@ describe('InvoiceGenerationProcessor.process', () => {
     // Archivage best-effort déclenché APRÈS completeGeneration (D6).
     expect(archive.archiveInvoice).toHaveBeenCalledWith('t', 'i')
     expect(archive.archiveInvoice).toHaveBeenCalledTimes(1)
+    // Résolution du destinataire best-effort déclenchée APRÈS l'archivage
+    // (D1, dernier pas d'émission) — reçoit le canonical rechargé.
+    expect(routing.resolveAndRecord).toHaveBeenCalledWith('t', 'i', invoice)
+    expect(routing.resolveAndRecord).toHaveBeenCalledTimes(1)
   })
 
-  it('calls archiveInvoice AFTER completeGeneration (ordering, not just both-called)', async () => {
+  it('calls archiveInvoice AFTER completeGeneration, puis resolveAndRecord APRÈS archiveInvoice (ordering, not just both-called)', async () => {
     const order: string[] = []
     const repo = {
       loadCanonical: vi.fn().mockResolvedValue({ number: 'FA-1' }),
@@ -75,15 +86,25 @@ describe('InvoiceGenerationProcessor.process', () => {
         order.push('archiveInvoice')
       }),
     }
+    const routing = {
+      resolveAndRecord: vi.fn().mockImplementation(async () => {
+        order.push('resolveAndRecord')
+      }),
+    }
     const processor = new InvoiceGenerationProcessor(
       repo as never,
       generator as never,
       archive as never,
+      routing as never,
     )
 
     await processor.process(job({ tenantId: 't', invoiceId: 'i' }))
 
-    expect(order).toEqual(['completeGeneration', 'archiveInvoice'])
+    expect(order).toEqual([
+      'completeGeneration',
+      'archiveInvoice',
+      'resolveAndRecord',
+    ])
   })
 })
 
@@ -92,6 +113,7 @@ describe('InvoiceGenerationProcessor.onFailed', () => {
     const repo = { markGenerationStatus: vi.fn() }
     const processor = new InvoiceGenerationProcessor(
       repo as never,
+      {} as never,
       {} as never,
       {} as never,
     )
@@ -111,6 +133,7 @@ describe('InvoiceGenerationProcessor.onFailed', () => {
       repo as never,
       {} as never,
       {} as never,
+      {} as never,
     )
 
     await processor.onFailed({
@@ -126,6 +149,7 @@ describe('InvoiceGenerationProcessor.onFailed', () => {
     const repo = { markGenerationStatus: vi.fn().mockResolvedValue(undefined) }
     const processor = new InvoiceGenerationProcessor(
       repo as never,
+      {} as never,
       {} as never,
       {} as never,
     )
@@ -145,6 +169,7 @@ describe('InvoiceGenerationProcessor.onFailed', () => {
     }
     const processor = new InvoiceGenerationProcessor(
       repo as never,
+      {} as never,
       {} as never,
       {} as never,
     )

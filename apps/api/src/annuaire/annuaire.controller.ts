@@ -16,6 +16,7 @@ import {
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
+import { isUuid } from '../common/uuid.js'
 import { parseBody, parseQuery } from '../common/validation.js'
 import { LigneSlotConflictError } from './annuaire.repository.js'
 // biome-ignore lint/style/useImportType: AnnuaireConsultationService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
@@ -32,6 +33,7 @@ import {
   StaleLigneTransitionError,
 } from './annuaire-publication.service.js'
 import {
+  codesRoutageQuerySchema,
   lignesQuerySchema,
   resolutionQuerySchema,
 } from './annuaire-query.schema.js'
@@ -111,6 +113,36 @@ export class AnnuaireController {
     }
   }
 
+  // Énumération de gestion des codes-routage PUBLIÉS PAR CE TENANT (Task 3,
+  // plan 3.3, D6) : `annuaire_lignes` (routageId non-null), PAS le miroir
+  // de consultation lu par `lignes` ci-dessus — le vrai trou de gestion
+  // HTTP comblé ici (aucun GET n'exposait `annuaire_lignes` jusqu'ici). Vue
+  // de gestion HONNÊTE : TOUTES les lignes à routageId non-null, quel que
+  // soit leur statut (draft/published/deposee/rejetee/masked, amendement
+  // m4) — aucun filtre de statut, contrairement à `resolution` qui ne
+  // considère que ce qui est effectivement adressable. Tableau VIDE si
+  // aucun code (énumération, PAS 404) ; non-fuite RLS identique à
+  // `lignes` (un SIREN d'un autre tenant renvoie un tableau vide, jamais
+  // une fuite d'existence).
+  //
+  // POST create autonome REFUSÉ (D6, ratifié) : un code-routage n'est PAS
+  // une entité indépendante — c'est un composant de maille
+  // (SIREN_SIRET_ROUTAGE) créé via `POST /annuaire/lignes`. Un POST
+  // « create code » fabriquerait une entité absente du modèle et
+  // dupliquerait le cycle de vie des lignes (aucune nouvelle table —
+  // contrainte du plan). Réexaminable en 3.4+ si un besoin métier autonome
+  // émerge.
+  @Get('codes-routage')
+  @UseGuards(TenantAuthGuard)
+  async codesRoutage(
+    @CurrentTenant() tenantId: string,
+    @Query() query: unknown,
+  ) {
+    const { siren } = parseQuery(codesRoutageQuerySchema, query)
+    const codes = await this.publication.listRoutingCodes(tenantId, siren)
+    return { codes }
+  }
+
   // Publication d'une ligne (Task 8) : gate consentement (422 AVANT toute
   // écriture, D5) → validité/génération F13 XSD-validée → transmission via
   // le port → draft→published. Succès partiel au grain ligne (D13) : un F13
@@ -140,6 +172,7 @@ export class AnnuaireController {
     @Param('id') id: string,
     @Body() body: unknown,
   ) {
+    if (!isUuid(id)) throw this.notFound()
     const existing = await this.publication.getLigne(tenantId, id)
     if (!existing) throw this.notFound()
     const parsed = parseBody(endEffectBodySchema, body)
@@ -162,6 +195,7 @@ export class AnnuaireController {
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,
   ): Promise<void> {
+    if (!isUuid(id)) throw this.notFound()
     const existing = await this.publication.getLigne(tenantId, id)
     if (!existing) throw this.notFound()
     try {

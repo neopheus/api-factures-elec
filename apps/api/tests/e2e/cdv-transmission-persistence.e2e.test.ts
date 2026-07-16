@@ -5,6 +5,7 @@ import {
   type NewCdvTransmission,
 } from '../../src/cdv/cdv-transmission.repository.js'
 import { InvalidCdvTransmissionTransitionError } from '../../src/cdv/cdv-transmission-lifecycle.js'
+import { CasStaleError } from '../../src/common/cas-error.js'
 import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
 
@@ -369,10 +370,13 @@ describe('CDV transmission persistence (e2e)', () => {
       expect(events.map((e) => e.toStatus)).toEqual(['prepared', 'transmitted'])
 
       // Rejouer markTransmitted (déjà `transmitted`, plus `prepared`/`parked`) :
-      // CAS périmé → rejet, aucun événement supplémentaire.
-      await expect(
-        repo.markTransmitted(tenantA, id, 'TRACK-2'),
-      ).rejects.toThrow(/not in 'prepared' or 'parked' status/)
+      // CAS périmé → CasStaleError (D8, détection par type), aucun événement
+      // supplémentaire.
+      const staleReplay = repo.markTransmitted(tenantA, id, 'TRACK-2')
+      await expect(staleReplay).rejects.toBeInstanceOf(CasStaleError)
+      await expect(staleReplay).rejects.toThrow(
+        /not in 'prepared' or 'parked' status/,
+      )
       expect(await repo.listStatusEvents(tenantA, id)).toHaveLength(2)
     })
 
@@ -411,10 +415,11 @@ describe('CDV transmission persistence (e2e)', () => {
         'parked->transmitted',
       ])
 
-      // markParked rejette une transition périmée (déjà transmitted, plus prepared).
-      await expect(repo.markParked(tenantA, id, 'x')).rejects.toThrow(
-        /not in 'prepared' status/,
-      )
+      // markParked rejette une transition périmée (déjà transmitted, plus prepared) :
+      // CasStaleError (D8, détection par type).
+      const staleParked = repo.markParked(tenantA, id, 'x')
+      await expect(staleParked).rejects.toBeInstanceOf(CasStaleError)
+      await expect(staleParked).rejects.toThrow(/not in 'prepared' status/)
     })
 
     it('appendStatusEvent : transmitted→acknowledged sans motif, exige un motif pour →rejected (persisté en reject_reason), rejette une transition invalide et une transition périmée', async () => {
@@ -493,17 +498,18 @@ describe('CDV transmission persistence (e2e)', () => {
         actor: 'ppf',
       })
 
-      // CAS périmé : la transmission n'est plus `transmitted`.
-      await expect(
-        repo.appendStatusEvent(
-          tenantA,
-          idRej,
-          'transmitted',
-          'rejected',
-          'ppf',
-          'x',
-        ),
-      ).rejects.toThrow(/not in 'transmitted' status/)
+      // CAS périmé : la transmission n'est plus `transmitted` → CasStaleError
+      // (D8, détection par type).
+      const staleAppend = repo.appendStatusEvent(
+        tenantA,
+        idRej,
+        'transmitted',
+        'rejected',
+        'ppf',
+        'x',
+      )
+      await expect(staleAppend).rejects.toBeInstanceOf(CasStaleError)
+      await expect(staleAppend).rejects.toThrow(/not in 'transmitted' status/)
     })
   })
 

@@ -1,5 +1,15 @@
 import { Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, isNull, notInArray, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  isNotNull,
+  isNull,
+  notInArray,
+  sql,
+} from 'drizzle-orm'
+import { CasStaleError } from '../common/cas-error.js'
 import type { Db } from '../db/client.js'
 import {
   annuaireConsents,
@@ -77,6 +87,20 @@ export interface LigneSummary {
   rejectReason: string | null
   createdAt: Date
   updatedAt: Date
+}
+
+// Vue de gestion d'un code-routage PUBLIÉ PAR LE TENANT (Task 3, plan 3.3,
+// D6) — projection délibérément ÉTROITE (ni `id`, ni `siren`, ni `suffixe`,
+// ni les champs internes du cycle de vie `consentId`/`trackingRef`/
+// `rejectReason`) : c'est la forme EXACTE exposée par `GET
+// /annuaire/codes-routage`, contrainte binding du plan.
+export interface RoutingCodeSummary {
+  routageId: string
+  siret: string | null
+  plateforme: string
+  status: AnnuaireLigneStatus
+  dateDebut: string
+  dateFin: string | null
 }
 
 export interface LigneEventRow {
@@ -351,9 +375,12 @@ export class AnnuaireRepository {
         )
         .returning({ id: annuaireLignes.id })
       if (updated.length === 0) {
-        throw new Error(
-          `markPublished: ligne ${id} is not in 'draft' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'ligne',
+          id,
+          expectedStatus: 'draft',
+          message: `markPublished: ligne ${id} is not in 'draft' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(annuaireLigneEvents).values({
         tenantId,
@@ -397,9 +424,12 @@ export class AnnuaireRepository {
         .where(and(eq(annuaireLignes.id, id), eq(annuaireLignes.status, from)))
         .returning({ id: annuaireLignes.id })
       if (updated.length === 0) {
-        throw new Error(
-          `appendLigneEvent: ligne ${id} is not in '${from}' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'ligne',
+          id,
+          expectedStatus: from,
+          message: `appendLigneEvent: ligne ${id} is not in '${from}' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(annuaireLigneEvents).values({
         tenantId,
@@ -493,6 +523,48 @@ export class AnnuaireRepository {
         })
         .from(annuaireLignes)
         .orderBy(desc(annuaireLignes.createdAt))
+    })
+  }
+
+  // Énumération de gestion des codes-routage PUBLIÉS PAR CE TENANT (Task 3,
+  // plan 3.3, D6) : `annuaire_lignes` (PAS le miroir `annuaire_directory_
+  // entries` lu par `findDirectoryEntries` ci-dessus) filtrée sur
+  // `routageId IS NOT NULL` — seules les lignes qui portent effectivement un
+  // code-routage (maille SIREN_SIRET_ROUTAGE) sont énumérées. AUCUN filtre
+  // de statut (vue de gestion honnête, amendement m4 : les 5 valeurs
+  // réelles de l'enum, `deposee` incluse, sont toutes retournées) — c'est
+  // au tenant de voir où en est chaque code, pas seulement ceux
+  // effectivement adressables (contrairement à `resolveRecipient`, qui ne
+  // considère que les lignes en vigueur). Sous RLS (`tenant.run`) : un
+  // SIREN d'un autre tenant renvoie un tableau vide, jamais une fuite
+  // d'existence (motif `findDirectoryEntries` — `AnnuaireController` répond
+  // `{ codes: [] }`, jamais un 404).
+  async listRoutingCodes(
+    tenantId: string,
+    siren: string,
+  ): Promise<RoutingCodeSummary[]> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          routageId: annuaireLignes.routageId,
+          siret: annuaireLignes.siret,
+          plateforme: annuaireLignes.plateforme,
+          status: annuaireLignes.status,
+          dateDebut: annuaireLignes.dateDebut,
+          dateFin: annuaireLignes.dateFin,
+        })
+        .from(annuaireLignes)
+        .where(
+          and(
+            eq(annuaireLignes.siren, siren),
+            isNotNull(annuaireLignes.routageId),
+          ),
+        )
+        .orderBy(asc(annuaireLignes.dateDebut))
+      // `routageId` est non-null PAR CONSTRUCTION du WHERE ci-dessus — le
+      // typage drizzle (colonne nullable) ne le sait pas ; assertion ciblée
+      // à cette seule colonne, aucune autre n'est concernée.
+      return rows.map((row) => ({ ...row, routageId: row.routageId as string }))
     })
   }
 

@@ -9,6 +9,8 @@ import {
 } from '../invoices/format-generator.port.js'
 // biome-ignore lint/style/useImportType: InvoicesRepository résolu par Nest via design:paramtypes.
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
+// biome-ignore lint/style/useImportType: RecipientRoutingService résolu par Nest via design:paramtypes.
+import { RecipientRoutingService } from '../invoices/recipient-routing.service.js'
 import type { InvoiceGenerationJob } from '../queue/invoice-generation.job.js'
 import { INVOICE_GENERATION_QUEUE } from '../queue/queue.constants.js'
 
@@ -21,6 +23,7 @@ export class InvoiceGenerationProcessor extends WorkerHost {
     @Inject(INVOICE_FORMAT_GENERATOR)
     private readonly generator: InvoiceFormatGenerator,
     private readonly archive: ArchiveService,
+    private readonly routing: RecipientRoutingService,
   ) {
     super()
   }
@@ -51,6 +54,11 @@ export class InvoiceGenerationProcessor extends WorkerHost {
     // les formats sont déjà `generated` et servis ; un échec d'archive laisse
     // archive_status='failed', ré-essayé par la réconciliation (Task 8).
     await this.archive.archiveInvoice(tenantId, invoiceId)
+    // Résolution du destinataire (best-effort STRICT, D1/D2, plan 3.3) :
+    // dernier pas d'émission, APRÈS l'archivage — une panne annuaire ne fait
+    // jamais échouer ce job déjà réussi (routing_status reste 'pending',
+    // AMENDEMENT M1 : aucun sweep de reprise en 3.3).
+    await this.routing.resolveAndRecord(tenantId, invoiceId, invoice)
   }
 
   // `failed` est émis à CHAQUE tentative échouée ; on ne bascule en `failed`

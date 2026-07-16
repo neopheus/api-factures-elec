@@ -3,6 +3,7 @@ import {
   Injectable,
   UnprocessableEntityException,
 } from '@nestjs/common'
+import { CasStaleError } from '../common/cas-error.js'
 import { ProblemType, problem } from '../common/problem.js'
 // biome-ignore lint/style/useImportType: CdvTransmissionRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import {
@@ -12,13 +13,6 @@ import {
 import { motifRequired } from './cdv-transmission-lifecycle.js'
 
 export type CdvAckOutcome = 'acknowledged' | 'rejected'
-
-// Message émis par CdvTransmissionRepository.appendStatusEvent quand le CAS
-// (UPDATE ... WHERE status = 'transmitted') n'affecte aucune ligne — motif
-// exact figé dans le repository (Task 4, `from` est TOUJOURS 'transmitted'
-// ici, seul prédécesseur valide pour acknowledged/rejected via CETTE
-// frontière, cf. ALLOWED dans cdv-transmission-lifecycle.ts).
-const CAS_STALE_RE = /is not in 'transmitted' status/
 
 // Frontière d'acquittement CDV (601 « message CDV rejeté » / acceptation
 // implicite, D4/D7, plan 3.1 Task 8) — miroir EXACT
@@ -91,7 +85,7 @@ export class CdvStatusService {
         motif,
       )
     } catch (err) {
-      if (err instanceof Error && CAS_STALE_RE.test(err.message)) {
+      if (err instanceof CasStaleError) {
         throw new ConflictException(
           problem(409, ProblemType.conflict, 'CDV acknowledgement refused', {
             detail:

@@ -1,5 +1,6 @@
 import pg from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { CasStaleError } from '../../src/common/cas-error.js'
 import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import {
   EreportingRepository,
@@ -455,10 +456,11 @@ describe('e-reporting persistence (e2e)', () => {
       expect(events.map((e) => e.toStatus)).toEqual(['prepared', 'transmitted'])
 
       // Rejouer markTransmitted (déjà `transmitted`, plus `prepared`) : CAS
-      // périmé → rejet, aucun événement supplémentaire.
-      await expect(repo.markTransmitted(t, id, 'TRACK-2')).rejects.toThrow(
-        /not in 'prepared' status/,
-      )
+      // périmé → CasStaleError (D8, détection par type), aucun événement
+      // supplémentaire.
+      const staleReplay = repo.markTransmitted(t, id, 'TRACK-2')
+      await expect(staleReplay).rejects.toBeInstanceOf(CasStaleError)
+      await expect(staleReplay).rejects.toThrow(/not in 'prepared' status/)
       expect(await repo.listStatusEvents(t, id)).toHaveLength(2)
     })
 
@@ -531,17 +533,18 @@ describe('e-reporting persistence (e2e)', () => {
         actor: 'ppf',
       })
 
-      // CAS périmé : la transmission n'est plus `transmitted`.
-      await expect(
-        repo.appendStatusEvent(
-          t,
-          idRejetee,
-          'transmitted',
-          'rejetee',
-          'ppf',
-          'REJ_SEMAN',
-        ),
-      ).rejects.toThrow(/not in 'transmitted' status/)
+      // CAS périmé : la transmission n'est plus `transmitted` → CasStaleError
+      // (D8, détection par type).
+      const staleAppend = repo.appendStatusEvent(
+        t,
+        idRejetee,
+        'transmitted',
+        'rejetee',
+        'ppf',
+        'REJ_SEMAN',
+      )
+      await expect(staleAppend).rejects.toBeInstanceOf(CasStaleError)
+      await expect(staleAppend).rejects.toThrow(/not in 'transmitted' status/)
     })
   })
 

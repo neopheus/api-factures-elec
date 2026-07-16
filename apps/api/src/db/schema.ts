@@ -49,6 +49,22 @@ export const archiveStatus = pgEnum('archive_status', [
   'failed',
 ])
 
+// Routage destinataire (couture annuaire, 3.3) : métadonnée mutable ET
+// ORTHOGONALE au cycle de vie CDV scellé (invoice_lifecycle_status
+// ci-dessous) — résoudre un destinataire ≠ émettre ≠ transmettre (D2, plan
+// 3.3). `pending` tant que la résolution best-effort (RecipientRoutingService,
+// Task 2) n'a pas encore tenté sa résolution ; `resolved` une fois un
+// destinataire trouvé (recipient_platform renseigné) ; `unaddressable` si
+// l'annuaire ne couvre pas l'acheteur (retriable — une ligne peut entrer en
+// vigueur plus tard) ; `ambiguous` si plusieurs lignes concurrentes couvrent
+// l'acheteur (nécessite un nettoyage opérateur de l'annuaire).
+export const routingStatus = pgEnum('routing_status', [
+  'pending',
+  'resolved',
+  'unaddressable',
+  'ambiguous',
+])
+
 export const invoiceLifecycleStatus = pgEnum('invoice_lifecycle_status', [
   'deposee',
   'emise',
@@ -118,6 +134,11 @@ export const invoices = pgTable(
     archiveStatus: archiveStatus('archive_status').notNull().default('pending'),
     archiveLocation: text('archive_location'),
     archiveHash: text('archive_hash'),
+    // Routage destinataire best-effort (Task 2, 3.3) : métadonnée mutable,
+    // écrasée de façon déterministe à chaque résolution (aucun CAS, aucun
+    // événement de journal — orthogonale au cycle de vie ci-dessus).
+    routingStatus: routingStatus('routing_status').notNull().default('pending'),
+    recipientPlatform: text('recipient_platform'),
     // Compteur de ré-enfilements par la réconciliation (Task 8) : borne le
     // nombre de tentatives d'une facture bloquée avant neutralisation en DLQ
     // (facture « poison »). Jamais remis à 0 sur succès — sans impact (une

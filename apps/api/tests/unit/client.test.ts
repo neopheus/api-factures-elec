@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { APP_POOL, createPool } from '../../src/db/client.js'
 
 describe('db/client', () => {
@@ -12,6 +12,19 @@ describe('db/client', () => {
       'postgres://user:pw@localhost:5432/db',
     )
     expect(pool.options.max).toBe(10)
+    await pool.end()
+  })
+
+  it('createPool avale le bruit de teardown (error) sans jamais le relancer (D10)', async () => {
+    const pool = createPool('postgres://user:pw@localhost:5432/db')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(() =>
+      pool.emit('error', new Error('57P01 admin shutdown')),
+    ).not.toThrow()
+    expect(consoleError).toHaveBeenCalledOnce()
+
+    consoleError.mockRestore()
     await pool.end()
   })
 })

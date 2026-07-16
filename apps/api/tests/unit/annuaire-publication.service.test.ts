@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { CasStaleError } from '../../src/common/cas-error.js'
 
 // La validation XSD (impureté d'exécution : subprocess xmllint) est mockée
 // ici — testée pour elle-même dans annuaire-xsd-validator.test.ts, et de
@@ -269,11 +270,16 @@ describe('AnnuairePublicationService.recordAck', () => {
     )
   })
 
-  it('mappe un CAS périmé/inconnu en StaleLigneTransitionError (409-analog)', async () => {
+  it('mappe un CAS périmé/inconnu (CasStaleError) en StaleLigneTransitionError (409-analog)', async () => {
     const { service } = build({
-      appendLigneEvent: vi
-        .fn()
-        .mockRejectedValue(new Error("ligne x is not in 'published' status")),
+      appendLigneEvent: vi.fn().mockRejectedValue(
+        new CasStaleError({
+          entity: 'ligne',
+          id: 'x',
+          expectedStatus: 'published',
+          message: "ligne x is not in 'published' status",
+        }),
+      ),
     })
     await expect(
       service.recordAck(TENANT, 'ligne-1', 'deposee'),
@@ -303,11 +309,16 @@ describe('AnnuairePublicationService.maskLigne', () => {
     )
   })
 
-  it('mappe un CAS périmé en StaleLigneTransitionError', async () => {
+  it('mappe un CAS périmé (CasStaleError) en StaleLigneTransitionError', async () => {
     const { service } = build({
-      appendLigneEvent: vi
-        .fn()
-        .mockRejectedValue(new Error("ligne x is not in 'deposee' status")),
+      appendLigneEvent: vi.fn().mockRejectedValue(
+        new CasStaleError({
+          entity: 'ligne',
+          id: 'x',
+          expectedStatus: 'deposee',
+          message: "ligne x is not in 'deposee' status",
+        }),
+      ),
     })
     await expect(service.maskLigne(TENANT, 'ligne-1')).rejects.toBeInstanceOf(
       StaleLigneTransitionError,
@@ -440,17 +451,18 @@ describe('AnnuairePublicationService.republishDraft', () => {
     )
   })
 
-  it("CAS périmé sur markPublished (déjà publiée entre-temps, concurrence) : 'skipped', pas d'erreur propagée", async () => {
+  it("CAS périmé (CasStaleError) sur markPublished (déjà publiée entre-temps, concurrence) : 'skipped', pas d'erreur propagée", async () => {
     const { service } = build(
       {
         findLigne: vi.fn().mockResolvedValue(draftLigne),
-        markPublished: vi
-          .fn()
-          .mockRejectedValue(
-            new Error(
-              `markPublished: ligne ${draftLigne.id} is not in 'draft' status`,
-            ),
-          ),
+        markPublished: vi.fn().mockRejectedValue(
+          new CasStaleError({
+            entity: 'ligne',
+            id: draftLigne.id,
+            expectedStatus: 'draft',
+            message: `markPublished: ligne ${draftLigne.id} is not in 'draft' status`,
+          }),
+        ),
       },
       {},
     )

@@ -7,7 +7,7 @@ import type { PafDocument } from '../../src/ledger/paf.js'
 import type { PafService } from '../../src/ledger/paf.service.js'
 
 const TENANT = 'tenant-1'
-const INVOICE = 'invoice-1'
+const INVOICE = '11111111-1111-1111-1111-111111111111'
 
 function fakeRepo() {
   return {
@@ -44,6 +44,16 @@ describe('LedgerController.ledger', () => {
       verification as unknown as LedgerVerificationService,
       paf as unknown as PafService,
     )
+  })
+
+  it('rejects a non-uuid invoice id with 404, without ever hitting the repository (D7)', async () => {
+    await expect(
+      controller.ledger(TENANT, 'not-a-uuid'),
+    ).rejects.toBeInstanceOf(NotFoundException)
+    expect(repo.getLifecycleStatus).not.toHaveBeenCalled()
+    expect(repo.loadSealedEventsByInvoice).not.toHaveBeenCalled()
+    expect(verification.verifyInvoiceEvents).not.toHaveBeenCalled()
+    expect(verification.verifyTenantChain).not.toHaveBeenCalled()
   })
 
   it('404s (anti-leak) when the invoice is unknown in this tenant, without loading events or verifying', async () => {
@@ -214,6 +224,17 @@ describe('LedgerController.paf', () => {
     archive: { status: 'pending', location: null, hash: null },
     events: [],
   }
+
+  it('rejects a non-uuid invoice id with 404, without ever hitting the repository (D7)', async () => {
+    const res = fakeResponse()
+
+    await expect(
+      controller.paf(TENANT, 'not-a-uuid', undefined, res as never),
+    ).rejects.toBeInstanceOf(NotFoundException)
+    expect(paf.buildPaf).not.toHaveBeenCalled()
+    expect(res.json).not.toHaveBeenCalled()
+    expect(res.send).not.toHaveBeenCalled()
+  })
 
   it('404s (anti-leak) when the invoice is unknown in this tenant, before touching the response', async () => {
     paf.buildPaf.mockResolvedValue(null)

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { and, asc, desc, eq } from 'drizzle-orm'
+import { CasStaleError } from '../common/cas-error.js'
 import { cdvTransmissionEvents, cdvTransmissions } from '../db/schema.js'
 // biome-ignore lint/style/useImportType: TenantContextService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { TenantContextService } from '../db/tenant-context.service.js'
@@ -204,9 +205,12 @@ export class CdvTransmissionRepository {
           return
         }
       }
-      throw new Error(
-        `markTransmitted: transmission ${id} is not in 'prepared' or 'parked' status (concurrent transition or unknown id)`,
-      )
+      throw new CasStaleError({
+        entity: 'transmission',
+        id,
+        expectedStatus: candidates.join(' or '),
+        message: `markTransmitted: transmission ${id} is not in 'prepared' or 'parked' status (concurrent transition or unknown id)`,
+      })
     })
   }
 
@@ -232,9 +236,12 @@ export class CdvTransmissionRepository {
         )
         .returning({ id: cdvTransmissions.id })
       if (updated.length === 0) {
-        throw new Error(
-          `markParked: transmission ${id} is not in 'prepared' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'transmission',
+          id,
+          expectedStatus: 'prepared',
+          message: `markParked: transmission ${id} is not in 'prepared' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(cdvTransmissionEvents).values({
         tenantId,
@@ -280,9 +287,12 @@ export class CdvTransmissionRepository {
         )
         .returning({ id: cdvTransmissions.id })
       if (updated.length === 0) {
-        throw new Error(
-          `appendStatusEvent: transmission ${id} is not in '${from}' status (concurrent transition or unknown id)`,
-        )
+        throw new CasStaleError({
+          entity: 'transmission',
+          id,
+          expectedStatus: from,
+          message: `appendStatusEvent: transmission ${id} is not in '${from}' status (concurrent transition or unknown id)`,
+        })
       }
       await db.insert(cdvTransmissionEvents).values({
         tenantId,

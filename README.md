@@ -9,10 +9,10 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (16/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1, 2.2,
-> 2.3 et 2.4 terminés et mergés ; plan 3.1 (transmission des CDV & matrice
-> DAG) terminé sur cette branche ; dettes héritées soldées avant chaque plan
-> suivant.**
+> **État du projet (17/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1, 2.2,
+> 2.3, 2.4, 3.1 et 3.2 terminés et mergés ; plan 3.3 (couture annuaire à
+> l'émission & durcissements transverses) terminé sur cette branche ; dettes
+> héritées soldées avant chaque plan suivant.**
 > `invoice-core` (v0.3.1 — patch BT-9) livre les **formats du socle** : UBL 2.1
 > Invoice **et** CreditNote (avoir), extraits de flux DGFiP F1 (facture et
 > avoir), CII D16B (avec échéance de paiement BT-9) et Factur-X PDF/A-3 (CII
@@ -247,10 +247,14 @@ API publique pour les systèmes custom.
 > CDV réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne,
 > **achat de la norme AFNOR XP Z12-012** pour remplacer l'interprétation
 > projet de la matrice DAG (bloqueur go-live PDP restant — **ce même
-> bloqueur s'applique à l'immatriculation PDP côté e-reporting**), et
+> bloqueur s'applique à l'immatriculation PDP côté e-reporting**). Le
 > **câblage de la résolution de routage annuaire dans l'émetteur de
-> factures** (brique 2.4 prête, non consommée). **Horizon 2.x** : journal
-> d'audit des authentifications (distinct du journal CDV).
+> factures**, différé depuis 2.4, est **RÉSOLU en 3.3** (couture
+> `resolveRecipient` dans le worker de génération, best-effort strict, voir
+> `apps/api/README.md` § Couture annuaire → émission) — reste différé le
+> **sweep de reprise** d'un routage `'pending'` opérationnel (3.4+).
+> **Horizon 2.x** : journal d'audit des authentifications (distinct du
+> journal CDV).
 > **Déploiement** : confirmer `CREATE EXTENSION pgcrypto` sur le Postgres
 > managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`,
 > adaptateurs de transmission e-reporting réels (sftp/as2/as4/api),
@@ -369,6 +373,25 @@ naturées, capture des encaissements idempotente et intégrité anti-sur-
 encaissement, agrégation/transmission TB-3 selon la règle **SERVICES-ONLY**
 (note 119) — voir § E-reporting dans `apps/api/README.md` pour le détail
 complet et les différés.
+**Couture annuaire → émission & durcissements transverses** (3.3) : **ferme
+le trou fonctionnel PDP hérité de 2.4** — l'annuaire savait résoudre le
+destinataire d'une facture, mais l'émetteur ne l'appelait jamais.
+`RecipientRoutingService` résout désormais le destinataire dans le
+**worker de génération** (best-effort **strict**, jamais d'échec du job),
+persiste une **métadonnée de routage mutable** (`routing_status`/
+`recipient_platform`, migration 0026 additive) **sans jamais muter le cycle
+de vie CDV scellé**, exposée en lecture sur `GET /invoices/:id`. **Aucun
+sweep de reprise** d'un routage `'pending'` opérationnel en 3.3 (documenté
+explicitement, requête SQL opérateur au runbook). `GET
+/annuaire/codes-routage` énumère les codes-routage publiés par le tenant
+(POST autonome refusé). Quatre **durcissements 100 % code-interne** :
+validation UUID harmonisée (404 anti-fuite byte-identique sur 8 routes,
+plus de 500), erreurs CAS typées (`CasStaleError` remplace 3 regex
+divergentes), verrou d'architecture — un **ralentisseur honnête**, pas une
+barrière — sur le footgun `apiKeyId`, et stabilisation e2e (teardown de
+pool idempotent, split Vitest `heavy`/`light`). Voir §§ Couture annuaire →
+émission / Durcissements transverses dans `apps/api/README.md` pour le
+détail complet et les différés.
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -632,16 +655,42 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       transmise), option de TVA sur les débits (note 119, aucun champ
       modèle), cadres mixtes non naturés, validation devise vs ISO 4217,
       rôle viewer non testé e2e. Détail complet : `apps/api/README.md`.
+- [x] **3.3 — Couture annuaire à l'émission & durcissements transverses**
+      (terminé) : **RÉSOLU le trou fonctionnel PDP hérité de 2.4** —
+      l'annuaire savait résoudre le destinataire d'une facture, l'émetteur
+      ne l'appelait jamais. `RecipientRoutingService` résout désormais le
+      destinataire dans le **worker de génération** (best-effort **strict**,
+      jamais d'échec du job, miroir `ArchiveService`), persiste une
+      **métadonnée de routage mutable** (`routing_status`/
+      `recipient_platform`, migration 0026 additive) **sans jamais muter le
+      cycle de vie CDV scellé** (résolution ≠ émission ≠ transmission),
+      exposée sur `GET /invoices/:id`. **Aucun sweep de reprise** en 3.3 pour
+      un routage `'pending'` opérationnel (documenté explicitement, requête
+      SQL opérateur au runbook `apps/api/README.md`). `GET
+      /annuaire/codes-routage` énumère les codes-routage publiés par le
+      tenant (POST autonome refusé, composant de maille). **Quatre
+      durcissements 100 % code-interne** : validation UUID harmonisée (404
+      anti-fuite byte-identique sur 8 routes, plus de 500), erreurs CAS
+      typées (`CasStaleError` remplace 3 `CAS_STALE_RE` divergentes, sortie
+      HTTP inchangée), verrou d'architecture — un **ralentisseur honnête**,
+      pas une barrière — sur le footgun `apiKeyId` (garde composé dédié
+      différé), teardown de pool idempotent et split Vitest `heavy`/`light`
+      (fallback `maxWorkers:3` documenté après re-flake). **Différés
+      explicites** : sweep de reprise du routage, garde composé
+      `DualAuthMutationGuard`, POST codes-routage autonome, transition
+      `emise`/transport réel (adaptateurs, items Xavier). Détail complet :
+      `apps/api/README.md`.
 
 > **Point de reprise → phase 3 (suite)** : adhésion OpenPeppol + PKI
 > test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport CDV
 > réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne, **achat
 > de la norme AFNOR XP Z12-012** pour lever l'interprétation projet restante
 > de la matrice DAG (bloqueur go-live PDP, s'applique aussi à
-> l'immatriculation PDP côté e-reporting), câblage de la résolution de
-> routage annuaire (2.4) dans l'émetteur de factures, et correctif du
-> sur-encaissement concurrent (TOCTOU, 3.2, verrou applicatif ou contrainte
-> DB dédiée).
+> l'immatriculation PDP côté e-reporting), correctif du sur-encaissement
+> concurrent (TOCTOU, 3.2, verrou applicatif ou contrainte DB dédiée), et
+> **sweep de reprise du routage destinataire** (3.3 — un `routing_status`
+> `'pending'` opérationnel n'est aujourd'hui jamais repris automatiquement,
+> voir `apps/api/README.md` § Couture annuaire → émission).
 
 ### Prérequis pré-production / pré-DGFiP
 
@@ -764,6 +813,23 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
   liste ISO 4217.
 - **Rôle `viewer` non testé en e2e sur `POST /payments`** (3.2, **NOUVEAU**)
   — refus prouvé au niveau unitaire `RolesGuard` seulement.
+- **Sweep de reprise du routage destinataire absent** (3.3, **NOUVEAU**,
+  MEDIUM, fail-safe) — un `routing_status='pending'` **opérationnel**
+  (annuaire/DB indisponible au moment de la résolution) n'est **jamais**
+  repris automatiquement : le balayage de réconciliation existant ne couvre
+  que `received`/`generating`, pas une facture déjà `generated`. Persiste
+  jusqu'à un sweep dédié (3.4+, miroir `ArchiveRetryService`) ou un
+  re-enfilement manuel. **Aucun filtre de liste** par `routing_status` non
+  plus — un opérateur doit interroger directement la base (`SELECT id,
+  number FROM invoices WHERE routing_status IN ('pending', 'unaddressable',
+  'ambiguous')`, runbook documenté). Voir `apps/api/README.md` § Couture
+  annuaire → émission.
+- **Verrou d'architecture `apiKeyId` = ralentisseur, pas une barrière**
+  (3.3, **NOUVEAU**) — le test grep-structurel (`apikeyid-setters.arch.test.ts`)
+  reste contournable (renommage, helper indirect) ; la vraie barrière
+  d'exécution (`DualAuthMutationGuard`) reste différée jusqu'à l'apparition
+  d'une seconde route dual-auth-mutation. Voir `apps/api/README.md` §
+  Durcissements transverses.
 
 Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
 

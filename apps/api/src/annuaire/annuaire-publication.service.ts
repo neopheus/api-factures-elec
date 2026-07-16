@@ -1,7 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common'
+import { CasStaleError } from '../common/cas-error.js'
 import { ANNUAIRE_TRANSPORT, type AnnuairePort } from './annuaire.port.js'
 // biome-ignore lint/style/useImportType: AnnuaireRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
-import { AnnuaireRepository, type LigneSummary } from './annuaire.repository.js'
+import {
+  AnnuaireRepository,
+  type LigneSummary,
+  type RoutingCodeSummary,
+} from './annuaire.repository.js'
 import {
   type AnnuaireLigneStatus,
   motifRequired,
@@ -28,7 +33,6 @@ import type { Nature } from './nomenclature.js'
 // traduction domaine → HTTP de ce module.
 
 const REJECT_MOTIF_XSD_INVALID = 'xsd-invalide'
-const CAS_STALE_RE = /is not in '.*' status/
 
 export class ConsentRequiredError extends Error {
   constructor(readonly maille: Maille) {
@@ -60,9 +64,9 @@ export class MotifRequiredError extends Error {
 
 // CAS périmé/inconnu (Task 4 `appendLigneEvent`/T5 `updateDateFin`) : couvre
 // à la fois une transition dont le statut COURANT ne correspond plus à celui
-// attendu ET un id inconnu/hors tenant (RLS) — les deux sont indiscernables
-// depuis le message générique du repository, miroir exact de
-// EreportingStatusService.CAS_STALE_RE (l'isolation cross-tenant y renvoie
+// attendu ET un id inconnu/hors tenant (RLS) — les deux restent indiscernables
+// depuis CasStaleError (D8), miroir exact de EreportingStatusService
+// (catch `instanceof CasStaleError`, l'isolation cross-tenant y renvoie
 // aussi ce même 409, jamais un 404 — ereporting-status.e2e.test.ts).
 export class StaleLigneTransitionError extends Error {
   constructor(readonly ligneId: string) {
@@ -260,7 +264,7 @@ export class AnnuairePublicationService {
         motif,
       )
     } catch (err) {
-      if (err instanceof Error && CAS_STALE_RE.test(err.message)) {
+      if (err instanceof CasStaleError) {
         throw new StaleLigneTransitionError(ligneId)
       }
       throw err
@@ -280,7 +284,7 @@ export class AnnuairePublicationService {
         'platform',
       )
     } catch (err) {
-      if (err instanceof Error && CAS_STALE_RE.test(err.message)) {
+      if (err instanceof CasStaleError) {
         throw new StaleLigneTransitionError(ligneId)
       }
       throw err
@@ -315,6 +319,18 @@ export class AnnuairePublicationService {
     return this.repo.findLigne(tenantId, id)
   }
 
+  // Passthrough RLS-scopé (Task 3, plan 3.3, D6) — miroir de `getLigne`
+  // ci-dessus : MÊME table (`annuaire_lignes`), simplement une vue
+  // ÉNUMÉRÉE orientée gestion (codes-routage publiés par le tenant) plutôt
+  // qu'un id unique. `AnnuaireController.codesRoutage` s'en sert pour `GET
+  // /annuaire/codes-routage`.
+  async listRoutingCodes(
+    tenantId: string,
+    siren: string,
+  ): Promise<RoutingCodeSummary[]> {
+    return this.repo.listRoutingCodes(tenantId, siren)
+  }
+
   // STUCK-DRAFT RE-PUBLISH SWEEP (Task 9, injection revue contrôleur — fix
   // du défaut T8 F1) : un crash entre `port.publish` et `markPublished`
   // laisse une ligne en 'draft' avec le F13 déjà émis auprès du port — rien
@@ -332,10 +348,10 @@ export class AnnuairePublicationService {
   //  - `markPublished` est un CAS (`WHERE status = 'draft'`, Task 5) : si la
   //    ligne a entre-temps été publiée par un AUTRE passage du sweep (course
   //    entre deux sweeps concurrents, ou le job crashé original qui a fini
-  //    par committer après tout), le CAS échoue avec le message générique
-  //    `is not in 'draft' status` — traité ICI comme une résolution
-  //    concurrente bénigne ('skipped'), jamais une erreur : le résultat final
-  //    (ligne publiée) est le même quel que soit le passage qui l'a obtenu.
+  //    par committer après tout), le CAS échoue avec CasStaleError (D8) —
+  //    traité ICI comme une résolution concurrente bénigne ('skipped'),
+  //    jamais une erreur : le résultat final (ligne publiée) est le même
+  //    quel que soit le passage qui l'a obtenu.
   //
   // Appelé par `AnnuaireSyncProcessor` (Task 9) sur un job `annuaire-
   // republish` posé par `AnnuaireSweepService.sweepStuckDrafts` — jamais par
@@ -385,8 +401,7 @@ export class AnnuairePublicationService {
     try {
       await this.repo.markPublished(tenantId, ligneId, result.trackingRef)
     } catch (err) {
-      if (err instanceof Error && CAS_STALE_RE.test(err.message))
-        return 'skipped'
+      if (err instanceof CasStaleError) return 'skipped'
       throw err
     }
     return 'republished'
