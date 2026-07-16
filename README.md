@@ -9,8 +9,9 @@ statuts), e-reporting DGFiP, annuaire central, archivage à valeur probante 10 a
 point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopify et
 API publique pour les systèmes custom.
 
-> **État du projet (15/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1 et 2.2
-> terminés et mergés ; dettes héritées soldées avant chaque plan suivant.**
+> **État du projet (16/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1, 2.2 et
+> 2.3 terminés et mergés ; plan 2.4 (annuaire Flux 13/14) terminé sur cette
+> branche ; dettes héritées soldées avant chaque plan suivant.**
 > `invoice-core` (v0.3.1 — patch BT-9) livre les **formats du socle** : UBL 2.1
 > Invoice **et** CreditNote (avoir), extraits de flux DGFiP F1 (facture et
 > avoir), CII D16B (avec échéance de paiement BT-9) et Factur-X PDF/A-3 (CII
@@ -158,19 +159,63 @@ API publique pour les systèmes custom.
 > d'attention slot A2 ci-dessous) et variables d'environnement
 > `EREPORTING_*` : `apps/api/README.md`.
 >
-> **Reprise — prochaine étape : phase 2.4** : annuaire central (Flux 13/14).
-> Puis **phase 3** : transmission Peppol des statuts CDV, point d'accès
-> Peppol interne, remplacement de la matrice de transitions CDV contre la
-> norme AFNOR XP Z12-012 (bloqueur go-live PDP) — **ce même bloqueur
-> s'applique à l'immatriculation PDP côté e-reporting** (Peppol + matrice
-> CDV AFNOR restent la dépendance de mise en production réelle). **Horizon
+> **2.4 — Annuaire central (Flux 13/14)** livre le **domaine PA** de
+> l'annuaire — le registre **hébergé par le PPF** qui adresse/route les
+> factures électroniques, **distinct** de l'e-invoicing et de l'e-reporting
+> ci-dessus : ligne d'adressage (4 mailles — SIREN, SIREN+SIRET,
+> SIREN+SIRET+routage, SIREN+suffixe), validité **semi-ouverte
+> `[début, fin)`** (ANNEXE 3 verbatim) et résolution du destinataire **la
+> plus spécifique d'abord** (masquage à portée exacte-maille) ; **génération
+> Flux 13 et parsing Flux 14 tous deux validés XSD** contre les schémas
+> DGFiP réels (les deux directions, omises par le dossier de cadrage
+> initial) ; **miroir de consultation tenant-scopé PII-minimal** (maille +
+> plateforme seuls, Nom/Adresse jamais extraits du Flux 14) ; **publication
+> consent-gated** (422 avant toute écriture, §3.5.5.5) avec **gestion de
+> slot** (409 sur conflit, libération automatique après rejet/masquage) ;
+> **acquittements PPF** (désambiguïsation rejet local vs rejet PPF réel) ;
+> **synchronisation bornée** (différentiel quotidien en upsert seul / complet
+> hebdomadaire en remplacement du miroir du tenant) et **sweep de reprise**
+> des publications figées par un crash (idempotent, write-once + CAS).
+> **DIFFÉRÉS EXPLICITES** : adaptateurs de transport réels (API
+> PISTE-OAuth2, EDI SFTP/AS2/AS4), feeds d'initialisation INSEE/Chorus/DGFiP
+> (lignes par défaut 9998/Chorus non chargées), habilitations réelles,
+> codes routage standalone (6 endpoints Swagger, `RoutageID` inline
+> seulement), connecteur de signature électronique du consentement,
+> **câblage de la résolution de routage dans l'émetteur de factures**
+> (aucun appel depuis le pipeline Flux 1-9 à ce jour — brique prête,
+> non consommée), endpoint de révocation de consentement (colonne prête en
+> base, non exposée). **Interprétations go-live à confirmer** : qualifiant de
+> routage `'9999'` (placeholder structurel, aucune valeur positive normée —
+> **à confirmer avec la DGFiP/PPF**), prédicat de couverture du consentement
+> (même SIREN + maille égale ou plus large, §3.5.5.5 non normative), motif de
+> rejet en chaîne libre (aucun code réglementaire annuaire, contraste
+> REJ_* e-reporting), F14 complet authentiquement vide traité en **no-op**
+> plutôt qu'en vidage du miroir (défaut sûr délibéré — une désactivation
+> totale authentique côté PPF ne convergerait donc jamais par ce seul
+> chemin). **959 tests** au total (`invoice-core` 129 100 % · `apps/api` 782
+> à 97.71/94.51/95.75/98.2 % (statements/branches/fonctions/lignes) ·
+> `apps/web` 48 à 100/96.66/100/100 %). Détail complet : `apps/api/README.md`.
+>
+> **Reprise — prochaine étape : phase 3** : transmission Peppol des statuts
+> CDV, point d'accès Peppol interne, remplacement de la matrice de
+> transitions CDV contre la norme AFNOR XP Z12-012 (bloqueur go-live PDP) —
+> **ce même bloqueur s'applique à l'immatriculation PDP côté e-reporting**
+> (Peppol + matrice CDV AFNOR restent la dépendance de mise en production
+> réelle), et **câblage de la résolution de routage annuaire dans
+> l'émetteur de factures** (brique 2.4 prête, non consommée). **Horizon
 > 2.x** : journal d'audit des authentifications (distinct du journal CDV).
 > **Déploiement** : confirmer `CREATE EXTENSION pgcrypto` sur le Postgres
-> managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`, adaptateurs
-> de transmission e-reporting réels (sftp/as2/as4/api), et **`libxml2`/
-> `xmllint` sur l'hôte du worker** (NOUVEAU, validation XSD runtime du Flux
-> 10 — à ajouter aux prérequis existants pgcrypto/S3/`TRUST_PROXY`). Reports
-> explicites détaillés en Feuille de route ci-dessous.
+> managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`,
+> adaptateurs de transmission e-reporting réels (sftp/as2/as4/api),
+> adaptateurs de transport annuaire réels (API PISTE-OAuth2, EDI
+> SFTP/AS2/AS4) et identifiants PPF associés, feeds d'initialisation annuaire
+> INSEE/Chorus/DGFiP, et **`libxml2`/`xmllint` sur l'hôte du worker**
+> (validation XSD runtime du Flux 10 **et** du Flux 13/14 — à ajouter aux
+> prérequis existants pgcrypto/S3/`TRUST_PROXY`), ainsi que le **split du
+> rôle worker** (les fonctions `SECURITY DEFINER` cross-tenant
+> `find_ereporting_declarants_due`, `find_annuaire_sync_targets` **et**
+> `find_stale_annuaire_drafts` exposent des identifiants de tenants au rôle
+> applicatif partagé API/worker). Reports explicites détaillés en Feuille de route ci-dessous.
 > La conformité PDF/A-3 formelle (veraPDF, Java) tourne en CI optionnelle non bloquante.
 > Journal détaillé : `.superpowers/sdd/progress.md` (hors git, local).
 
@@ -240,13 +285,17 @@ fichiers (hors tests).
 
 ## `@factelec/api`
 
-API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3** : ingestion et
-lecture des factures (consommant `@factelec/invoice-core`), authentification
-utilisateur (sessions httpOnly + CSRF), signup self-service transactionnel,
-gestion des clés API par session, super admin plateforme minimal, **workers
-BullMQ de génération asynchrone**, **cycle de vie des statuts CDV** et
-**e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, machine à états 300/301
-distincte, cadence par régime TVA, transmission différée au déploiement).
+API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4** :
+ingestion et lecture des factures (consommant `@factelec/invoice-core`),
+authentification utilisateur (sessions httpOnly + CSRF), signup self-service
+transactionnel, gestion des clés API par session, super admin plateforme
+minimal, **workers BullMQ de génération asynchrone**, **cycle de vie des
+statuts CDV**, **e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, machine
+à états 300/301 distincte, cadence par régime TVA, transmission différée au
+déploiement) et **annuaire central Flux 13/14** (domaine PA : ligne
+d'adressage 4 mailles, résolution de routage, génération F13/parsing F14
+validés XSD, miroir de consultation PII-minimal, publication consent-gated,
+synchronisation bornée — transport réel et câblage dans l'émetteur différés).
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -445,18 +494,37 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       IN rejetée localement qui occupe définitivement son slot), prérequis
       `libxml2`/`xmllint` sur l'hôte du worker, dette de durcissement du rôle
       SD cross-tenant. Détail complet : `apps/api/README.md`.
+- [x] **2.4 — Annuaire central (Flux 13/14)** (terminé) : **RÉSOLU** le
+      **domaine PA** de bout en bout — ligne d'adressage (4 mailles, validité
+      semi-ouverte `[début, fin)`, résolution la plus spécifique d'abord,
+      masquage à portée exacte-maille), génération Flux 13 **et** parsing
+      Flux 14 tous deux validés XSD (les deux directions), miroir de
+      consultation tenant-scopé PII-minimal, publication consent-gated (422)
+      avec gestion de slot (409 + libération après rejet/masquage),
+      acquittements PPF (désambiguïsation rejet local/PPF) et
+      synchronisation bornée (différentiel quotidien / complet hebdomadaire
+      en remplacement du miroir du tenant) avec sweep de reprise des
+      publications figées (idempotent, write-once + CAS). **Différés
+      explicites** : adaptateurs de transport réels, feeds d'initialisation
+      INSEE/Chorus/DGFiP, habilitations réelles, codes routage standalone
+      (6 endpoints Swagger), connecteur de signature électronique du
+      consentement, câblage de la résolution dans l'émetteur de factures,
+      endpoint de révocation de consentement. **Interprétation go-live à
+      confirmer** : qualifiant de routage `'9999'` (placeholder structurel,
+      aucune valeur positive normée par la DGFiP). Détail complet :
+      `apps/api/README.md`.
 
-> **Point de reprise → phase 2.4** : annuaire central (Flux 13/14). Puis
-> **phase 3** : transmission Peppol des statuts CDV, point d'accès Peppol
-> interne, remplacement de la matrice de transitions CDV contre la norme
-> AFNOR XP Z12-012 (bloqueur go-live PDP, s'applique aussi à l'immatriculation
-> PDP côté e-reporting).
+> **Point de reprise → phase 3** : transmission Peppol des statuts CDV,
+> point d'accès Peppol interne, remplacement de la matrice de transitions
+> CDV contre la norme AFNOR XP Z12-012 (bloqueur go-live PDP, s'applique
+> aussi à l'immatriculation PDP côté e-reporting), et câblage de la
+> résolution de routage annuaire (2.4) dans l'émetteur de factures.
 
 ### Prérequis pré-production / pré-DGFiP
 
 Liste compacte consolidant des points déjà détaillés ci-dessous (dette
 reportée) ou dans `apps/api/README.md` : aucun ne bloque le passage en
-phase 2.4, mais **tous** doivent être traités avant une exposition réelle
+phase 3, mais **tous** doivent être traités avant une exposition réelle
 (immatriculation DGFiP, onboarding de tenants en production) :
 
 - **Journal d'audit des authentifications** (connexions, échecs, révocations
@@ -503,8 +571,30 @@ phase 2.4, mais **tous** doivent être traités avant une exposition réelle
   expose `(tenant_id, siren, name)` **cross-tenant** au rôle applicatif (comme
   le pool worker=app aujourd'hui) ; à durcir en retirant l'`EXECUTE` au rôle
   HTTP lors du split du rôle worker au déploiement.
+- **Adaptateurs de transport annuaire réels + identifiants PPF** (2.4,
+  **NOUVEAU**) — API PISTE-OAuth2 et EDI SFTP/AS2/AS4 restent à fournir et
+  activer (`ANNUAIRE_DRIVER=api|edi`) ; seul `local` est câblé à ce jour.
+- **Feeds d'initialisation annuaire INSEE/Chorus/DGFiP** (2.4, **NOUVEAU**) —
+  aucun processus ne charge à ce jour les lignes par défaut (plateforme
+  fictive 9998/Chorus) pour les entités nouvellement assujetties.
+- **Habilitations annuaire réelles** (2.4, **NOUVEAU**) — le miroir de
+  consultation est tenant-scopé (RLS) mais ne modélise pas encore
+  d'habilitation fine par plateforme/mandat ; différé derrière le transport
+  réel.
+- **Qualifiant de routage `'9999'` à confirmer avec la DGFiP/PPF** (2.4,
+  **NOUVEAU**) — placeholder structurel (`ROUTAGE_SCHEME_ID_PLACEHOLDER`),
+  aucune valeur positive normée dans la documentation disponible.
+- **Durcissement du rôle SD annuaire** (2.4, **NOUVEAU**, même dette que
+  e-reporting 2.3) — `find_annuaire_sync_targets` et
+  `find_stale_annuaire_drafts` exposent des identifiants de tenants
+  **cross-tenant** au rôle applicatif partagé API/worker ; à durcir au même
+  split du rôle worker.
+- **`libxml2`/`xmllint` — désormais requis aussi pour l'annuaire** (2.4) — la
+  validation XSD F13/F14 s'exécute en **runtime**, à chaque publication et
+  synchronisation, au même titre que le Flux 10 (2.3, prérequis déjà noté
+  ci-dessus).
 
-Dette explicitement reportée (aucune ne bloque le passage en phase 2.4) :
+Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
 
 - **Stripe / abonnements** (modèle commercial self-service, spec §2/§8) →
   **phase 5** (Commercialisation).
@@ -532,8 +622,17 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 2.4) :
   transport réels (sftp/as2/as4/api), push/acquittement PPF réel (webhook),
   schematron/contrôles sémantiques Annexe 7, chemin RE/rectificatif — tous
   différés, aucun n'est fabriqué. Détail : `apps/api/README.md`.
-- **Annuaire central** (Flux 13/14) → **phase 2.4** — aucune consultation
-  d'annuaire à ce jour.
+- **Annuaire central (Flux 13/14) au-delà du domaine PA** (2.4) : adaptateurs
+  de transport réels (API PISTE-OAuth2, EDI SFTP/AS2/AS4), feeds
+  d'initialisation INSEE/Chorus/DGFiP (lignes par défaut 9998/Chorus non
+  chargées), habilitations réelles, codes routage standalone (6 endpoints
+  Swagger, `RoutageID` inline seulement), connecteur de signature
+  électronique du consentement, endpoint de révocation de consentement —
+  tous différés, aucun n'est fabriqué. **Câblage de la résolution de
+  routage annuaire dans l'émetteur de factures** → **phase 3** (brique
+  prête — `AnnuaireConsultationService`/`resolveRecipient` — mais non
+  consommée par le pipeline Flux 1-9 à ce jour). Détail :
+  `apps/api/README.md`.
 - **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway,
   mode `COMPLIANCE`, rétention 10 ans) → **déploiement** — spécifié (2.2,
   même contrat que `ArchiveStore`) mais non écrit (infra à la main de

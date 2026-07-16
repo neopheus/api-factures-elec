@@ -2,6 +2,15 @@ import { createHash } from 'node:crypto'
 import type { INestApplicationContext } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import {
+  ANNUAIRE_TRANSPORT,
+  type AnnuaireAckStatus,
+  type AnnuairePort,
+  type ConsultationResult,
+  type PublishPayload,
+  type PublishResult,
+} from '../../../src/annuaire/annuaire.port.js'
+import type { TypeFlux } from '../../../src/annuaire/nomenclature.js'
+import {
   ARCHIVE_STORE,
   type ArchiveHead,
   ArchiveObjectNotFoundError,
@@ -87,6 +96,73 @@ class InMemoryTransmissionSink implements Flux10TransmissionPort {
   }
 }
 
+// F14 « vide » XSD-valide (HorodateProduction+TypeFlux seuls) — servi par
+// défaut tant qu'aucun fixture n'a été déposé via `setConsultation` (motif
+// LocalFilesystemAnnuaireStore.emptyConsultationXml, Task 6/9) : un test qui
+// ne configure PAS de fixture pour un TypeFlux donné exerce ainsi le chemin
+// « empty F14 → no-op » (injection revue Task 9) sans jamais toucher le
+// filesystem.
+function emptyConsultationXml(typeFlux: TypeFlux): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<AnnuaireConsultationF14>\n' +
+    '  <HorodateProduction>20260101000000</HorodateProduction>\n' +
+    `  <TypeFlux>${typeFlux}</TypeFlux>\n` +
+    '</AnnuaireConsultationF14>'
+  )
+}
+
+// Port annuaire EN MÉMOIRE (hermétique, motif InMemoryArchiveStore/
+// InMemoryTransmissionSink ci-dessus) : le WorkerModule câble
+// AnnuaireTransportModule (Task 9), qui — sans override — construirait un
+// LocalFilesystemAnnuaireStore écrivant dans ./var/annuaire (driver 'local'
+// par défaut, ANNUAIRE_DRIVER). Ce store garde le F13 publié EN RAM, fidèle
+// au contrat write-once (rejeu même publicationRef -> même trackingRef,
+// jamais d'écrasement — `publishCallCount()` permet aux tests de prouver
+// qu'AUCUNE seconde écriture n'a eu lieu, seulement un second APPEL) et sert
+// des fixtures F14 déterministes CONTRÔLÉES PAR LE TEST via
+// `setConsultation` (contrairement au store réel, dont `fetchConsultation`
+// n'a PAS de paramètre tenant — motif identique ici : la fixture est servie
+// PAR TypeFlux, globalement, jamais par tenant).
+class InMemoryAnnuaireStore implements AnnuairePort {
+  private readonly published = new Map<string, string>()
+  private readonly consultations = new Map<TypeFlux, string>()
+  private calls = 0
+
+  setConsultation(typeFlux: TypeFlux, xml: string): void {
+    this.consultations.set(typeFlux, xml)
+  }
+
+  publishCallCount(): number {
+    return this.calls
+  }
+
+  publish(payload: PublishPayload): Promise<PublishResult> {
+    this.calls++
+    const key = `${payload.tenantId}/${payload.publicationRef}`
+    const existing = this.published.get(key)
+    if (existing === undefined) this.published.set(key, payload.xml)
+    const xml = existing ?? payload.xml // write-once : jamais le contenu rejoué
+    return Promise.resolve({
+      trackingRef: createHash('sha256').update(xml, 'utf8').digest('hex'),
+      location: `mem://${key}`,
+    })
+  }
+
+  fetchConsultation(typeFlux: TypeFlux): Promise<ConsultationResult> {
+    return Promise.resolve({
+      typeFlux,
+      xml: this.consultations.get(typeFlux) ?? emptyConsultationXml(typeFlux),
+    })
+  }
+
+  publicationStatus(trackingRef: string): Promise<AnnuaireAckStatus> {
+    return Promise.resolve({ trackingRef, outcome: 'pending' })
+  }
+}
+
+export { InMemoryAnnuaireStore }
+
 // Boote le VRAI WorkerModule en-process contre le Postgres + Redis de test
 // (overrides du pool applicatif et de la connexion Redis, comme createTestApp).
 // opts.generator : stub de génération (ex. qui throw) pour tester les échecs.
@@ -97,6 +173,11 @@ class InMemoryTransmissionSink implements Flux10TransmissionPort {
 // d'échec/de comptage d'appels pour prouver qu'un chemin (à blanc, XML
 // invalide) n'appelle JAMAIS le port. Par défaut : sink en mémoire hermétique
 // (ci-dessus) → aucun test n'écrit dans ./var/ereporting sans le demander.
+// opts.annuairePort : override d'ANNUAIRE_TRANSPORT (Task 9) — passer une
+// INSTANCE d'InMemoryAnnuaireStore pour contrôler ses fixtures F14
+// (`setConsultation`) et sonder ses appels (`publishCallCount`) depuis le
+// test. Par défaut : store en mémoire hermétique (ci-dessus) → aucun test
+// n'écrit dans ./var/annuaire sans le demander.
 export async function createTestWorker(
   appUrl: string,
   redis: { host: string; port: number },
@@ -104,6 +185,7 @@ export async function createTestWorker(
     generator?: InvoiceFormatGenerator
     archiveStore?: ArchiveStore
     transmissionPort?: Flux10TransmissionPort
+    annuairePort?: AnnuairePort
   },
 ): Promise<INestApplicationContext> {
   process.env.DATABASE_URL = appUrl
@@ -117,6 +199,8 @@ export async function createTestWorker(
     .useValue(opts?.archiveStore ?? new InMemoryArchiveStore())
     .overrideProvider(FLUX10_TRANSMISSION)
     .useValue(opts?.transmissionPort ?? new InMemoryTransmissionSink())
+    .overrideProvider(ANNUAIRE_TRANSPORT)
+    .useValue(opts?.annuairePort ?? new InMemoryAnnuaireStore())
   if (opts?.generator) {
     builder.overrideProvider(INVOICE_FORMAT_GENERATOR).useValue(opts.generator)
   }

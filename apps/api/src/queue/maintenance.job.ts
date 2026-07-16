@@ -19,3 +19,22 @@ export const ARCHIVE_RETRY_JOB = 'archive-retry'
 // dédiée), planifié par EreportingScheduler
 // (worker/ereporting.scheduler.ts).
 export const EREPORTING_SWEEP_JOB = 'ereporting-sweep'
+// ANNUAIRE_SYNC_DIFF_JOB / ANNUAIRE_SYNC_FULL_JOB : ordonnanceur de
+// synchronisation annuaire (plan 2.4, Task 9) — différentiel ~quotidien
+// (TypeFlux='D', upsert seul) / complet ~hebdomadaire (TypeFlux='C',
+// remplacement — A-SYNC-RECONCILE). Chacun énumère les tenants cibles (SD
+// `find_annuaire_sync_targets`, migration 0019) puis enfile un job
+// `annuaire-sync` par tenant (worker/annuaire-sweep.service.ts,
+// `AnnuaireSweepService.sweepSync`). Dispatchés par MaintenanceProcessor
+// (branches dédiées), planifiés par AnnuaireScheduler
+// (worker/annuaire.scheduler.ts).
+export const ANNUAIRE_SYNC_DIFF_JOB = 'annuaire-sync-diff'
+export const ANNUAIRE_SYNC_FULL_JOB = 'annuaire-sync-full'
+// ANNUAIRE_REPUBLISH_SWEEP_JOB : sweep de reprise des drafts figés (Task 9,
+// injection revue contrôleur STUCK-DRAFT RE-PUBLISH SWEEP — fix du défaut T8
+// F1) — énumère les lignes 'draft' figées depuis >15 min (SD
+// `find_stale_annuaire_drafts`, migration 0020) puis enfile un job
+// `annuaire-republish` par ligne (`AnnuaireSweepService.sweepStuckDrafts`).
+// Dispatché par MaintenanceProcessor (branche dédiée), planifié par
+// AnnuaireScheduler.
+export const ANNUAIRE_REPUBLISH_SWEEP_JOB = 'annuaire-republish-sweep'

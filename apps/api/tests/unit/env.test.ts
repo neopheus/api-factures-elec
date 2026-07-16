@@ -219,4 +219,60 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/EREPORTING_SWEEP_EVERY_MS/)
   })
+
+  it('applies annuaire (Flux 13/14) defaults', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.ANNUAIRE_DRIVER).toBe('local')
+    expect(env.ANNUAIRE_LOCAL_DIR).toBe('./var/annuaire')
+    expect(env.ANNUAIRE_SYNC_EVERY_MS).toBe(86_400_000)
+    expect(env.ANNUAIRE_COMPLETE_EVERY_MS).toBe(604_800_000)
+    expect(env.ANNUAIRE_PUBLISH_JOB_ATTEMPTS).toBe(3)
+    expect(env.ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS).toBe(300_000)
+  })
+
+  it('accepts an override of ANNUAIRE_DRIVER', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+      ANNUAIRE_DRIVER: 'api',
+    })
+    expect(env.ANNUAIRE_DRIVER).toBe('api')
+  })
+
+  it('rejects an unknown ANNUAIRE_DRIVER', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ANNUAIRE_DRIVER: 'ftp',
+      }),
+    ).toThrow(/ANNUAIRE_DRIVER/)
+  })
+
+  it('rejects a non-positive ANNUAIRE_SYNC_EVERY_MS/ANNUAIRE_COMPLETE_EVERY_MS/ANNUAIRE_PUBLISH_JOB_ATTEMPTS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ANNUAIRE_SYNC_EVERY_MS: '0',
+      }),
+    ).toThrow(/ANNUAIRE_SYNC_EVERY_MS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ANNUAIRE_COMPLETE_EVERY_MS: '0',
+      }),
+    ).toThrow(/ANNUAIRE_COMPLETE_EVERY_MS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ANNUAIRE_PUBLISH_JOB_ATTEMPTS: '0',
+      }),
+    ).toThrow(/ANNUAIRE_PUBLISH_JOB_ATTEMPTS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS: '0',
+      }),
+    ).toThrow(/ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS/)
+  })
 })

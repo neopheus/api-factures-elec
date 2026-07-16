@@ -373,6 +373,183 @@ export const ereportingStatusEvents = pgTable(
   ],
 )
 
+// ── Annuaire Flux 13/14 (plan 2.4, Task 5) : consentements, lignes de ──────
+// publication, journal, miroir de consultation. Idiomes calqués sur la
+// section e-reporting ci-dessus (uuid pk, tenantId FK cascade, index tenant,
+// createdAt tz). Cf. annuaire/{nomenclature,ligne-adressage,
+// annuaire-lifecycle}.ts (Tasks 1/2/4) pour la sémantique métier.
+
+// Nature de la ligne (D=Définition, M=Masquage — nomenclature.ts NATURES).
+export const annuaireNature = pgEnum('annuaire_nature', ['D', 'M'])
+// Cycle de vie de publication (cf. annuaire-lifecycle.ts ANNUAIRE_STATUS_META) :
+// draft→published→{deposee,rejetee} ; deposee→masked (NON terminal, D6).
+export const annuaireLigneStatus = pgEnum('annuaire_ligne_status', [
+  'draft',
+  'published',
+  'deposee',
+  'rejetee',
+  'masked',
+])
+
+// Preuve de consentement (§3.5.5.5, D5) : portée = maille (siren, et
+// optionnellement siret/routage/suffixe — plus la maille est renseignée
+// précisément, plus étroite est sa couverture, cf. A-CONSENT/coversTarget).
+// Révocation par `revokedAt` (pas de DELETE — grants migration 0019).
+export const annuaireConsents = pgTable(
+  'annuaire_consents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    siren: text('siren').notNull(),
+    siret: text('siret'),
+    routageId: text('routage_id'),
+    suffixe: text('suffixe'),
+    consentType: text('consent_type').notNull(),
+    signerIdentity: text('signer_identity').notNull(),
+    evidenceRef: text('evidence_ref').notNull(),
+    obtainedAt: timestamp('obtained_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('annuaire_consents_tenant_siren_idx').on(t.tenantId, t.siren)],
+)
+
+// Lignes de publication (F13, D11 : une Définition par maille×date). Le
+// consentement est OBLIGATOIRE (FK restrict — D5, gate de publication) :
+// une ligne ne peut jamais perdre son unique preuve de consentement tant
+// qu'elle existe.
+export const annuaireLignes = pgTable(
+  'annuaire_lignes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    siren: text('siren').notNull(),
+    siret: text('siret'),
+    routageId: text('routage_id'),
+    suffixe: text('suffixe'),
+    nature: annuaireNature('nature').notNull(),
+    dateDebut: text('date_debut').notNull(), // AAAAMMJJ, inclus
+    dateFin: text('date_fin'), // AAAAMMJJ, exclu
+    plateforme: text('plateforme').notNull(), // matricule PPF (4 chiffres)
+    status: annuaireLigneStatus('status').notNull().default('draft'),
+    consentId: uuid('consent_id')
+      .notNull()
+      .references(() => annuaireConsents.id, { onDelete: 'restrict' }),
+    trackingRef: text('tracking_ref'),
+    rejectReason: text('reject_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('annuaire_lignes_tenant_siren_idx').on(t.tenantId, t.siren),
+    // Amendement A-DEADLOCK (HIGH, PRIME sur le plan qui écrivait seulement
+    // `WHERE nature='D'` — insuffisant : une ligne rejetee/masked, TERMINALE
+    // et de nature INCHANGÉE, occuperait le slot À VIE, rejouant le deadlock
+    // A2 de 2.3). `status NOT IN ('rejetee','masked')` libère le slot dès
+    // qu'une ligne atteint un état terminal : l'annuaire n'a PAS de concept
+    // RE (contrairement à l'e-reporting) — la correction d'une ligne
+    // rejetée/masquée est une NOUVELLE ligne draft (domaine-correct, cf.
+    // annuaire-lifecycle.ts). Les statuts non-terminaux (draft/published/
+    // deposee) restent indexés — la fenêtre de crash entre `transmit` et
+    // markPublished (statut encore draft/published) reste anti-doublon.
+    uniqueIndex('annuaire_lignes_maille_date_definition_unique')
+      .on(
+        t.tenantId,
+        t.siren,
+        sql`coalesce(${t.siret}, '')`,
+        sql`coalesce(${t.routageId}, '')`,
+        sql`coalesce(${t.suffixe}, '')`,
+        t.dateDebut,
+      )
+      .where(
+        sql`${t.nature} = 'D' AND ${t.status} NOT IN ('rejetee', 'masked')`,
+      ),
+  ],
+)
+
+// Journal APPEND-ONLY du cycle de vie annuaire — NON scellé (D6, motif
+// libre : aucun code de rejet réglementaire annuaire, contrairement au
+// REJ_* e-reporting) : pas de trigger de hash-chain, grants SELECT/INSERT
+// seuls (migration 0019).
+export const annuaireLigneEvents = pgTable(
+  'annuaire_ligne_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    ligneId: uuid('ligne_id')
+      .notNull()
+      .references(() => annuaireLignes.id, { onDelete: 'restrict' }),
+    fromStatus: annuaireLigneStatus('from_status'), // NULL pour l'événement genèse ('draft')
+    toStatus: annuaireLigneStatus('to_status').notNull(),
+    motif: text('motif'), // libre (D6), requis ssi to_status='rejetee' (motifRequired)
+    actor: text('actor').notNull(), // 'platform' | 'ppf' | 'user:<uuid>'
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('annuaire_ligne_events_ligne_idx').on(t.ligneId, t.createdAt)],
+)
+
+// Miroir de consultation (F14, D9) : régénérable par la sync (grants
+// SELECT/INSERT/UPDATE/DELETE, migration 0019) — backstop DB de l'upsert
+// idempotent.
+export const annuaireDirectoryEntries = pgTable(
+  'annuaire_directory_entries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    idInstance: bigint('id_instance', { mode: 'number' }),
+    siren: text('siren').notNull(),
+    siret: text('siret'),
+    routageId: text('routage_id'),
+    suffixe: text('suffixe'),
+    nature: annuaireNature('nature').notNull(),
+    dateDebut: text('date_debut').notNull(),
+    dateFin: text('date_fin'),
+    plateforme: text('plateforme').notNull(),
+    sourceHorodate: text('source_horodate'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('annuaire_directory_entries_tenant_siren_idx').on(
+      t.tenantId,
+      t.siren,
+    ),
+    // Amendement A-MIRROR-KEY (MED, PRIME sur le plan qui omettait `nature` —
+    // une D et une M sur la même maille×dateDebut s'écraseraient mutuellement
+    // à l'upsert, perdant soit le masquage soit la définition). `nature`
+    // INCLUS dans la clé : upsert idempotent PAR nature, D et M coexistent.
+    uniqueIndex('annuaire_directory_entries_maille_date_nature_unique').on(
+      t.tenantId,
+      t.siren,
+      sql`coalesce(${t.siret}, '')`,
+      sql`coalesce(${t.routageId}, '')`,
+      sql`coalesce(${t.suffixe}, '')`,
+      t.dateDebut,
+      t.nature,
+    ),
+  ],
+)
+
 export const userRole = pgEnum('user_role', [
   'owner',
   'admin',

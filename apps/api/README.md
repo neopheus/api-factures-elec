@@ -17,7 +17,18 @@ en **2.3** avec l'**e-reporting DGFiP (Flux 10)** — transmission au PPF de
 **données d'opérations** (agrégats), **distincte** de l'e-invoicing ci-dessus :
 sous-flux **10.3 (B2C domestique) livré de bout en bout**, machine à états
 **300/301** propre (distincte du CDV), cadence par régime TVA, port de
-transmission différé au déploiement. Consomme
+transmission différé au déploiement, puis en **2.4** avec l'**annuaire
+central (Flux 13/14)** — le registre **hébergé par le PPF** qui adresse/route
+les factures électroniques ; livrable pré-immatriculation = **domaine PA**
+(socle) : ligne d'adressage (4 mailles, validité semi-ouverte
+`[début, fin)`, résolution la plus spécifique d'abord), génération Flux 13 /
+parsing Flux 14 **tous deux validés XSD** contre les schémas DGFiP réels,
+miroir de consultation tenant-scopé **PII-minimal**, publication
+**consent-gated** (422) avec gestion de slot (409 + libération), acquittements
+PPF et synchronisation **bornée** (différentiel quotidien / complet
+hebdomadaire, avec sweep de reprise des publications figées). Adaptateurs de
+transport réels et câblage dans l'émetteur de factures différés au
+déploiement. Consomme
 `@factelec/invoice-core` (validation, calculs, génération des formats du socle)
 et expose l'ensemble derrière une couche d'authentification et d'isolation
 multi-tenant Postgres.
@@ -720,6 +731,317 @@ au rôle utilisé par le process API HTTP lors d'un futur split du rôle worker
 (API ↔ worker sur deux rôles Postgres distincts, avec des grants différenciés)
 — non fait dans ce plan.
 
+## Annuaire central (Flux 13/14) — 2.4
+
+L'**annuaire** est le registre central **hébergé par le PPF** (Portail Public
+de Facturation) qui associe à chaque entité une (ou plusieurs) plateforme(s)
+destinataire(s) pour l'adressage/routage des factures électroniques — un
+concept **distinct** de l'e-invoicing (Flux 1-9) et de l'e-reporting (Flux 10
+ci-dessus). Le **livrable pré-immatriculation** est le **domaine PA**
+(Plateforme Agréée) uniquement : consulter l'annuaire avant de router,
+publier ses propres lignes, ingérer les mises à jour du PPF. Sous-domaine
+`apps/api/src/annuaire/*` : nomenclatures pures (`nomenclature.ts`), modèle
+de ligne d'adressage et résolution (`ligne-adressage.ts`), machine à états de
+publication (`annuaire-lifecycle.ts`), génération Flux 13 / parsing Flux 14
+(`flux13-xml.ts`, `flux14-parse.ts`, `annuaire-xsd-validator.ts`),
+persistance (`annuaire.repository.ts`), port de transport
+(`annuaire.port.ts`, `annuaire-transport.module.ts`,
+`local-filesystem-annuaire-store.ts`), services applicatifs
+(`annuaire-consultation.service.ts`, `annuaire-publication.service.ts`,
+`annuaire-sync.service.ts`) et endpoints (`annuaire.controller.ts`).
+
+### Périmètre livré et honnêteté — lecture obligatoire
+
+**LIVRÉ de bout en bout, côté PA** :
+
+- **Ligne d'adressage** (`ligne-adressage.ts`) : 4 mailles possibles (SIREN
+  seul, SIREN+SIRET, SIREN+SIRET+identifiant de routage, SIREN+suffixe),
+  validité **semi-ouverte `[dateDebut, dateFin)`** (ANNEXE 3 F13 rows 23-24,
+  verbatim — la date de début est incluse, la date de fin est exclue),
+  résolution du destinataire **la plus spécifique d'abord**
+  (`resolveRecipient`) avec masquage (Nature `M`) à **portée exacte-maille**
+  (ne cascade ni vers une maille plus large ni plus étroite).
+- **Génération Flux 13 (Actualisation, PA→PPF) et parsing Flux 14
+  (Consultation, PPF→PA), tous deux validés XSD** contre les schémas DGFiP
+  réels (`Annuaire_Commun.xsd` + les XSD F12-F13/F14 dédiés) — dans les
+  **deux directions**, ce que le dossier de cadrage initial avait omis (D3).
+- **Miroir de consultation tenant-scopé, PII-minimal** (D8) : seuls maille +
+  plateforme + validité + nature sont extraits du Flux 14 et persistés —
+  `BlocUnitesLegales`/`BlocEtablissements`/`BlocIdPlateformesReception` (qui
+  portent Nom/Adresse/Diffusible/Contact) ne sont **jamais lus**, pas même
+  typés côté parseur : ces données sont structurellement absentes du
+  résultat, pas seulement omises par convention.
+- **Publication consent-gated** (D5, §3.5.5.5) : gate **422** (`Consent
+  required`) évaluée **avant toute écriture** si aucun consentement actif ne
+  couvre la maille ciblée ; conflit de slot (même maille × `dateDebut`, ligne
+  `Définition` déjà active) → **409**, avec **libération automatique** du
+  slot dès qu'une ligne atteint un statut terminal (`rejetee`/`masked`).
+- **Acquittements PPF** (`recordAck`, CAS 1 transaction) avec désambiguïsation
+  d'origine (naissance directe `rejetee` sur F13 localement XSD-invalide,
+  dite « born-rejetee », vs acquittement réel du PPF).
+- **Synchronisation bornée** : ordonnanceur BullMQ (`AnnuaireSweepService`)
+  énumérant les tenants actifs (`find_annuaire_sync_targets`), différentiel
+  **quotidien** (upsert seul, jamais de suppression) et complet
+  **hebdomadaire** (upsert **puis remplacement** du miroir du tenant — les
+  plateformes que le PPF a cessé d'annoncer disparaissent), plus un
+  **sweep de reprise des publications figées** (voir Runbook ci-dessous).
+
+**DIFFÉRÉS EXPLICITES — ne pas surpromettre « annuaire complet livré »** :
+
+- **Adaptateurs de transport réels** (API PISTE-OAuth2, EDI SFTP/AS2/AS4) —
+  `ANNUAIRE_DRIVER=api|edi` lève une erreur explicite et testée tant que
+  l'implémentation réelle n'est pas fournie ; seul `local` (write-once
+  testable) est câblé en 2.4. Activation **au déploiement**.
+- **Feeds d'initialisation INSEE/Chorus/DGFiP** — non chargés : la
+  plateforme fictive non-routante par défaut (`FICTITIOUS_PLATFORM = '9998'`,
+  attribuée en théorie à toute entité nouvellement assujettie, PDF spec v3.2
+  §3.5.3) est **modélisée** (constante nomenclature) mais **aucun processus
+  d'ingestion** ne peuple automatiquement ces lignes par défaut à ce jour.
+- **Habilitations réelles** — le scoping du miroir est **tenant-scopé** (RLS,
+  D8) mais ne modélise pas encore d'habilitation fine par plateforme/mandat ;
+  différé derrière le port de transport réel.
+- **Codes routage standalone** (6 endpoints Swagger dédiés
+  `SIREN×3`/`SIRET×3`/codes de routage du dossier de cadrage) — **différés**
+  (R5) : `RoutageID` n'est porté qu'**inline** dans la ligne d'adressage
+  (`routageId`), jamais géré par un endpoint dédié de gestion des codes de
+  routage.
+- **Connecteur de signature électronique du consentement** — la preuve de
+  consentement (`ConsentProofInput` : type, identité signataire, référence de
+  preuve, date d'obtention) est un simple enregistrement structuré ; aucune
+  intégration avec un prestataire de signature électronique.
+- **Câblage de la résolution dans l'émetteur de factures** — `resolveRecipient`/
+  `AnnuaireConsultationService` existent et sont testés, mais **rien dans le
+  pipeline de génération/émission des formats du socle (Flux 1-9) n'appelle
+  encore la résolution de routage annuaire** : c'est la brique dont dépendra
+  un futur câblage (phase 3, transmission Peppol), pas un oubli de ce plan.
+- **Révocation de consentement** — la colonne `annuaire_consents.revoked_at`
+  existe et `findConsentById` la respecte déjà (un consentement révoqué ne
+  couvre plus aucune publication), mais **aucun endpoint ni méthode
+  applicative ne l'écrit** à ce jour : la base supporte la révocation, rien
+  ne la déclenche encore.
+
+**Aucun scellement/signature au niveau message** (même motif que
+l'e-reporting, D6/cohérent 2.3) : le journal `annuaire_ligne_events` est
+**append-only** (grants `SELECT`+`INSERT` seulement) mais **non scellé** —
+l'authentification relève du **transport**, pas du message ; le scellement
+2.2 (chaîne SHA-256) ne s'applique pas ici.
+
+### Machine à états de publication (distincte du CDV et du 300/301)
+
+Cycle de vie **propre à la publication annuaire** (`annuaire-lifecycle.ts`) :
+
+```
+draft → published → { deposee | rejetee }
+deposee → masked
+```
+
+- **`draft`/`published`/`deposee`/`rejetee`/`masked`** portent tous
+  `code: null` — **aucun code officiel DGFiP n'est documenté** pour le cycle
+  de publication annuaire (contraste avec les 300/301 e-reporting, Tableau
+  5/6) : un motif de rejet est une **chaîne libre**, pas un énum
+  réglementaire normatif (D6, interprétation go-live).
+- **Terminaux = `{rejetee, masked}`** — `deposee` n'**est pas** terminal
+  (transition possible vers `masked`, fin d'adressage explicite via une
+  ligne Nature `M`). `motifRequired` n'exige un motif que pour `rejetee`.
+- **A-DEADLOCK (amendement de conception, analogue du slot A2 2.3, mais
+  résolu différemment car l'annuaire n'a pas de concept de rectificatif)** :
+  l'index unique partiel de définition (migration `0018`,
+  `WHERE nature='D' AND status NOT IN ('rejetee','masked')`) **libère** le
+  slot (tenant, maille, `dateDebut`) dès qu'une ligne atteint un statut
+  terminal — une re-définition de la même maille×date après rejet/masquage
+  est **toujours une nouvelle ligne** (nouveau `draft`), jamais une
+  réouverture de l'ancienne ligne terminale.
+
+### Ligne d'adressage, résolution et consultation
+
+- **Hiérarchie de spécificité** (`mailleLevelOf`, avertissement
+  d'interprétation) : `SIREN < SIREN_SIRET < {SIREN_SIRET_ROUTAGE,
+  SIREN_SUFFIXE}` — ces deux derniers niveaux sont des **axes mutuellement
+  exclusifs** traités à **rang égal**, le plus élevé de la hiérarchie ; deux
+  mailles distinctes qui matcheraient au même rang lèvent
+  `AmbiguousResolutionError` plutôt qu'un choix arbitraire (409 côté HTTP,
+  sans jamais exposer les plateformes concurrentes).
+- **Concurrence de lignes `D` à la même maille exacte** (le miroir F14 n'est
+  pas contraint par l'unicité locale) : la `dateDebut` la plus récente
+  l'emporte ; égalité stricte → `AmbiguousResolutionError` (interprétation
+  A-RESOLVE-EDGES).
+- **Masquage-repli** : une ligne `M` en vigueur retire de la résolution la/les
+  Définition(s) de **même maille exacte**, mais ne bloque pas le repli vers
+  une Définition **moins spécifique** restée en vigueur (ex. un masquage
+  SIREN_SIRET laisse résoudre vers une Définition SIREN si elle existe) —
+  interprétation non tranchée par la spec, retenue pour maximiser la
+  délivrabilité.
+- `GET /annuaire/resolution` renvoie **404 anti-fuite byte-identique** que le
+  destinataire soit réellement inconnu, hors période d'effet, ou d'un
+  **autre tenant** (RLS) — les trois cas sont indiscernables côté HTTP.
+
+### Consentement (gate 422, D5/A-CONSENT)
+
+`POST /annuaire/lignes` évalue le consentement **avant toute écriture** :
+`consentId` référence un consentement déjà obtenu (couverture et
+non-révocation vérifiées par le service, jamais une confiance aveugle en
+l'identifiant fourni par le client) ; `proof` (sans `consentId`) enregistre un
+**nouveau** consentement (append, jamais de mutation) ; sans les deux, une
+publication précédente ayant déjà déposé un consentement couvrant la maille
+est retrouvée automatiquement. Prédicat de couverture (interprétation go-live,
+§3.5.5.5 non normative) : **même SIREN et maille égale ou plus large**
+(`coversTarget`, la même notion que la résolution de routage) — un
+consentement SIREN couvre toute maille de ce SIREN, un consentement
+SIREN_SIRET_ROUTAGE ne couvre que la cible exacte SIRET+routage.
+
+### Génération Flux 13 / parsing Flux 14 et validation XSD
+
+`generateActualisationXml` (F13, xmlbuilder2) émet les lignes de **masquage
+avant** les lignes de définition (F13 row 20, tri stable) et porte les
+identifiants **imbriqués** sous `Identifiant`
+(`InfoAdressageActualisationType`) ; `parseConsultationF14` (F14) valide
+**avant** de parser et lit des identifiants **plats**
+(`InfoAdressageConsultationType`) — les deux formes sont bien distinctes,
+chacune ciblant son propre type XSD. Les deux XSD (`Annuaire_Commun.xsd` +
+schémas F12-F13/F14) ne déclarent **aucun `targetNamespace`** : les instances
+sont générées et lues **sans préfixe de namespace** (confirmé `xmllint`).
+
+**Bug réel `xmlbuilder2@4.0.3` confirmé et contourné** : `end({format:
+'object'})` ré-échappe `&`/`<`/`>` déjà échappés à la relecture DOM — corrigé
+par `decodeXmlEntities` avant tout traitement applicatif du texte relu (sûr
+pour toute donnée réaliste ; un cas pathologique d'entité `&amp;` littérale
+doublement échappée n'est pas couvert — une lecture DOM lossless est notée
+comme piste future, non implémentée).
+
+**Qualifiant de routage `'9999'` — INTERPRÉTATION go-live à confirmer avec la
+DGFiP/PPF avant mise en production** (`ROUTAGE_SCHEME_ID_PLACEHOLDER`,
+`flux13-xml.ts`) : le XSD exige un attribut `@qualifiant` (`xs:token`,
+`use="required"`) sur `IdRoutage` sans le contraindre par un pattern ;
+l'ANNEXE 3 ne fixe qu'une contrainte **négative** (« ne peut pas prendre les
+valeurs 0002 (SIREN) ou 0009 (SIRET) »), aucune valeur positive n'étant
+normée dans la documentation disponible. `'9999'` satisfait la seule
+contrainte structurelle connue — pas une valeur réglementaire vérifiée.
+
+**Coercitions défensives à l'ingestion F14** (A-MIRROR-KEY) : `Nature` et
+`TypeFlux` sont typés `xs:string` **non restreints** côté XSD — une valeur
+hors `{D,M}`/`{C,D}`, **y compris un élément vide** (`<Nature/>` est
+XSD-valide et désérialisé en objet vide par xmlbuilder2, normalisé par une
+garde runtime), est rejetée de façon typée (`UnknownLigneNatureError`/
+`UnknownTypeFluxError`, chemin log+skip du sync) avant d'atteindre toute
+colonne enum ; un `<Suffixe/>` vide est traité comme **absent** (jamais
+`''`, le piège des clés `coalesce`).
+`DateFinEffective` (F14 seulement, DT-7-3-3) est portée jusqu'à l'ingestion,
+qui calcule la fin **effective** (`min(dateFin, dateFinEffective)`) — une
+ligne close par anticipation ne reste jamais résolue au-delà de sa fin
+réelle (évite le sur-routage).
+
+### Synchronisation bornée et ingestion Flux 14
+
+`AnnuaireSweepService.sweepSync` (job répétable, `ANNUAIRE_SYNC_EVERY_MS`/
+`ANNUAIRE_COMPLETE_EVERY_MS`) énumère les tenants actifs
+(`find_annuaire_sync_targets`, fonction `SECURITY DEFINER` hors contexte
+tenant, miroir `find_ereporting_declarants_due`) et enfile un job
+`annuaire-sync` par tenant, `jobId` déterministe
+`${tenantId}:${typeFlux}:${bucket}` (bucket = jour civil UTC, borne le
+ré-enfilement — même discipline que 2.3). `AnnuaireSyncService.sync` :
+
+- **Flux complet (`C`)** — **REMPLACE** le miroir du tenant
+  (`replaceDirectoryEntries` : upsert **puis** suppression des entrées
+  absentes du flux) : sans ce remplacement, le miroir dériverait vers des
+  plateformes que le PPF a cessé d'annoncer.
+- **Flux différentiel (`D`)** — **upsert seul, jamais de suppression** : un
+  différentiel ne porte qu'un sous-ensemble de mouvements récents, le
+  silence sur une maille ne signifie pas sa disparition.
+- **F14 authentiquement vide → no-op** (jamais une suppression totale du
+  miroir) : `LocalFilesystemAnnuaireStore` sert un F14 vide XSD-valide tant
+  qu'aucun fixture réel n'a été déposé — traiter un flux vide comme un ordre
+  de vidage serait dangereux. **Interprétation go-live documentée, limite
+  assumée** : une désactivation **réellement totale et authentique** d'un
+  annuaire côté PPF ne convergerait donc jamais vers un miroir vide par ce
+  chemin (défaut sûr délibéré, pas un oubli).
+- **Clé unique du miroir INCLUT `nature`** (A-MIRROR-KEY) : une ligne `D` et
+  une ligne `M` de même maille×date ne s'écrasent jamais l'une l'autre.
+
+### Persistance
+
+Quatre tables tenant-scopées sous RLS **`ENABLE`+`FORCE`** (migrations `0018`
+Drizzle / `0019`+`0020` hand) : `annuaire_consents` (preuves de consentement,
+`SELECT`/`INSERT`/`UPDATE` — la révocation future s'écrirait ici),
+`annuaire_lignes` (lignes publiées par ce tenant, `SELECT`/`INSERT`/`UPDATE`,
+porteuses de l'index de slot A-DEADLOCK ci-dessus), `annuaire_ligne_events`
+(journal **append-only**, `SELECT`+`INSERT` seulement) et
+`annuaire_directory_entries` (miroir de consultation Flux 14,
+`SELECT`/`INSERT`/`UPDATE`/`DELETE` — le seul `DELETE` du domaine, requis par
+le remplacement complet ci-dessus).
+
+## Runbook opérationnel — Annuaire Flux 13/14
+
+Section dédiée aux **dettes opérationnelles** identifiées en revue (Tasks 8
+et 9), à connaître **avant** toute exploitation réelle.
+
+### Sweep de reprise des publications figées (« stuck-draft re-publish »)
+
+**Symptôme.** Un crash exactement entre l'appel au port de transport
+(`port.publish`, le F13 est déjà émis) et l'écriture `markPublished` laisse
+une ligne en `draft` qui occupe **indéfiniment** son slot d'adressage
+(A-DEADLOCK ci-dessus) sans qu'aucune requête HTTP ne puisse la faire
+progresser.
+
+**Résolution automatique livrée (Task 9).** `AnnuaireSweepService
+.sweepStuckDrafts` énumère, tous tenants confondus, les lignes `draft` âgées
+de plus de **15 minutes** (`find_stale_annuaire_drafts`, migration `0020`,
+même discipline que le sweep de reprise d'archivage 2.2) et enfile un job
+`annuaire-republish` par ligne. `AnnuairePublicationService.republishDraft`
+**rejoue** le pipeline (génération → validation XSD → `port.publish` →
+`markPublished`) à partir de l'état **persisté** de la ligne — jamais un
+nouvel `insertLigne`. Idempotent **par construction**, sans code
+supplémentaire dédié :
+
+- le port est **write-once** par `publicationRef` (= id de la ligne) : si le
+  F13 avait déjà été écrit avant le crash, ce second appel retrouve la clé
+  déjà prise ;
+- `markPublished` est un **CAS** (`WHERE status='draft'`) : si la ligne a
+  entre-temps été publiée par un autre passage du sweep, le CAS échoue et
+  c'est traité comme une résolution concurrente bénigne (`'skipped'`), pas
+  une erreur.
+
+**Résidu à connaître (INFO, pas un bug)** : si le crash original a eu lieu
+**après** l'écriture réussie du F13 par le port, la re-publication renvoie le
+**`trackingRef` d'origine** (comportement write-once voulu) — même si les
+données de la ligne ont été mutées entre-temps par un autre chemin (cas
+non observé en pratique, la ligne `draft` n'étant modifiable par aucun
+endpoint HTTP), le `trackingRef` renvoyé resterait celui du **premier** F13
+émis, pas d'un F13 recalculé sur les données actuelles.
+
+### Libération de slot (rejetee/masked → redéfinition)
+
+Une ligne `Définition` qui atteint un statut terminal (`rejetee` — F13
+localement invalide au moment de la publication, ou `masked` — fin
+d'adressage explicite) **libère** son slot (maille × `dateDebut`) : une
+publication ultérieure sur exactement la même maille et la même date est
+acceptée comme une **nouvelle** ligne. Tant qu'une ligne reste **active**
+(`draft`/`published`/`deposee`), toute tentative de publication sur le même
+slot est refusée en **409** — c'est une politique **user-driven** (le client
+doit d'abord masquer/attendre le rejet) et non une réouverture automatique.
+
+### Notes diverses
+
+- **`consentId` requis même pour publier une ligne de Masquage (`nature:
+  'M'`)** — lecture littérale du plan (le body `POST /annuaire/lignes` ne
+  distingue pas `D`/`M` pour la gate consentement), acceptée telle quelle :
+  masquer une maille exige donc la même preuve de consentement que la
+  définir.
+- **Consentement orphelin possible sur un scénario preuve+conflit** (LOW) :
+  si `proof` est fourni et qu'un consentement équivalent existe déjà en
+  parallèle (course), un consentement supplémentaire peut être inséré sans
+  être jamais référencé par une ligne — n'aggrave aucune garantie de
+  sécurité (la gate reste toujours vérifiée par couverture explicite), simple
+  résidu de données.
+- **`POST /annuaire/lignes` accepte `nature: 'M'` directement** (nit) : rien
+  n'empêche un client de publier une ligne de Masquage comme première
+  action sur une maille jamais définie — sans effet pratique (rien à
+  masquer), mais un endpoint dédié « masquer une ligne existante »
+  (`DELETE /annuaire/lignes/:id`) existe et est la voie normale.
+- **`libxml2`/`xmllint` requis à l'exécution du worker** — même motif que
+  l'e-reporting (2.3) : la validation XSD F13/F14 s'exécute en
+  **runtime**, à chaque publication et chaque synchronisation, pas
+  seulement en test/CI.
+
 ## Sécurité / multi-tenant
 
 Cette section documente les mécanismes de sécurité destinés à figurer au
@@ -879,6 +1201,12 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `EREPORTING_PA_NAME` | Raison sociale de la PA (TT-9) | `Factelec PA` |
 | `EREPORTING_SWEEP_EVERY_MS` | Périodicité (ms) du job répétable d'ordonnancement e-reporting (`EreportingSweepService`) | `3600000` (1 h) |
 | `EREPORTING_GENERATION_JOB_ATTEMPTS` | Tentatives max d'un job de génération e-reporting avant `failed` — distingue une erreur **opérationnelle** (`xmllint` absent, DB/port transitoire) d'un rejet sémantique `REJ_SEMAN` (qui n'est jamais rejoué, il ne throw pas) | `3` |
+| `ANNUAIRE_DRIVER` | Adaptateur de transport annuaire : `local` (`LocalFilesystemAnnuaireStore`, testable) \| `api`\|`edi` (API PISTE-OAuth2 / EDI SFTP-AS2-AS4, **activés au déploiement**, lèvent une erreur explicite tant que non fournis) | `local` |
+| `ANNUAIRE_LOCAL_DIR` | Répertoire local du driver `local` | `./var/annuaire` |
+| `ANNUAIRE_SYNC_EVERY_MS` | Périodicité (ms) de l'ordonnanceur de synchronisation différentielle (Flux 14, quotidien) | `86400000` (24 h) |
+| `ANNUAIRE_COMPLETE_EVERY_MS` | Périodicité (ms) de l'ordonnanceur de synchronisation complète (Flux 14, remplacement du miroir du tenant, hebdomadaire) | `604800000` (7 j) |
+| `ANNUAIRE_PUBLISH_JOB_ATTEMPTS` | Tentatives max d'un job de la file `annuaire-sync` (ingestion F14 et reprise de draft figé) avant `failed` | `3` |
+| `ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS` | Périodicité (ms) du sweep de reprise des publications figées (drafts âgés > 15 min, `find_stale_annuaire_drafts`) | `300000` (5 min) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -951,6 +1279,11 @@ README racine.
 | `GET /ereporting/transmissions` | Liste des transmissions e-reporting Flux 10 du tenant (résumés — **sans** le XML), `rejectOrigin` (`local`\|`ppf`\|`null`) dérivé pour les rejets | 200, 401 |
 | `GET /ereporting/transmissions/:id/xml` | XML de la transmission (`text/xml`) — 404 si absente ou d'un autre tenant | 200, 401, 404 |
 | `GET /ereporting/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
+| `GET /annuaire/lignes` | Recherche dans le miroir de consultation (Flux 14) du tenant, filtrée par SIREN | 200, 401 |
+| `GET /annuaire/resolution` | Résolution du matricule de plateforme destinataire pour une maille à une date donnée (`?siren&siret?&routageId?&suffixe?&date`) — 404 anti-fuite (inconnu/hors période/hors tenant), 409 si résolution ambiguë | 200, 401, 404, 409 |
+| `POST /annuaire/lignes` | Publication d'une ligne d'adressage (D/M) — gate consentement (422), F13 XSD-validé et transmis via le port ; succès partiel au grain ligne (201 même si le statut interne devient `rejetee`) | 201, 401, 422 |
+| `PUT /annuaire/lignes/:id` | Fin d'effet : positionne `dateFin` sur une ligne existante du tenant | 200, 401, 404, 409, 422 |
+| `DELETE /annuaire/lignes/:id` | Masquage d'une ligne déposée (`deposee → masked`) | 204, 401, 404, 409 |
 
 **Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
 route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
@@ -972,6 +1305,14 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   `Authorization: Bearer` présent est **toujours** résolu en priorité (même
   invalide) : un client machine ne retombe jamais silencieusement sur un
   cookie de session qui traînerait dans la même requête.
+- **`/annuaire/*`** (consultation **et** publication/fin d'effet/masquage,
+  Task 7/8 plan 2.4) est **entièrement dual-auth** (`TenantAuthGuard`), y
+  compris les mutations `POST`/`PUT`/`DELETE` — contrairement à
+  `POST /invoices/:id/status` ci-dessous, une clé API machine peut donc
+  publier/masquer une ligne d'annuaire au même titre qu'une session
+  utilisateur : ce domaine ne porte **aucune** garde CSRF, la publication
+  annuaire n'étant pas modélisée comme une mutation pilotée exclusivement
+  depuis le dashboard.
 - **`POST /invoices/:id/status`** (transition CDV) est une **mutation
   métier** : exclusivement session **owner/admin/accountant** + CSRF
   (`SessionGuard`/`RolesGuard`/`CsrfGuard`) — un `viewer` est refusé (403),
@@ -1073,10 +1414,25 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   Tentative d'altération/suppression de maillon prouvée détectée par
   `verifyTenantChain` **au niveau base réelle** (Testcontainers), pas
   simulée.
+- **Annuaire Flux 13/14** (plan 2.4) : validation XSD **réelle** (`xmllint`
+  exécuté, pas simulé) dans les **deux directions** (génération F13 +
+  parsing F14) contre les schémas DGFiP réels, y compris un test négatif
+  prouvant le rejet (« born-rejetee ») sur un F13 réellement invalide ;
+  résolution de routage prouvée **indépendante de l'ordre** des entrées
+  (permutation testée unitairement et en e2e) ; gate consentement (422)
+  couverte pour les 4 cas de couverture (SIREN/SIRET/routage/suffixe) ;
+  A-DEADLOCK prouvé au niveau SQL réel (redéfinition après rejet/masquage
+  acceptée, ligne active → 409, sans fenêtre de double-slot) ; sweep de
+  reprise des drafts figés exercé en e2e (draft âgé avec F13 déjà émis avant
+  crash simulé → republié avec le `trackingRef` d'origine, write-once
+  prouvé) ; synchronisation différentielle (upsert seul) vs complète
+  (remplacement du miroir du tenant) testées séparément, y compris le
+  no-op sur F14 vide ; worker bouclé en-process (`createTestWorker`)
+  exerçant le pipeline complet ingestion Flux 14 → miroir.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`), exclusions limitées au bootstrap et au câblage DI pur
-  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 102
-  fichiers, **568 tests**, couverture **97.87 / 94.25 / 95.73 / 98.31 %**
+  (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`). État actuel : 121
+  fichiers, **782 tests**, couverture **97.71 / 94.51 / 95.75 / 98.2 %**
   (statements/branches/functions/lines).
 
 ```sh
@@ -1177,8 +1533,32 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
 - **Aucun endpoint/CLI de provisioning des déclarants e-reporting** (2.3) —
   `EreportingRepository.upsertDeclarant` existe et est testé mais n'est
   exposé par aucune route HTTP ni script CLI à ce jour.
+- **Résolu en 2.4** : annuaire central Flux 13/14, **domaine PA** de bout en
+  bout — ligne d'adressage (4 mailles, validité semi-ouverte, résolution la
+  plus spécifique d'abord), génération F13 + parsing F14 validés XSD dans
+  les deux directions, miroir de consultation PII-minimal, publication
+  consent-gated (422) avec gestion de slot (409 + libération), acquittements
+  et synchronisation bornée (différentiel/complet + sweep de reprise des
+  publications figées). Voir §§ Annuaire central / Runbook opérationnel —
+  Annuaire ci-dessus pour le détail complet et les différés.
+- **Qualifiant de routage annuaire `'9999'` — placeholder à confirmer avec la
+  DGFiP/PPF avant production** (2.4, `ROUTAGE_SCHEME_ID_PLACEHOLDER`) — le
+  XSD n'exprime qu'une contrainte négative (≠ 0002/0009), aucune valeur
+  positive n'est normée dans la documentation disponible. Voir § Génération
+  Flux 13 / parsing Flux 14.
+- **Résidu du sweep de reprise des publications figées** (2.4, INFO) — une
+  ligne republiée après un crash post-écriture-F13 renvoie le `trackingRef`
+  **d'origine** (write-once voulu), jamais recalculé sur un état muté entre
+  temps. Voir § Runbook opérationnel — Annuaire.
+- **Révocation de consentement annuaire non exposée** (2.4) — la colonne
+  `annuaire_consents.revoked_at` existe et est respectée à la lecture, mais
+  aucun endpoint/méthode applicative ne l'écrit à ce jour.
+- **Rôle SD `find_annuaire_sync_targets`/`find_stale_annuaire_drafts`
+  cross-tenant** (2.4, même dette que `find_ereporting_declarants_due`
+  2.3) — exposent des identifiants de tenants au rôle applicatif partagé
+  API/worker ; à durcir au même split du rôle worker que 2.3.
 
-### Différé explicitement 2.4+ (hors périmètre 2.3)
+### Différé explicitement (hors périmètre 2.4)
 
 - **E-reporting DGFiP au-delà du 10.3** (Flux 10, plan 2.3) : 10.1/10.2 B2Bi
   (classifiées mais non émises), TB-3 paiements (10.2/10.4, aucun modèle de
@@ -1187,8 +1567,14 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   adaptateurs de transport réels (sftp/as2/as4/api), push/acquittement PPF
   réel (webhook), schematron/contrôles sémantiques Annexe 7, chemin
   RE/rectificatif — voir § E-reporting pour le détail de chaque point.
-- **Annuaire central** (Flux 13/14, plan 2.4) — aucune consultation
-  d'annuaire à ce jour.
+- **Annuaire au-delà du domaine PA** (Flux 13/14, plan 2.4) : adaptateurs de
+  transport réels (API PISTE-OAuth2, EDI SFTP/AS2/AS4), feeds
+  d'initialisation INSEE/Chorus/DGFiP (lignes par défaut 9998/Chorus non
+  chargées), habilitations réelles, codes routage standalone (6 endpoints
+  Swagger différés, `RoutageID` inline seulement), connecteur de signature
+  électronique du consentement, câblage de la résolution de routage dans
+  l'émetteur de factures (phase 3), endpoint de révocation de consentement —
+  voir § Annuaire central pour le détail de chaque point.
 - **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway
   Object Storage, mode `COMPLIANCE`, rétention 10 ans) — **spécifié** (même
   contrat que `ArchiveStore`) mais **non écrit** en 2.2 : infra à la main de

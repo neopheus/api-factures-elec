@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AnnuaireConsultationF14>
+  <HorodateProduction>20260910120000</HorodateProduction>
+  <TypeFlux>D</TypeFlux>
+  <BlocLignesAnnuaire>
+    <LigneAnnuaire>
+      <IdInstance>1</IdInstance>
+      <MotifPresence>C</MotifPresence>
+      <Nature>D</Nature>
+      <DateEffet>
+        <DateDebut>20260901</DateDebut>
+      </DateEffet>
+      <InfoAdressage>
+        <Identifiant>123456789</Identifiant>
+        <IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>
+      </InfoAdressage>
+      <IdPlateforme>0007</IdPlateforme>
+    </LigneAnnuaire>
+  </BlocLignesAnnuaire>
+</AnnuaireConsultationF14>

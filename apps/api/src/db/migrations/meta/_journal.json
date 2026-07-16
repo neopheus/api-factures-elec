@@ -127,6 +127,27 @@
       "when": 1784135000000,
       "tag": "0017_ereporting_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1784161749540,
+      "tag": "0018_annuaire_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784161800000,
+      "tag": "0019_annuaire_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784161900000,
+      "tag": "0020_annuaire_stale_drafts",
+      "breakpoints": true
     }
   ]
 }
