@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common'
 import { AnnuaireRepository } from '../annuaire/annuaire.repository.js'
+import { AnnuaireConsultationService } from '../annuaire/annuaire-consultation.service.js'
 import { AnnuairePublicationService } from '../annuaire/annuaire-publication.service.js'
 import { AnnuaireSyncService } from '../annuaire/annuaire-sync.service.js'
 import { AnnuaireTransportModule } from '../annuaire/annuaire-transport.module.js'
 import { ArchiveModule } from '../archive/archive.module.js'
 import { ArchiveService } from '../archive/archive.service.js'
+import { CdvTransmissionModule } from '../cdv/cdv-transmission.module.js'
+import { CdvTransmissionRepository } from '../cdv/cdv-transmission.repository.js'
+import { CdvTransmissionService } from '../cdv/cdv-transmission.service.js'
 import { AppConfigModule } from '../config/config.module.js'
 import { DbModule } from '../db/db.module.js'
 import { EreportingRepository } from '../ereporting/ereporting.repository.js'
@@ -18,6 +22,10 @@ import { AnnuaireSweepService } from './annuaire-sweep.service.js'
 import { AnnuaireSyncProcessor } from './annuaire-sync.processor.js'
 import { ArchiveRetryScheduler } from './archive-retry.scheduler.js'
 import { ArchiveRetryService } from './archive-retry.service.js'
+import { CdvStuckRetryService } from './cdv-stuck-retry.service.js'
+import { CdvTransmissionProcessor } from './cdv-transmission.processor.js'
+import { CdvTransmissionScheduler } from './cdv-transmission.scheduler.js'
+import { CdvTransmissionSweepService } from './cdv-transmission-sweep.service.js'
 import { EreportingScheduler } from './ereporting.scheduler.js'
 import { EreportingGenerationProcessor } from './ereporting-generation.processor.js'
 import { EreportingSweepService } from './ereporting-sweep.service.js'
@@ -49,6 +57,10 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     // deux `NestFactory` distincts : AppModule (HTTP) et WorkerModule sont
     // deux contextes séparés, chacun doit l'importer lui-même).
     AnnuaireTransportModule,
+    // `@Global()` (cdv-transmission.module.ts, Task 5) : importer ICI expose
+    // `CDV_TRANSMISSION` à ce process worker (Task 7) — même motif que les
+    // deux imports ci-dessus.
+    CdvTransmissionModule,
   ],
   providers: [
     InvoicesRepository,
@@ -73,6 +85,13 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     AnnuaireSweepService,
     AnnuaireScheduler,
     AnnuaireSyncProcessor,
+    AnnuaireConsultationService,
+    CdvTransmissionRepository,
+    CdvTransmissionService,
+    CdvTransmissionSweepService,
+    CdvStuckRetryService,
+    CdvTransmissionScheduler,
+    CdvTransmissionProcessor,
   ],
 })
 export class WorkerModule {}

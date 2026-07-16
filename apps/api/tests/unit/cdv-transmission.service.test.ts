@@ -203,7 +203,13 @@ describe('CdvTransmissionService.transmitStatus', () => {
     expect(arg.xml).toContain('200') // MDT-105, deposee
 
     expect(port.transmit).toHaveBeenCalledTimes(1)
-    expect(repo.markTransmitted).toHaveBeenCalledWith('t1', 'tr-1', 'TRACK-1')
+    // Injection revue T6 (F1/F2) : xml TOUJOURS repassé à markTransmitted
+    // (no-op idempotent en FRESH, cf. bannière repository) ; recipientMatricule
+    // reste undefined pour la cible ppf (jamais résolu, D7).
+    expect(repo.markTransmitted).toHaveBeenCalledWith('t1', 'tr-1', 'TRACK-1', {
+      xml: expect.any(String),
+      recipientMatricule: undefined,
+    })
   })
 
   it("FRESH, cible recipient : résout via l'annuaire (maille depuis buyer, date AAAAMMJJ), recipientMatricule renseigné, transmit -> markTransmitted", async () => {
@@ -224,7 +230,12 @@ describe('CdvTransmissionService.transmitStatus', () => {
     const arg = repo.insertTransmission.mock.calls[0]![1]
     expect(arg.recipientMatricule).toBe('0042')
     expect(port.transmit).toHaveBeenCalledTimes(1)
-    expect(repo.markTransmitted).toHaveBeenCalledWith('t1', 'tr-1', 'TRACK-1')
+    // Injection revue T6 (F1/F2) : recipientMatricule PERSISTÉ via
+    // markTransmitted (pas seulement insertTransmission).
+    expect(repo.markTransmitted).toHaveBeenCalledWith('t1', 'tr-1', 'TRACK-1', {
+      xml: expect.any(String),
+      recipientMatricule: '0042',
+    })
   })
 
   it('résout la maille SIREN_SIRET quand buyer.siren porte un SIRET (14 chiffres)', async () => {
@@ -318,10 +329,14 @@ describe('CdvTransmissionService.transmitStatus', () => {
       '0042',
     )
     expect(port.transmit).toHaveBeenCalledTimes(1)
+    // Injection revue T6 (F1/F2, PROUVÉ ici) : la REPRISE persiste enfin
+    // xml+recipientMatricule via markTransmitted — insertTransmission (rejeu,
+    // created:false) ne les a PAS écrits (conflit -> reload seul).
     expect(repo.markTransmitted).toHaveBeenCalledWith(
       't1',
       'tr-1', // id renvoyé par insertTransmission (created:false, reload) — cf. fakeRepo
       'TRACK-1',
+      { xml: expect.any(String), recipientMatricule: '0042' },
     )
   })
 

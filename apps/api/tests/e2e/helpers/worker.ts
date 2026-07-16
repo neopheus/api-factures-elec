@@ -17,6 +17,13 @@ import {
   type ArchivePutResult,
   type ArchiveStore,
 } from '../../../src/archive/archive-store.port.js'
+import {
+  CDV_TRANSMISSION,
+  type CdvAckStatus,
+  type CdvTransmissionPort,
+  type CdvTransmitPayload,
+  type CdvTransmitResult,
+} from '../../../src/cdv/cdv-transmission.port.js'
 import { APP_POOL, createPool } from '../../../src/db/client.js'
 import {
   FLUX10_TRANSMISSION,
@@ -163,6 +170,34 @@ class InMemoryAnnuaireStore implements AnnuairePort {
 
 export { InMemoryAnnuaireStore }
 
+// Sink de transmission CDV Flux 6 EN MÉMOIRE (hermétique, motif
+// InMemoryTransmissionSink ci-dessus) : le WorkerModule câble
+// CdvTransmissionModule (Task 5), qui — sans override — construirait un
+// LocalFilesystemCdvStore écrivant dans ./var/cdv (driver 'local' par
+// défaut, CDV_TRANSMISSION_DRIVER). Ce sink garde le F6 en RAM, fidèle au
+// contrat write-once (rejeu même (tenantId,target,invoiceId,toStatus) ->
+// même trackingRef, jamais d'écrasement) mais sans effet de bord FS.
+class InMemoryCdvTransmissionSink implements CdvTransmissionPort {
+  private readonly store = new Map<string, string>()
+
+  transmit(payload: CdvTransmitPayload): Promise<CdvTransmitResult> {
+    const key = `${payload.tenantId}/${payload.target}/${payload.invoiceId}-${payload.toStatus}`
+    const existing = this.store.get(key)
+    if (existing === undefined) this.store.set(key, payload.xml)
+    const xml = existing ?? payload.xml // write-once : jamais le contenu rejoué
+    return Promise.resolve({
+      trackingRef: createHash('sha256').update(xml, 'utf8').digest('hex'),
+      location: `mem://${key}`,
+    })
+  }
+
+  status(trackingRef: string): Promise<CdvAckStatus> {
+    return Promise.resolve({ trackingRef, outcome: 'pending' })
+  }
+}
+
+export { InMemoryCdvTransmissionSink }
+
 // Boote le VRAI WorkerModule en-process contre le Postgres + Redis de test
 // (overrides du pool applicatif et de la connexion Redis, comme createTestApp).
 // opts.generator : stub de génération (ex. qui throw) pour tester les échecs.
@@ -178,6 +213,10 @@ export { InMemoryAnnuaireStore }
 // (`setConsultation`) et sonder ses appels (`publishCallCount`) depuis le
 // test. Par défaut : store en mémoire hermétique (ci-dessus) → aucun test
 // n'écrit dans ./var/annuaire sans le demander.
+// opts.cdvTransmissionPort : override de CDV_TRANSMISSION (Task 7) — stub
+// d'échec/de comptage d'appels pour prouver qu'un chemin (parked,
+// born-rejetée) n'appelle JAMAIS le port. Par défaut : sink en mémoire
+// hermétique (ci-dessus) → aucun test n'écrit dans ./var/cdv sans le demander.
 export async function createTestWorker(
   appUrl: string,
   redis: { host: string; port: number },
@@ -186,6 +225,7 @@ export async function createTestWorker(
     archiveStore?: ArchiveStore
     transmissionPort?: Flux10TransmissionPort
     annuairePort?: AnnuairePort
+    cdvTransmissionPort?: CdvTransmissionPort
   },
 ): Promise<INestApplicationContext> {
   process.env.DATABASE_URL = appUrl
@@ -201,6 +241,8 @@ export async function createTestWorker(
     .useValue(opts?.transmissionPort ?? new InMemoryTransmissionSink())
     .overrideProvider(ANNUAIRE_TRANSPORT)
     .useValue(opts?.annuairePort ?? new InMemoryAnnuaireStore())
+    .overrideProvider(CDV_TRANSMISSION)
+    .useValue(opts?.cdvTransmissionPort ?? new InMemoryCdvTransmissionSink())
   if (opts?.generator) {
     builder.overrideProvider(INVOICE_FORMAT_GENERATOR).useValue(opts.generator)
   }

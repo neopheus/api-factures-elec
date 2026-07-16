@@ -298,7 +298,17 @@ export class CdvTransmissionService {
       xml,
     })
     try {
-      await this.repo.markTransmitted(tenantId, id, result.trackingRef)
+      // Injection revue T6 (F1/F2, BINDING — cf. bannière markTransmitted,
+      // cdv-transmission.repository.ts) : `xml`/`recipientMatricule` sont
+      // TOUJOURS transmis ici, pas seulement en reprise — un envoi FRESH les
+      // réécrit avec la MÊME valeur déjà posée par `insertTransmission`
+      // ci-dessus (no-op idempotent), une REPRISE (parked→transmitted) les
+      // PERSISTE enfin (l'appel `insertTransmission` de la reprise, plus
+      // haut, est un no-op de conflit qui ne réécrit jamais ces colonnes).
+      await this.repo.markTransmitted(tenantId, id, result.trackingRef, {
+        xml,
+        recipientMatricule,
+      })
     } catch (err) {
       // CAS périmé (miroir EreportingGenerationService.generate) : déjà
       // marquée `transmitted` par un traitement concurrent — pas un échec,

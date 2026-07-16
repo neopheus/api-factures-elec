@@ -153,10 +153,26 @@ export class CdvTransmissionRepository {
   // (`tenant.run`) : la première UPDATE qui touche une ligne détermine le
   // `fromStatus` réel du journal, sans fenêtre de course avec un SELECT
   // préalable.
+  //
+  // `extra` (injection revue T6, finding F1/F2 — BINDING, plan-3-1-review.md
+  // relayé au brief Task 7) : sur une REPRISE (`parked`→`transmitted`), le
+  // second appel à `insertTransmission` (Task 6, `CdvTransmissionService.
+  // transmitStatus`) est un NO-OP côté colonnes — `onConflictDoNothing`
+  // recharge la ligne existante SANS jamais réécrire `xml`/
+  // `recipientMatricule` avec les valeurs fraîchement générées/résolues au
+  // moment de la reprise. Sans ce paramètre, une reprise réussie laisserait
+  // `xml=NULL` (perte de fidélité d'audit — le XML réellement transmis au
+  // port ne serait jamais persisté) et `recipient_matricule=NULL` (perte du
+  // destinataire résolu) alors même que la transmission est bien
+  // `transmitted`. `extra` est TOUJOURS fourni par l'appelant (Task 7) —
+  // `undefined` par champ (jamais `null`) signifie « ne pas toucher cette
+  // colonne » (cible `ppf` : `recipientMatricule` reste `undefined`, la
+  // colonne garde sa valeur `NULL` d'origine, JAMAIS écrasée à tort).
   async markTransmitted(
     tenantId: string,
     id: string,
     trackingRef: string,
+    extra?: { xml?: string; recipientMatricule?: string },
   ): Promise<void> {
     await this.tenant.run(tenantId, async (db) => {
       const candidates: CdvTransmissionStatus[] = ['prepared', 'parked']
@@ -164,7 +180,15 @@ export class CdvTransmissionRepository {
         assertTransition(from, 'transmitted')
         const updated = await db
           .update(cdvTransmissions)
-          .set({ status: 'transmitted', trackingRef, updatedAt: new Date() })
+          .set({
+            status: 'transmitted',
+            trackingRef,
+            updatedAt: new Date(),
+            ...(extra?.xml !== undefined ? { xml: extra.xml } : {}),
+            ...(extra?.recipientMatricule !== undefined
+              ? { recipientMatricule: extra.recipientMatricule }
+              : {}),
+          })
           .where(
             and(eq(cdvTransmissions.id, id), eq(cdvTransmissions.status, from)),
           )

@@ -18,12 +18,20 @@ function build() {
     sweepSync: vi.fn().mockResolvedValue(5),
     sweepStuckDrafts: vi.fn().mockResolvedValue(6),
   }
+  const cdvSweep = {
+    sweep: vi.fn().mockResolvedValue(7),
+  }
+  const cdvStuckRetry = {
+    retryParked: vi.fn().mockResolvedValue(8),
+  }
   const processor = new MaintenanceProcessor(
     reconciliation as never,
     sessionMaintenance as never,
     archiveRetry as never,
     ereportingSweep as never,
     annuaireSweep as never,
+    cdvSweep as never,
+    cdvStuckRetry as never,
   )
   return {
     processor,
@@ -32,6 +40,8 @@ function build() {
     archiveRetry,
     ereportingSweep,
     annuaireSweep,
+    cdvSweep,
+    cdvStuckRetry,
   }
 }
 
@@ -112,6 +122,25 @@ describe('MaintenanceProcessor.process', () => {
     expect(annuaireSweep.sweepSync).not.toHaveBeenCalled()
   })
 
+  it('dispatches cdv-transmission-sweep jobs to the cdv sweep service (Task 7)', async () => {
+    const { processor, cdvSweep, cdvStuckRetry, ereportingSweep } = build()
+
+    await processor.process({ name: 'cdv-transmission-sweep' } as never)
+
+    expect(cdvSweep.sweep).toHaveBeenCalledTimes(1)
+    expect(cdvStuckRetry.retryParked).not.toHaveBeenCalled()
+    expect(ereportingSweep.sweep).not.toHaveBeenCalled()
+  })
+
+  it('dispatches cdv-stuck-retry jobs to the cdv stuck-retry service (Task 7)', async () => {
+    const { processor, cdvSweep, cdvStuckRetry } = build()
+
+    await processor.process({ name: 'cdv-stuck-retry' } as never)
+
+    expect(cdvStuckRetry.retryParked).toHaveBeenCalledTimes(1)
+    expect(cdvSweep.sweep).not.toHaveBeenCalled()
+  })
+
   it('ignores a genuinely unknown job name without throwing (forward-compat)', async () => {
     const {
       processor,
@@ -120,6 +149,8 @@ describe('MaintenanceProcessor.process', () => {
       archiveRetry,
       ereportingSweep,
       annuaireSweep,
+      cdvSweep,
+      cdvStuckRetry,
     } = build()
 
     await expect(
@@ -131,5 +162,7 @@ describe('MaintenanceProcessor.process', () => {
     expect(ereportingSweep.sweep).not.toHaveBeenCalled()
     expect(annuaireSweep.sweepSync).not.toHaveBeenCalled()
     expect(annuaireSweep.sweepStuckDrafts).not.toHaveBeenCalled()
+    expect(cdvSweep.sweep).not.toHaveBeenCalled()
+    expect(cdvStuckRetry.retryParked).not.toHaveBeenCalled()
   })
 })

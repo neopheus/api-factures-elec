@@ -4,11 +4,13 @@ import { ConfigService } from '@nestjs/config'
 import type { ConnectionOptions } from 'bullmq'
 import type { EnvConfig } from '../config/env.js'
 import { annuaireSyncJobOptions } from '../queue/annuaire-sync.job-options.js'
+import { cdvTransmissionJobOptions } from '../queue/cdv-transmission.job-options.js'
 import { ereportingGenerationJobOptions } from '../queue/ereporting-generation.job-options.js'
 import { invoiceGenerationJobOptions } from '../queue/invoice-generation.job-options.js'
 import { InvoiceGenerationQueue } from '../queue/invoice-generation.queue.js'
 import {
   ANNUAIRE_SYNC_QUEUE,
+  CDV_TRANSMISSION_QUEUE,
   EREPORTING_GENERATION_QUEUE,
   INVOICE_GENERATION_QUEUE,
   MAINTENANCE_QUEUE,
@@ -80,6 +82,19 @@ import {
       inject: [ConfigService],
       useFactory: (config: ConfigService<EnvConfig, true>) => ({
         defaultJobOptions: annuaireSyncJobOptions(config),
+      }),
+    }),
+    // `cdv-transmission` (Task 7) : même motif que `ereporting-generation`/
+    // `annuaire-sync` ci-dessus — enregistrée ICI car c'est le PRODUCTEUR
+    // (CdvTransmissionSweepService, `@InjectQueue`) ET le CONSOMMATEUR
+    // (CdvTransmissionProcessor, `@Processor`), tous deux dans CE process
+    // (worker). `cdvTransmissionJobOptions` fournit attempts/backoff/
+    // rétention (SEULE source de vérité).
+    BullModule.registerQueueAsync({
+      name: CDV_TRANSMISSION_QUEUE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<EnvConfig, true>) => ({
+        defaultJobOptions: cdvTransmissionJobOptions(config),
       }),
     }),
   ],
