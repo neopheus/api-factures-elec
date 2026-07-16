@@ -190,6 +190,22 @@ describe('annuaire codes-routage — énumération de gestion (e2e)', () => {
         'status',
       ])
     }
+    // VALEURS épinglées en littéral sur UN code complet (revue T3, NIT-1) :
+    // un swap de colonnes dans la projection (ex. plateforme↔siret,
+    // dateDebut↔dateFin) passerait les assertions de clés/longueur — seule
+    // l'égalité d'objet entier l'attrape.
+    expect(
+      res.body.codes.find(
+        (c: { routageId: string }) => c.routageId === 'RTG-PUBLISHED',
+      ),
+    ).toEqual({
+      routageId: 'RTG-PUBLISHED',
+      siret: null,
+      plateforme: '0001',
+      status: 'published',
+      dateDebut: '20260102',
+      dateFin: null,
+    })
   })
 
   // ── énumération : tableau vide, PAS 404 ──────────────────────────────────
