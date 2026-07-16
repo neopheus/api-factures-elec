@@ -1,5 +1,20 @@
 import { z } from 'zod'
 
+// Regex LOCALES au domaine paiements (Task 5, endpoint dual-auth) :
+// - `DATE_RE` (AAAAMMJJ) existe déjà dans `annuaire/nomenclature.ts`, mais y
+//   est SPÉCIFIQUE à ce domaine étranger — REDÉFINIE ici plutôt qu'importée
+//   (pas d'import cross-domaine annuaire→paiements, décision contrôleur T5).
+// - `DECIMAL_RE` (taxPercent, jusqu'à 4 décimales) est le miroir exact de
+//   `decimal4` (invoice-core, `vatBreakdown[].rate`/`vatRate`) : même forme
+//   que le taux facturé auquel un `taxPercent` posté doit se comparer.
+// - `AMOUNT_RE` (amount, monnaie standard 2 décimales) est le miroir exact
+//   de `amount2` (invoice-core) — comparable aux totaux 2-décimales de la
+//   facture (contrôle d'intégrité). Le format XSD cible (19.6) est l'affaire
+//   de l'émetteur Flux 10 (Task 7), pas de cette frontière HTTP.
+export const DATE_RE = /^\d{4}(0[1-9]|1[012])(0[1-9]|[12][0-9]|3[01])$/
+export const DECIMAL_RE = /^\d+(\.\d{1,4})?$/
+export const AMOUNT_RE = /^\d+\.\d{2}$/
+
 // Sous-total d'un encaissement (TG-36/TG-39 : taxPercent=TT-93/97,
 // amount=TT-95/99 — MONTANT 19.6 au XSD, stocké `text` comme tous les
 // montants Flux 10, D5). Forme STRUCTURELLE minimale (chaînes non vides) :

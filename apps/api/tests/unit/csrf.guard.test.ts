@@ -13,11 +13,13 @@ function mockContext(opts: {
   header?: string
   authUser?: AuthenticatedUser
   authAdmin?: AuthenticatedAdmin
+  apiKeyId?: string
 }): ExecutionContext {
   const req = {
     header: (name: string) => (name === CSRF_HEADER ? opts.header : undefined),
     authUser: opts.authUser,
     authAdmin: opts.authAdmin,
+    apiKeyId: opts.apiKeyId,
   } as unknown as SessionRequest
   return {
     switchToHttp: () => ({ getRequest: () => req }),
@@ -64,6 +66,12 @@ describe('CsrfGuard', () => {
       csrfHash: hashToken('admin-csrf-token'),
     }
     const ctx = mockContext({ header: 'admin-csrf-token', authAdmin: admin })
+
+    expect(new CsrfGuard().canActivate(ctx)).toBe(true)
+  })
+
+  it('bypasses the check for a machine call (apiKeyId set, dual-auth TenantAuthGuard) even without a CSRF header', () => {
+    const ctx = mockContext({ apiKeyId: 'key-1' })
 
     expect(new CsrfGuard().canActivate(ctx)).toBe(true)
   })

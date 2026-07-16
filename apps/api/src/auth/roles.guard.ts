@@ -28,9 +28,16 @@ export class RolesGuard implements CanActivate {
       [ctx.getHandler(), ctx.getClass()],
     )
     if (!required || required.length === 0) return true
+    const req = ctx.switchToHttp().getRequest<SessionRequest>()
+    // Dual-auth (TenantAuthGuard, Task 5 paiements) : un appel machine (clé
+    // API) n'a pas de rôle utilisateur applicatif — bypass explicite,
+    // symétrique à CsrfGuard (la clé API porte déjà le tenant ; aucune route
+    // existante ne combinait TenantAuthGuard et ce guard avant Task 5, ce
+    // bypass ne change donc le comportement d'aucune route actuelle).
+    if (req.apiKeyId) return true
     // authUser absent (ex : cookie admin plateforme sur une route tenant) →
     // refusé, jamais confondu avec "rôle autorisé".
-    const role = ctx.switchToHttp().getRequest<SessionRequest>().authUser?.role
+    const role = req.authUser?.role
     if (!role || !required.includes(role)) {
       throw new ForbiddenException(
         problem(403, ProblemType.forbidden, 'Forbidden', {

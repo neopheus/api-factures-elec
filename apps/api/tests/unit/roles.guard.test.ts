@@ -13,10 +13,12 @@ import { ROLES_KEY, Roles, RolesGuard } from '../../src/auth/roles.guard.js'
 function mockContext(opts: {
   authUser?: AuthenticatedUser
   authAdmin?: AuthenticatedAdmin
+  apiKeyId?: string
 }): ExecutionContext {
   const req = {
     authUser: opts.authUser,
     authAdmin: opts.authAdmin,
+    apiKeyId: opts.apiKeyId,
   } as unknown as SessionRequest
   return {
     switchToHttp: () => ({ getRequest: () => req }),
@@ -88,6 +90,13 @@ describe('RolesGuard', () => {
   it('allows a user whose role is in the required list', () => {
     const guard = new RolesGuard(reflectorReturning(['owner', 'admin']))
     const ctx = mockContext({ authUser: owner })
+
+    expect(guard.canActivate(ctx)).toBe(true)
+  })
+
+  it('bypasses the role check for a machine call (apiKeyId set, dual-auth TenantAuthGuard)', () => {
+    const guard = new RolesGuard(reflectorReturning(['owner', 'admin']))
+    const ctx = mockContext({ apiKeyId: 'key-1' })
 
     expect(guard.canActivate(ctx)).toBe(true)
   })
