@@ -2,15 +2,23 @@ import type { VatRegime } from './nomenclature.js'
 
 // ────────────────────────────────────────────────────────────────────────
 // Cadence de transmission par régime TVA (D4/D11, mapping data-driven
-// ci-dessous), alignée sur le Tableau 13 VERBATIM (§3.7.7, spec externes
-// v3.2 — cf. .superpowers/sdd/research-2-3-questions.md, colonne « Délai TX
-// Données Facture/Transaction ») :
+// ci-dessous), alignée sur le Tableau 13 PRIMAIRE (§3.7.7, spec externes
+// v3.2 p.68, extraction -layout cellule par cellule — la transcription du
+// dossier research-2-3-questions.md comportait des DÉSALIGNEMENTS de
+// colonnes, corrigés par la revue du plan 3.2 puis vérifiés contre le PDF
+// par le contrôleur). Colonne opérationnelle = « Date et heure limites de
+// transmission à l'administration fiscale par la plateforme agréée »
+// (8h00). MOTIF CONSTANT du tableau : échéance PA = échéance de dépôt du
+// DÉCLARANT + 1 jour (transmettre avant l'échéance du déclarant émettrait
+// des données INCOMPLÈTES).
 //   - reel_normal_mensuel      : décadaire (01-10 / 11-20 / 21-fin) ;
 //     échéances « le 21 du mois / le 1er du mois suivant / le 11 du mois
 //     suivant, à 8h00 ».
-//   - reel_normal_trimestriel  : mensuelle (mois civil) ; échéance « le 1er
-//     du mois suivant la période, à 8h00 » (la composante « Trimestrielle »
-//     du Tableau 13 concerne les données de PAIEMENT — TB-3 différé, D10).
+//   - reel_normal_trimestriel  : mensuelle (mois civil) ; échéance « le 11
+//     du mois suivant la période, à 8h00 » (HOTFIX post-3.1 : le code
+//     shippé en 2.3 disait « le 1er » d'après la transcription fausse — le
+//     déclarant a jusqu'au 10 pour déposer, transmettre le 1er aurait été
+//     INCOMPLET).
 //   - simplifie                : mensuelle (mois civil) ; échéance « le 1er
 //     du 2E mois suivant la période, à 8h00 » (revue T7 : mois+2, PAS mois+1).
 //   - franchise                : bimestrielle (bimestres civils : jan-fév,
@@ -31,18 +39,24 @@ export type DuePeriod = {
 
 export type PeriodCadence =
   | { kind: 'decade' }
-  // deadlineMonthOffset : 1 = « le 1er du mois suivant » (trimestriel),
-  // 2 = « le 1er du 2e mois suivant » (simplifié) — Tableau 13 verbatim.
-  | { kind: 'month'; deadlineMonthOffset: 1 | 2 }
+  // deadlineMonthOffset : mois de l'échéance (M+1 trimestriel, M+2 simplifié) ;
+  // deadlineDay : JOUR de l'échéance dans ce mois — 11 pour le trimestriel
+  // (« le 11 du mois suivant », Tableau 13 primaire p.68), 1 pour le
+  // simplifié (« le 1er du 2e mois suivant »).
+  | { kind: 'month'; deadlineMonthOffset: 1 | 2; deadlineDay: 1 | 11 }
   | { kind: 'bimester' }
 
 // D4, data-driven : AUCUNE branche de type switch/if sur le RÉGIME dans la
 // logique de calcul — seule cette table associe un régime à sa cadence (et
-// à son décalage d'échéance, revue T7).
+// à son échéance mois+jour, revue T7 + hotfix Tableau 13 primaire).
 export const CADENCE_BY_REGIME: Record<VatRegime, PeriodCadence> = {
   reel_normal_mensuel: { kind: 'decade' },
-  reel_normal_trimestriel: { kind: 'month', deadlineMonthOffset: 1 },
-  simplifie: { kind: 'month', deadlineMonthOffset: 2 },
+  reel_normal_trimestriel: {
+    kind: 'month',
+    deadlineMonthOffset: 1,
+    deadlineDay: 11,
+  },
+  simplifie: { kind: 'month', deadlineMonthOffset: 2, deadlineDay: 1 },
   franchise: { kind: 'bimester' },
 }
 
@@ -119,14 +133,15 @@ function decadeCandidates(
   return out
 }
 
-// Mois civil (simplifié : mois+2 ; réel normal trimestriel : mois+1 — D4,
-// Tableau 13 verbatim, revue T7) : échéance le 1er du mois M +
-// `deadlineMonthOffset` à 08:00 UTC. Fenêtre : 6 mois en arrière (couvre
-// MAX_DUE_PERIODS quel que soit l'offset).
+// Mois civil (simplifié : 1er de M+2 ; réel normal trimestriel : 11 de M+1
+// — Tableau 13 PRIMAIRE p.68, hotfix post-3.1) : échéance le jour
+// `deadlineDay` du mois M + `deadlineMonthOffset`, à 08:00 UTC. Fenêtre :
+// 6 mois en arrière (couvre MAX_DUE_PERIODS quel que soit l'offset).
 function monthCandidates(
   refYear: number,
   refMonth0: number,
   deadlineMonthOffset: number,
+  deadlineDay: number,
 ): CandidatePeriod[] {
   const out: CandidatePeriod[] = []
   for (let offset = -5; offset <= 0; offset++) {
@@ -135,7 +150,7 @@ function monthCandidates(
     out.push({
       periodStart: fmt(y, m0, 1),
       periodEnd: fmt(y, m0, daysInMonthOf(y, m0)),
-      deadline: new Date(Date.UTC(due.y, due.m0, 1, 8)),
+      deadline: new Date(Date.UTC(due.y, due.m0, deadlineDay, 8)),
     })
   }
   return out
@@ -186,7 +201,12 @@ export function computeDuePeriods(
     cadence.kind === 'decade'
       ? decadeCandidates(refYear, refMonth0)
       : cadence.kind === 'month'
-        ? monthCandidates(refYear, refMonth0, cadence.deadlineMonthOffset)
+        ? monthCandidates(
+            refYear,
+            refMonth0,
+            cadence.deadlineMonthOffset,
+            cadence.deadlineDay,
+          )
         : bimesterCandidates(refYear, refMonth0)
   const refTime = referenceDate.getTime()
   return candidates

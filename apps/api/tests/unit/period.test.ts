@@ -107,22 +107,42 @@ describe('computeDuePeriods', () => {
     })
   })
 
-  it('réel normal trimestriel : mensuel à échéance mois + 1 (DISTINCT de simplifié — Tableau 13)', () => {
+  it('réel normal trimestriel : mensuel à échéance LE 11 du mois + 1 (Tableau 13 PRIMAIRE p.68, hotfix)', () => {
+    // HOTFIX post-3.1 : le déclarant a jusqu'au 10 du mois suivant pour
+    // déposer ; la PA transmet le 11 à 8h00 (échéance déclarant + 1 jour,
+    // motif constant du tableau). L'ancien « 1er du mois suivant » (issu
+    // d'une transcription désalignée du dossier) aurait transmis des
+    // données INCOMPLÈTES.
     expect(CADENCE_BY_REGIME.reel_normal_trimestriel).toEqual({
       kind: 'month',
       deadlineMonthOffset: 1,
+      deadlineDay: 11,
     })
     expect(CADENCE_BY_REGIME.simplifie).toEqual({
       kind: 'month',
       deadlineMonthOffset: 2,
+      deadlineDay: 1,
     })
-    // Au 01/11 09:00, OCTOBRE est échu pour le trimestriel (mois+1)…
-    const due = computeDuePeriods(
+    // Au 01/11 09:00, OCTOBRE n'est PAS encore échu (échéance le 11/11 à 08:00)…
+    const dueEarly = computeDuePeriods(
       'reel_normal_trimestriel',
       new Date(Date.UTC(2026, 10, 1, 9)),
     )
+    expect(dueEarly).not.toContainEqual({
+      periodStart: '20261001',
+      periodEnd: '20261031',
+    })
+    expect(dueEarly[0]).toEqual({
+      periodStart: '20260901',
+      periodEnd: '20260930',
+    })
+    // …au 11/11 08:00 pile, octobre EST échu.
+    const due = computeDuePeriods(
+      'reel_normal_trimestriel',
+      new Date(Date.UTC(2026, 10, 11, 8)),
+    )
     expect(due[0]).toEqual({ periodStart: '20261001', periodEnd: '20261031' })
-    // …alors que pour le simplifié (mois+2) le plus récent échu est septembre.
+    // Pour le simplifié (1er de mois+2) le plus récent échu au 01/11 09:00 est septembre.
     const dueSimplifie = computeDuePeriods(
       'simplifie',
       new Date(Date.UTC(2026, 10, 1, 9)),
