@@ -385,6 +385,46 @@ describe('EreportingGenerationService.generate — payments (Task 8, plan 3.2)',
     expect(port.transmit).not.toHaveBeenCalled()
   })
 
+  it("maille déclarant (revue T8, MAJOR-1) : l'encaissement d'une facture dont le siren vendeur ≠ siren du job est exclu -> à blanc (jamais transmis sous un autre déclarant)", async () => {
+    // Même tenant, AUTRE déclarant : la facture liée appartient au siren
+    // 999999999, le job porte le siren 111111111 — miroir du filtre
+    // eq(partySiren, siren) d'invoicesForPeriod (chemin transactions).
+    const otherDeclarantInvoice = buildInvoice({
+      number: 'FA-PAY-OTHER',
+      issueDate: '2026-09-05',
+      typeCode: '380',
+      currency: 'EUR',
+      businessProcessType: 'S1',
+      seller: {
+        name: 'Autre déclarant',
+        siren: '999999999',
+        address: { countryCode: 'FR' },
+      },
+      buyer: { name: 'A', address: { countryCode: 'FR' } },
+      lines: [
+        {
+          id: '1',
+          name: 'prestation',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '1000.00',
+          vatCategory: 'S',
+          vatRate: '20.00',
+          nature: 'services',
+        },
+      ],
+    } as never)
+    const { service, repo, port } = build(
+      {},
+      {},
+      {},
+      { loadCanonical: vi.fn().mockResolvedValue(otherDeclarantInvoice) },
+    )
+    await service.generate(paymentsJob)
+    expect(repo.insertTransmission).not.toHaveBeenCalled()
+    expect(port.transmit).not.toHaveBeenCalled()
+  })
+
   it('XML valide, création fraîche : loader scopé tenant, Report{payments} XOR transactions, insertTransmission -> transmit -> markTransmitted', async () => {
     const { service, repo, port, invoicesRepo } = build()
     await service.generate(paymentsJob)

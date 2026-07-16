@@ -127,6 +127,40 @@ describe('aggregatePayments — TB-3 (10.2 per-facture / 10.4 agrégé, services
     ])
   })
 
+  it("applique la maille déclarant via filterInvoice : l'encaissement d'une facture d'un AUTRE déclarant est exclu SILENCIEUSEMENT (revue T8, MAJOR-1)", async () => {
+    // Tenant à 2 déclarants : la facture du siren 111111111 ne doit compter
+    // QUE pour le rapport du déclarant 111111111 — jamais pour l'autre.
+    const invoiceOfDeclarantA = inv({
+      number: 'FAC-DECL-A',
+      seller: {
+        name: 'V',
+        siren: '111111111',
+        address: { countryCode: 'FR' },
+      },
+    })
+    const row = paymentRow({ invoiceId: 'inv-A' })
+    const forDeclarantB = await aggregatePayments([row], {
+      ...opts,
+      loadInvoice: loaderFor({ 'inv-A': invoiceOfDeclarantA }),
+      filterInvoice: (invoice) => invoice.seller.siren === '999999999',
+    })
+    // Rien d'e-reportable pour B → rapport nul (à blanc), pas de fuite
+    // de l'encaissement de A.
+    expect(forDeclarantB).toBeNull()
+
+    const forDeclarantA = await aggregatePayments([row], {
+      ...opts,
+      loadInvoice: loaderFor({ 'inv-A': invoiceOfDeclarantA }),
+      filterInvoice: (invoice) => invoice.seller.siren === '111111111',
+    })
+    expect(forDeclarantA?.transactions).toEqual([
+      {
+        paymentDate: '20260915',
+        subtotals: [{ taxPercent: '20.00', amount: '200.00', currency: 'EUR' }],
+      },
+    ])
+  })
+
   it("agrège l'encaissement d'un export B2C (vendeur FR, particulier étranger) dans le 10.4 domestique et exerce la branche d'audit (revue T7, LOW/nit)", async () => {
     // Même repli que côté transactions (D4/T3) : le particulier ÉTRANGER est
     // classé 10.3 → agrégé en 10.4, tracé par le compteur/warn d'audit

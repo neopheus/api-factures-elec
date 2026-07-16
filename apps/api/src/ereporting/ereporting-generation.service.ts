@@ -216,10 +216,14 @@ export class EreportingGenerationService {
   }
 
   // Branche 'payments' (TB-3, Task 8 plan 3.2, D7) : encaissements de la
-  // période (RLS, PAS filtrés par siren/role — motif PaymentsRepository.
-  // listPaymentsForPeriod, Task 4) -> aggregatePayments (ASYNC : charge la
-  // facture liée PAR encaissement, loader scopé tenant, cf. task-7-report.md
-  // § Points d'attention Task 8) -> Flux10Report{payments} XOR transactions.
+  // période (RLS — `listPaymentsForPeriod` filtre par tenant+dates seulement,
+  // la MAILLE DÉCLARANT est appliquée en aval via `filterInvoice` : revue T8
+  // MAJOR-1, miroir du `eq(partySiren, siren)` d'invoicesForPeriod — SE →
+  // siren vendeur, BY → siren acheteur de la facture liée ; sans elle, un
+  // tenant multi-déclarants transmettrait les mêmes encaissements sous CHAQUE
+  // déclarant dû) -> aggregatePayments (ASYNC : charge la facture liée PAR
+  // encaissement, loader scopé tenant, cf. task-7-report.md § Points
+  // d'attention Task 8) -> Flux10Report{payments} XOR transactions.
   //
   // PAS de conversion `periodDateToIso` ici (à la différence de
   // generateTransactions) : `payments.payment_date` est stocké AAAAMMJJ
@@ -238,6 +242,9 @@ export class EreportingGenerationService {
       periodEnd: job.periodEnd,
       loadInvoice: (invoiceId) =>
         this.invoicesRepo.loadCanonical(job.tenantId, invoiceId),
+      filterInvoice: (invoice) =>
+        (job.role === 'SE' ? invoice.seller.siren : invoice.buyer.siren) ===
+        job.siren,
     })
     if (!paymentsReport) {
       // À blanc (D6, Step 2 du brief) : ZÉRO écriture, ZÉRO appel port —

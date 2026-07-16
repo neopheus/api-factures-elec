@@ -134,6 +134,15 @@ export interface PaymentAggregateOptions {
   // traité défensivement comme un encaissement différé (log + skip), jamais
   // un throw (motif `EreportingGenerationService` « déclarant disparu »).
   loadInvoice: (invoiceId: string) => Promise<Invoice | null>
+  // MAILLE DÉCLARANT (revue T8, MAJOR-1) : `payments` ne porte AUCUNE colonne
+  // siren/role (D5 — la facture liée porte tout) ; sans ce filtre, un tenant
+  // à PLUSIEURS déclarants transmettrait les MÊMES encaissements sous CHAQUE
+  // déclarant dû à la même période (sur-déclaration N-fold). Miroir du filtre
+  // SQL `eq(partySiren, siren)` d'`invoicesForPeriod` (chemin transactions),
+  // appliqué ici EN AVAL du load (la facture est déjà chargée par paiement).
+  // `false` = l'encaissement appartient à un AUTRE déclarant du tenant —
+  // skip SILENCIEUX (hors périmètre du rapport courant, pas une anomalie).
+  filterInvoice?: (invoice: Invoice) => boolean
 }
 
 // Dérive un PaymentsReport (TB-3) des encaissements d'une période. Pour
@@ -166,6 +175,8 @@ export async function aggregatePayments(
       )
       continue
     }
+
+    if (opts.filterInvoice && !opts.filterInvoice(invoice)) continue
 
     const operationClass = classifyEreportingOperation(invoice)
     if (operationClass === 'out') continue

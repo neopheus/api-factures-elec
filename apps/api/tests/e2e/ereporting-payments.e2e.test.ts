@@ -206,6 +206,74 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
     }
   })
 
+  it('maille déclarant (revue T8, MAJOR-1) : tenant à DEUX déclarants — les encaissements ne sont transmis QUE sous le déclarant de la facture liée, jamais dupliqués', async () => {
+    const tenantId = await makeTenant('EREPAY-MULTI')
+    const sirenA = '444444444'
+    const sirenB = '555555555'
+    const declarantA = await makeDeclarant(tenantId, sirenA)
+    const declarantB = await makeDeclarant(tenantId, sirenB)
+    // UNE facture services du déclarant A, UN encaissement.
+    const { id: invoiceId } = await invoicesRepo.insertReceived(
+      tenantId,
+      buildInvoice(
+        servicesInvoice('FA-PAY-MULTI-A', sirenA, '2026-09-05') as never,
+      ),
+    )
+    await paymentsRepo.insertPayment(tenantId, {
+      invoiceId,
+      paymentDate: '20260905',
+      currency: 'EUR',
+      reference: 'REF-MULTI-1',
+      subtotals: [{ taxPercent: '20.00', amount: '600.00' }],
+    })
+
+    const worker = await createTestWorker(db.appUrl, redis)
+    const queue = new Queue<EreportingGenerationJob>(
+      EREPORTING_GENERATION_QUEUE,
+      { connection: { host: redis.host, port: redis.port } },
+    )
+    try {
+      // Les DEUX déclarants sont dus à la même période (jobs distincts,
+      // comme le sweep les enfilerait).
+      await queue.add(
+        EREPORTING_GENERATE_JOB,
+        jobPayload({ tenantId, declarantId: declarantA, siren: sirenA }),
+      )
+      const jobB = await queue.add(
+        EREPORTING_GENERATE_JOB,
+        jobPayload({ tenantId, declarantId: declarantB, siren: sirenB }),
+      )
+
+      await waitFor(async () => {
+        const r = await ownerPool.query(
+          "SELECT status FROM ereporting_transmissions WHERE declarant_id = $1 AND flux_kind = 'payments'",
+          [declarantA],
+        )
+        return r.rows[0]?.status === 'transmitted'
+      })
+      await waitFor(async () => (await jobB.getState()) === 'completed')
+
+      // A : transmis avec l'encaissement (oracle main : 600.00 → 19.6).
+      const rowsA = await ownerPool.query(
+        "SELECT xml FROM ereporting_transmissions WHERE declarant_id = $1 AND flux_kind = 'payments'",
+        [declarantA],
+      )
+      expect(rowsA.rows).toHaveLength(1)
+      expect(rowsA.rows[0].xml).toContain('<Amount>600.000000</Amount>')
+
+      // B : À BLANC — AUCUNE transmission (sans la maille déclarant, le même
+      // encaissement aurait été dupliqué ici : sur-déclaration N-fold).
+      const rowsB = await ownerPool.query(
+        "SELECT count(*)::int AS n FROM ereporting_transmissions WHERE declarant_id = $1 AND flux_kind = 'payments'",
+        [declarantB],
+      )
+      expect(rowsB.rows[0].n).toBe(0)
+    } finally {
+      await queue.close()
+      await worker.close()
+    }
+  })
+
   it("n'écrit rien si aucun encaissement sur la période (transmission à blanc optionnelle, D6)", async () => {
     const tenantId = await makeTenant('EREPAY-BLANK')
     const siren = '222222222'
