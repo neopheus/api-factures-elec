@@ -8,10 +8,10 @@ import {
 import type { Request } from 'express'
 import { ProblemType, problem } from '../common/problem.js'
 import { ApiKeyService } from './api-key.service.js'
+import type { WithApiKeyId } from './auth.types.js'
 
-export interface TenantRequest extends Request {
+export interface TenantRequest extends Request, WithApiKeyId {
   tenantId?: string
-  apiKeyId?: string
 }
 
 // RFC 7235 §2.1 : le nom du schéma d'authentification est un `token`
