@@ -36,22 +36,59 @@ describe('classifyEreportingOperation (amendement A1)', () => {
     expect(classifyEreportingOperation(inv({}))).toBe('10.3')
   })
 
-  it("retourne '10.1' pour une opération transfrontalière (acheteur hors FR)", () => {
-    const crossBorderBuyer = inv({
+  // Task 3 (D4, revue plan-3-2-review.md §Task 3) : réordonnancement du
+  // classifieur — le statut d'assujetti de l'ACHETEUR est désormais vérifié
+  // AVANT le critère transfrontalier ("non-assujetti PRIME la règle pays").
+  // Résout le misrouting F2/2.3-T3 : un export B2C (vendeur FR, particulier
+  // étranger) tombait à tort en '10.1' (jamais émis en 2.3/2.4 — mais Task 3
+  // ACTIVE l'émission 10.1 ET l'agrégation 10.3, donc la mauvaise classe
+  // aurait désormais une conséquence réelle côté DGFiP, cf. bannière
+  // `classifyEreportingOperation` et la revue §A-T3-1).
+  it('classe un EXPORT B2C (vendeur FR, particulier étranger sans SIREN/TVA) en 10.3, PAS 10.1 (résolution misrouting F2/2.3-T3, D4)', () => {
+    const exportB2C = inv({
       buyer: { name: 'A', address: { countryCode: 'DE' } },
     })
-    expect(classifyEreportingOperation(crossBorderBuyer)).toBe('10.1')
+    expect(classifyEreportingOperation(exportB2C)).toBe('10.3')
   })
 
-  it("retourne '10.1' pour une opération transfrontalière (vendeur hors FR)", () => {
-    const crossBorderSeller = inv({
+  it("retourne '10.3' pour un acheteur FR non-assujetti même si le vendeur est hors FR (le statut de l'acheteur PRIME sur le pays, D4)", () => {
+    const foreignSellerNonTaxableBuyer = inv({
       seller: {
         name: 'V',
         siren: '123456789',
         address: { countryCode: 'BE' },
       },
     })
-    expect(classifyEreportingOperation(crossBorderSeller)).toBe('10.1')
+    expect(classifyEreportingOperation(foreignSellerNonTaxableBuyer)).toBe(
+      '10.3',
+    )
+  })
+
+  it('classe un assujetti étranger (n° TVA) en 10.1 (B2B international, cas nominal 10.1 activé Task 3)', () => {
+    const b2biTaxableBuyer = inv({
+      buyer: {
+        name: 'B',
+        vatId: 'DE123456789',
+        address: { countryCode: 'DE' },
+      },
+    })
+    expect(classifyEreportingOperation(b2biTaxableBuyer)).toBe('10.1')
+  })
+
+  it("retourne '10.1' pour un acheteur FR ASSUJETTI achetant à un vendeur hors FR (transfrontalier, acheteur taxable — clause « ou vendeur étranger » de la table de vérité D4)", () => {
+    const foreignSellerTaxableBuyer = inv({
+      seller: {
+        name: 'V',
+        siren: '123456789',
+        address: { countryCode: 'BE' },
+      },
+      buyer: {
+        name: 'B',
+        siren: '987654321',
+        address: { countryCode: 'FR' },
+      },
+    })
+    expect(classifyEreportingOperation(foreignSellerTaxableBuyer)).toBe('10.1')
   })
 
   it("retourne 'out' pour un acheteur FR assujetti (SIREN présent, B2B domestique)", () => {
@@ -387,42 +424,251 @@ describe('aggregateTransactions (B2C 10.3)', () => {
     expect(a.taxTotal).toBe('200.00')
   })
 
-  it("EXCLUT une facture '10.1' (transfrontalière) de l'agrégat 10.3", () => {
+  // Task 3 : le '10.1' (assujetti étranger, PAS un export B2C — cf. D4) est
+  // désormais RÉELLEMENT EXCLU de l'agrégat 10.3 mais ÉMIS par facture
+  // (invoices[], TG-8) — remplace l'ancien test "EXCLUT ... (transfrontalière)"
+  // dont le vecteur (acheteur DE sans SIREN/TVA) est RECLASSÉ '10.3' par D4
+  // (cf. test export-B2C ci-dessus) : ce n'était PAS un cas 10.1 valide.
+  it("classe un assujetti étranger (n° TVA) en 10.1, l'ÉMET par facture (invoices[]) et l'EXCLUT de l'agrégat 10.3", () => {
     const b2c = inv({})
-    const crossBorder = inv({
+    const b2bi = inv({
       number: 'FA-10-1',
-      buyer: { name: 'A', address: { countryCode: 'DE' } },
+      buyer: {
+        name: 'A',
+        vatId: 'DE123456789',
+        address: { countryCode: 'DE' },
+      },
     })
-    const report = aggregateTransactions([b2c, crossBorder], {
+    const report = aggregateTransactions([b2c, b2bi], {
       periodStart: '20260901',
       periodEnd: '20260910',
     })
     expect(report).not.toBeNull()
     expect(report?.aggregated).toHaveLength(1)
     const a = report!.aggregated[0]!
+    // Seule la facture 10.3 (b2c) est comptée : 1000.00 base, pas 2000.00.
     expect(a.taxExclusiveAmount).toBe('1000.00')
     expect(a.taxTotal).toBe('200.00')
-    expect(report?.invoices).toEqual([]) // 10.1 non émis dans ce plan (différé)
+    // Task 3 (activation TG-8) : le 10.1 est désormais ÉMIS, PAS différé.
+    expect(report?.invoices).toHaveLength(1)
+    expect(report!.invoices[0]).toMatchObject({
+      id: 'FA-10-1',
+      typeCode: '380',
+      businessProcessId: 'B1',
+      businessProcessTypeId: 'e-reporting',
+    })
   })
 
-  it("retourne null quand SEULES des factures 'out'/10.1 sont fournies (aucune 10.3)", () => {
-    const b2bDomestic = inv({
+  it('mappe BT→TT conformément à Annexe 6 (TT-19/20/21/22/28/29/33/33-1/35/52 + TG-23, revue §A-T3-2)', () => {
+    const b2bi = inv({
+      number: 'FAC-INTL-1',
+      issueDate: '2026-09-06',
+      typeCode: '381',
+      currency: 'USD',
+      businessProcessType: 'S1',
+      seller: {
+        name: 'V',
+        siren: '111222333',
+        address: { countryCode: 'FR' },
+      },
+      buyer: {
+        name: 'B',
+        vatId: 'DE987654321',
+        address: { countryCode: 'DE' },
+      },
+      lines: [
+        {
+          id: '1',
+          name: 'x',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '500.00',
+          vatCategory: 'S',
+          vatRate: '10.00',
+        },
+      ],
+    })
+    const report = aggregateTransactions([b2bi], {
+      periodStart: '20260901',
+      periodEnd: '20260910',
+    })
+    expect(report?.invoices).toEqual([
+      {
+        id: 'FAC-INTL-1', // TT-19 ← BT-1
+        issueDate: '20260906', // TT-20 ← BT-2 (AAAAMMJJ)
+        typeCode: '381', // TT-21 ← BT-3 (UNTDID 1001)
+        currency: 'USD', // TT-22 ← BT-5
+        businessProcessId: 'S1', // TT-28 ← BT-23
+        businessProcessTypeId: 'e-reporting', // TT-29
+        seller: {
+          companyId: '111222333', // TT-33
+          schemeId: '0002', // TT-33-1 (SIREN)
+          countryId: 'FR', // TT-35
+        },
+        taxAmount: '50.00', // TT-52 ← totals.taxAmount
+        taxSubTotals: [
+          {
+            taxableAmount: '500.00', // TT-54
+            taxAmount: '50.00', // TT-55
+            categoryCode: 'S', // TT-56
+            percent: '10.00', // TT-57
+          },
+        ],
+      },
+    ])
+  })
+
+  it('émet businessProcessId (TT-28) vide quand BT-23 est absent sur une facture 10.1 (interprétation, XSD non contraint)', () => {
+    const b2bi = inv({
+      businessProcessType: undefined,
+      buyer: {
+        name: 'B',
+        vatId: 'DE123456789',
+        address: { countryCode: 'DE' },
+      },
+    })
+    const report = aggregateTransactions([b2bi], {
+      periodStart: '20260901',
+      periodEnd: '20260910',
+    })
+    expect(report?.invoices[0]?.businessProcessId).toBe('')
+  })
+
+  it("émet un CompanyId (TT-33) vide quand le vendeur d'une facture 10.1 n'a pas de SIREN (vendeur étranger, clause « ou vendeur étranger » de D4)", () => {
+    const foreignSellerNoSiren = inv({
+      seller: { name: 'V étrangère', address: { countryCode: 'BE' } },
       buyer: {
         name: 'B',
         siren: '987654321',
         address: { countryCode: 'FR' },
       },
     })
-    const crossBorder = inv({
-      number: 'FA-10-1',
-      buyer: { name: 'A', address: { countryCode: 'DE' } },
+    const report = aggregateTransactions([foreignSellerNoSiren], {
+      periodStart: '20260901',
+      periodEnd: '20260910',
+    })
+    expect(report?.invoices[0]?.seller).toEqual({
+      companyId: '',
+      schemeId: '0002',
+      countryId: 'BE',
+    })
+  })
+
+  it("émet un TransactionsReport avec SEULEMENT invoices[] peuplé (aggregated: []) quand aucune opération 10.3 n'existe", () => {
+    const b2bi = inv({
+      buyer: {
+        name: 'A',
+        vatId: 'DE123456789',
+        address: { countryCode: 'DE' },
+      },
+    })
+    const report = aggregateTransactions([b2bi], {
+      periodStart: '20260901',
+      periodEnd: '20260910',
+    })
+    expect(report).not.toBeNull()
+    expect(report?.aggregated).toEqual([])
+    expect(report?.invoices).toHaveLength(1)
+  })
+
+  it("retourne null quand SEULES des factures 'out' sont fournies (aucune opération e-reportable)", () => {
+    const b2bDomestic1 = inv({
+      buyer: {
+        name: 'B',
+        siren: '987654321',
+        address: { countryCode: 'FR' },
+      },
+    })
+    const b2bDomestic2 = inv({
+      number: 'FA-2',
+      buyer: {
+        name: 'C',
+        vatId: 'FR98765432100',
+        address: { countryCode: 'FR' },
+      },
     })
     expect(
-      aggregateTransactions([b2bDomestic, crossBorder], {
+      aggregateTransactions([b2bDomestic1, b2bDomestic2], {
         periodStart: '20260901',
         periodEnd: '20260910',
       }),
     ).toBeNull()
+  })
+
+  // Bannière D4/A-T3-1 (revue plan-3-2-review.md §Task 3, BINDING) : conséquence
+  // du raffinement — l'export B2C (vendeur FR, particulier ÉTRANGER) N'EST PLUS
+  // du '10.1' jamais émis (2.3/2.4) mais du '10.3' ACTIVEMENT AGRÉGÉ ET ÉMIS,
+  // FUSIONNÉ dans le MÊME bucket (date‖devise‖catégorie) que le B2C purement
+  // domestique — AUCUN sous-code export dédié à ce stade (à confirmer Annexe 7,
+  // go-live). Test NOMMÉ requis par la revue : un particulier allemand acheteur.
+  it('bannière D4/A-T3-1 (BINDING) : un particulier ALLEMAND acheteur (export B2C, vendeur FR) est compté en 10.3, fusionné au B2C domestique, PAS émis en 10.1', () => {
+    const domesticB2C = inv({})
+    const exportB2CGermanBuyer = inv({
+      number: 'FA-EXPORT-DE',
+      buyer: { name: 'Privatperson DE', address: { countryCode: 'DE' } },
+    })
+    const report = aggregateTransactions([domesticB2C, exportB2CGermanBuyer], {
+      periodStart: '20260901',
+      periodEnd: '20260910',
+    })
+    expect(report).not.toBeNull()
+    expect(report?.invoices).toEqual([]) // PAS du 10.1
+    expect(report?.aggregated).toHaveLength(1) // MÊME bucket TLB1 (fusion)
+    const a = report!.aggregated[0]!
+    // 1000.00 (domestique) + 1000.00 (export DE) = 2000.00 — fusion RÉELLE.
+    expect(a.taxExclusiveAmount).toBe('2000.00')
+    expect(a.taxTotal).toBe('400.00')
+  })
+
+  // Injection T2 review F1 (binding, cf. brief Task 3) : un B1 « pur » et un M1
+  // NATURÉ contribuant au MÊME jour/devise doivent fusionner leurs contributions
+  // dans le MÊME bucket TLB1 (accumulateBucket appelé par deux factures
+  // DIFFÉRENTES sur la même clé), sans écraser la contribution B1 déjà présente.
+  it('F1 (injection revue T2, binding) : fusionne un B1 et un M1 naturé même jour/devise dans le MÊME bucket TLB1 (contributions exactes, jamais écrasées)', () => {
+    const b1 = inv({}) // B1 -> TLB1, 1000.00/200.00, 2026-09-05
+    const m1 = inv({
+      number: 'FA-M1',
+      businessProcessType: 'M1',
+      lines: [
+        {
+          id: '1',
+          name: 'bien',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '600.00',
+          vatCategory: 'S',
+          vatRate: '20.00',
+          nature: 'goods',
+        },
+        {
+          id: '2',
+          name: 'service',
+          quantity: '1',
+          unitCode: 'C62',
+          unitPrice: '400.00',
+          vatCategory: 'S',
+          vatRate: '20.00',
+          nature: 'services',
+        },
+      ],
+    })
+    const report = aggregateTransactions([b1, m1], {
+      periodStart: '20260901',
+      periodEnd: '20260910',
+    })
+    expect(report).not.toBeNull()
+    expect(report?.aggregated).toHaveLength(2)
+    // TLB1 : B1 (1000.00/200.00) + M1-goods (600.00/120.00) = 1600.00/320.00.
+    const tlb1 = report!.aggregated.find((a) => a.categoryCode === 'TLB1')!
+    expect(tlb1.taxExclusiveAmount).toBe('1600.00')
+    expect(tlb1.taxTotal).toBe('320.00')
+    expect(tlb1.subtotals).toEqual([
+      { taxPercent: '20.00', taxableAmount: '1600.00', taxTotal: '320.00' },
+    ])
+    // TPS1 : seule contribution M1-services (400.00/80.00), bucket DISTINCT.
+    const tps1 = report!.aggregated.find((a) => a.categoryCode === 'TPS1')!
+    expect(tps1.taxExclusiveAmount).toBe('400.00')
+    expect(tps1.taxTotal).toBe('80.00')
   })
 
   it('applique la catégorie par défaut TLB1 quand BT-23 (cadre de facturation) est absent', () => {
