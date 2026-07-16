@@ -60,6 +60,47 @@ export const CADENCE_BY_REGIME: Record<VatRegime, PeriodCadence> = {
   franchise: { kind: 'bimester' },
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// Cadence de PAIEMENT par régime TVA (D6, Tableau 13 PRIMAIRE §3.7.7, spec
+// externes v3.2 p.68, colonne « transmission à l'administration fiscale par
+// la PA, 8h00 » — extraction cellule-par-cellule du PDF par le contrôleur,
+// PAS depuis research-2-3-questions.md dont les colonnes étaient
+// DÉSALIGNÉES). MOTIF CONSTANT (identique à la cadence transactions) :
+// échéance PA = échéance de dépôt du déclarant + 1 jour. AUCUNE nouvelle
+// forme de cadence : cette table réutilise EXCLUSIVEMENT les formes
+// EXISTANTES de `PeriodCadence` (post-hotfix `deadlineDay`) — ni `quarter`,
+// ni décades-paiement, ni « dernier jour ».
+//   - reel_normal_mensuel      : SEUL régime dont le paiement DIFFÈRE des
+//     transactions — mensuel (mois civil, PAS de décades), échéance « le 11
+//     du mois suivant, à 8h00 » (contre décades 21/1er-M+1/11-M+1 pour les
+//     transactions).
+//   - reel_normal_trimestriel  : mensuel, échéance « le 11 du mois suivant,
+//     à 8h00 » — identique à la cadence transactions (post-hotfix 91531d3).
+//   - simplifie                : mensuel, échéance « le 1er du 2E mois
+//     suivant, à 8h00 » — identique à la cadence transactions.
+//   - franchise                : bimestriel (bimestres civils), échéance
+//     « le 1er du 2E mois suivant, à 8h00 » — identique à la cadence
+//     transactions.
+//
+// INTERPRÉTATION PROJET RÉSIDUELLE (à confirmer go-live, miroir du bandeau
+// transactions ci-dessus) : les « 8h00 » sont modélisés à 08:00 UTC (≈
+// 09:00/10:00 heure de Paris), côté SÛR.
+// ────────────────────────────────────────────────────────────────────────
+export const PAYMENTS_CADENCE_BY_REGIME: Record<VatRegime, PeriodCadence> = {
+  reel_normal_mensuel: {
+    kind: 'month',
+    deadlineMonthOffset: 1,
+    deadlineDay: 11,
+  }, // ≠ transactions (décades)
+  reel_normal_trimestriel: {
+    kind: 'month',
+    deadlineMonthOffset: 1,
+    deadlineDay: 11,
+  }, // == transactions
+  simplifie: { kind: 'month', deadlineMonthOffset: 2, deadlineDay: 1 }, // == transactions
+  franchise: { kind: 'bimester' }, // == transactions
+}
+
 // Amendement A2-plan (MUST-FIX, revue du plan) — fenêtre BORNÉE : au plus
 // les N périodes les plus récemment échues (la période tout juste échue +
 // une de rattrapage), JAMAIS un backlog croissant depuis l'origine des
@@ -190,11 +231,12 @@ function bimesterCandidates(
 //
 // Renvoie AU PLUS `MAX_DUE_PERIODS` périodes — les plus récemment échues à
 // `referenceDate` (triées par échéance décroissante), amendement A2-plan.
-export function computeDuePeriods(
-  regime: VatRegime,
+// Corps commun aux DEUX tables (transactions/paiements, D6) : même moteur,
+// table de cadence en paramètre — ne PAS dupliquer cette logique par table.
+function computeDuePeriodsForCadence(
+  cadence: PeriodCadence,
   referenceDate: Date,
 ): DuePeriod[] {
-  const cadence = CADENCE_BY_REGIME[regime]
   const refYear = referenceDate.getUTCFullYear()
   const refMonth0 = referenceDate.getUTCMonth()
   const candidates =
@@ -214,4 +256,24 @@ export function computeDuePeriods(
     .sort((a, b) => b.deadline.getTime() - a.deadline.getTime())
     .slice(0, MAX_DUE_PERIODS)
     .map(({ periodStart, periodEnd }) => ({ periodStart, periodEnd }))
+}
+
+export function computeDuePeriods(
+  regime: VatRegime,
+  referenceDate: Date,
+): DuePeriod[] {
+  return computeDuePeriodsForCadence(CADENCE_BY_REGIME[regime], referenceDate)
+}
+
+// D6 : 2ᵉ entrée publique sur le MÊME moteur — la cadence PAIEMENT (Tableau
+// 13 primaire p.68, colonne paiement) ne diffère de la cadence transactions
+// que par la table utilisée (cf. bandeau `PAYMENTS_CADENCE_BY_REGIME`).
+export function computeDuePaymentPeriods(
+  regime: VatRegime,
+  referenceDate: Date,
+): DuePeriod[] {
+  return computeDuePeriodsForCadence(
+    PAYMENTS_CADENCE_BY_REGIME[regime],
+    referenceDate,
+  )
 }

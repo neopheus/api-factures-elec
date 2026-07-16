@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import type { VatRegime } from '../../src/ereporting/nomenclature.js'
 import { VAT_REGIMES } from '../../src/ereporting/nomenclature.js'
+import type { PeriodCadence } from '../../src/ereporting/period.js'
 import {
   CADENCE_BY_REGIME,
+  computeDuePaymentPeriods,
   computeDuePeriods,
   MAX_DUE_PERIODS,
+  PAYMENTS_CADENCE_BY_REGIME,
 } from '../../src/ereporting/period.js'
 
 // Vecteurs sur dates FIXES (Date UTC), alignés sur le Tableau 13 VERBATIM
@@ -192,5 +196,153 @@ describe('computeDuePeriods', () => {
         periodEnd: '20991210',
       })
     })
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────
+// Cadence PAIEMENTS (D6, Tableau 13 PRIMAIRE p.68, colonne paiement) —
+// oracle INDÉPENDANT : EXPECTED_PAYMENT_CADENCES est retranscrit À LA MAIN
+// depuis D6 du plan (extraction cellule-par-cellule du PDF primaire), PAS
+// depuis research-2-3-questions.md (transcription désalignée, cause du bug
+// TRANSACTIONS trimestriel shippé, corrigé par le hotfix 91531d3) NI depuis
+// PAYMENTS_CADENCE_BY_REGIME (anti-tautologie, leçon 3.1-T1).
+const EXPECTED_PAYMENT_CADENCES: Record<VatRegime, PeriodCadence> = {
+  // SEUL régime où le paiement diffère des transactions : mensuel (pas de
+  // décades), échéance le 11 du mois suivant.
+  reel_normal_mensuel: {
+    kind: 'month',
+    deadlineMonthOffset: 1,
+    deadlineDay: 11,
+  },
+  // Identique à la cadence transaction (post-hotfix 91531d3).
+  reel_normal_trimestriel: {
+    kind: 'month',
+    deadlineMonthOffset: 1,
+    deadlineDay: 11,
+  },
+  // Identique à la cadence transaction.
+  simplifie: { kind: 'month', deadlineMonthOffset: 2, deadlineDay: 1 },
+  // Identique à la cadence transaction.
+  franchise: { kind: 'bimester' },
+}
+
+describe('cadence PAIEMENTS (Tableau 13 PRIMAIRE p.68, colonne paiement)', () => {
+  it('réel normal mensuel : MENSUEL (pas de décades), échéance le 11 du mois suivant à 08:00', () => {
+    // Au 11/10 08:00 pile, septembre (mois civil COMPLET) est échu — PAS une
+    // décade (periodEnd = fin de mois, pas le 10).
+    const due = computeDuePaymentPeriods(
+      'reel_normal_mensuel',
+      new Date(Date.UTC(2026, 9, 11, 8)),
+    )
+    expect(due).toContainEqual({
+      periodStart: '20260901',
+      periodEnd: '20260930',
+    })
+    expect(due).not.toContainEqual({
+      periodStart: '20260921',
+      periodEnd: '20260930',
+    })
+  })
+
+  it('réel normal trimestriel : mensuel, échéance le 11 du mois suivant (identique transactions post-hotfix)', () => {
+    const dueEarly = computeDuePaymentPeriods(
+      'reel_normal_trimestriel',
+      new Date(Date.UTC(2026, 10, 1, 9)),
+    )
+    expect(dueEarly).not.toContainEqual({
+      periodStart: '20261001',
+      periodEnd: '20261031',
+    })
+    const due = computeDuePaymentPeriods(
+      'reel_normal_trimestriel',
+      new Date(Date.UTC(2026, 10, 11, 8)),
+    )
+    expect(due[0]).toEqual({ periodStart: '20261001', periodEnd: '20261031' })
+  })
+
+  it('simplifié : mensuel, échéance le 1er du 2e mois suivant (identique transactions)', () => {
+    const due = computeDuePaymentPeriods(
+      'simplifie',
+      new Date(Date.UTC(2026, 10, 1, 9)),
+    )
+    expect(due[0]).toEqual({ periodStart: '20260901', periodEnd: '20260930' })
+    const dueBefore = computeDuePaymentPeriods(
+      'simplifie',
+      new Date(Date.UTC(2026, 10, 1)),
+    )
+    expect(dueBefore).not.toContainEqual({
+      periodStart: '20260901',
+      periodEnd: '20260930',
+    })
+  })
+
+  it('franchise : bimestre, échéance le 1er du 2e mois suivant (identique transactions)', () => {
+    const due = computeDuePaymentPeriods(
+      'franchise',
+      new Date(Date.UTC(2026, 11, 5)),
+    )
+    expect(due[0]).toEqual({ periodStart: '20260901', periodEnd: '20261031' })
+    const dueTooEarly = computeDuePaymentPeriods(
+      'franchise',
+      new Date(Date.UTC(2026, 10, 5)),
+    )
+    expect(dueTooEarly).not.toContainEqual({
+      periodStart: '20260901',
+      periodEnd: '20261031',
+    })
+  })
+
+  it('la table paiements correspond EXACTEMENT à l’oracle indépendant (ensembliste par régime)', () => {
+    expect(Object.keys(PAYMENTS_CADENCE_BY_REGIME).sort()).toEqual(
+      Object.keys(EXPECTED_PAYMENT_CADENCES).sort(),
+    )
+    for (const regime of VAT_REGIMES) {
+      expect(PAYMENTS_CADENCE_BY_REGIME[regime]).toEqual(
+        EXPECTED_PAYMENT_CADENCES[regime],
+      )
+    }
+  })
+
+  it('borne à MAX_DUE_PERIODS et gère year-wrap / février / bornes 08:00 pile', () => {
+    // Year-wrap (décembre → janvier) : au 11/01/2027 08:00, décembre 2026
+    // (mois civil complet) est échu pour le réel normal mensuel paiement.
+    const dueYearWrap = computeDuePaymentPeriods(
+      'reel_normal_mensuel',
+      new Date(Date.UTC(2027, 0, 11, 8)),
+    )
+    expect(dueYearWrap).toContainEqual({
+      periodStart: '20261201',
+      periodEnd: '20261231',
+    })
+    // Borne 08:00 pile : une seconde avant la deadline, PAS encore échu.
+    const dueJustBefore = computeDuePaymentPeriods(
+      'reel_normal_mensuel',
+      new Date(Date.UTC(2027, 0, 11, 7, 59, 59)),
+    )
+    expect(dueJustBefore).not.toContainEqual({
+      periodStart: '20261201',
+      periodEnd: '20261231',
+    })
+
+    // Février (année bissextile 2028, 29 jours) : au 11/03/2028 08:00,
+    // février est échu avec la bonne fin de mois.
+    const dueFebruary = computeDuePaymentPeriods(
+      'reel_normal_mensuel',
+      new Date(Date.UTC(2028, 2, 11, 8)),
+    )
+    expect(dueFebruary).toContainEqual({
+      periodStart: '20280201',
+      periodEnd: '20280229',
+    })
+
+    // Fenêtre bornée (amendement A2-plan) : jamais plus de MAX_DUE_PERIODS,
+    // quel que soit le régime, même à une date très lointaine.
+    for (const regime of VAT_REGIMES) {
+      const due = computeDuePaymentPeriods(
+        regime,
+        new Date(Date.UTC(2099, 11, 31, 23, 59)),
+      )
+      expect(due.length).toBeLessThanOrEqual(MAX_DUE_PERIODS)
+    }
   })
 })
