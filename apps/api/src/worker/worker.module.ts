@@ -1,4 +1,8 @@
 import { Module } from '@nestjs/common'
+import { AnnuaireRepository } from '../annuaire/annuaire.repository.js'
+import { AnnuairePublicationService } from '../annuaire/annuaire-publication.service.js'
+import { AnnuaireSyncService } from '../annuaire/annuaire-sync.service.js'
+import { AnnuaireTransportModule } from '../annuaire/annuaire-transport.module.js'
 import { ArchiveModule } from '../archive/archive.module.js'
 import { ArchiveService } from '../archive/archive.service.js'
 import { AppConfigModule } from '../config/config.module.js'
@@ -9,6 +13,9 @@ import { EreportingTransmissionModule } from '../ereporting/ereporting-transmiss
 import { FormatGenerationService } from '../invoices/format-generation.service.js'
 import { INVOICE_FORMAT_GENERATOR } from '../invoices/format-generator.port.js'
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
+import { AnnuaireScheduler } from './annuaire.scheduler.js'
+import { AnnuaireSweepService } from './annuaire-sweep.service.js'
+import { AnnuaireSyncProcessor } from './annuaire-sync.processor.js'
 import { ArchiveRetryScheduler } from './archive-retry.scheduler.js'
 import { ArchiveRetryService } from './archive-retry.service.js'
 import { EreportingScheduler } from './ereporting.scheduler.js'
@@ -35,6 +42,13 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     WorkerQueueModule,
     ArchiveModule,
     EreportingTransmissionModule,
+    // `@Global()` (annuaire-transport.module.ts) : importer ICI suffit à
+    // exposer `ANNUAIRE_TRANSPORT` à tout CE process worker — motif
+    // `EreportingTransmissionModule` ci-dessus (le @Global d'un module
+    // s'applique à l'arbre bootstrapé qui l'importe, PAS globalement entre
+    // deux `NestFactory` distincts : AppModule (HTTP) et WorkerModule sont
+    // deux contextes séparés, chacun doit l'importer lui-même).
+    AnnuaireTransportModule,
   ],
   providers: [
     InvoicesRepository,
@@ -53,6 +67,12 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     EreportingRepository,
     EreportingGenerationService,
     EreportingGenerationProcessor,
+    AnnuaireRepository,
+    AnnuairePublicationService,
+    AnnuaireSyncService,
+    AnnuaireSweepService,
+    AnnuaireScheduler,
+    AnnuaireSyncProcessor,
   ],
 })
 export class WorkerModule {}

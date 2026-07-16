@@ -144,9 +144,20 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(604_800_000),
-  // Nombre de tentatives d'un job de publication annuaire (Task 8) avant
-  // passage en `failed` (D13).
+  // Nombre de tentatives d'un job de la file `annuaire-sync` (Task 9 —
+  // ingestion F14 ET reprise de draft figé, `annuaire-sync.job-options.ts`)
+  // avant passage en `failed` (D13).
   ANNUAIRE_PUBLISH_JOB_ATTEMPTS: z.coerce.number().int().positive().default(3),
+  // Périodicité du sweep de reprise des drafts figés (Task 9, injection
+  // revue contrôleur STUCK-DRAFT RE-PUBLISH SWEEP) — même ordre de grandeur
+  // que ARCHIVE_RETRY_EVERY_MS (sweep « rattrapage » sur une gate de
+  // fraîcheur courte, 15 min côté SD find_stale_annuaire_drafts, migration
+  // 0020).
+  ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(300_000),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

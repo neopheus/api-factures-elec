@@ -102,15 +102,15 @@ export interface PublishLigneResult {
 
 function toMaille(input: {
   siren: string
-  siret?: string
-  routageId?: string
-  suffixe?: string
+  siret?: string | null
+  routageId?: string | null
+  suffixe?: string | null
 }): Maille {
   return {
     siren: input.siren,
-    siret: input.siret,
-    routageId: input.routageId,
-    suffixe: input.suffixe,
+    siret: input.siret ?? undefined,
+    routageId: input.routageId ?? undefined,
+    suffixe: input.suffixe ?? undefined,
   }
 }
 
@@ -313,5 +313,82 @@ export class AnnuairePublicationService {
   // connaît que les services).
   async getLigne(tenantId: string, id: string): Promise<LigneSummary | null> {
     return this.repo.findLigne(tenantId, id)
+  }
+
+  // STUCK-DRAFT RE-PUBLISH SWEEP (Task 9, injection revue contrôleur — fix
+  // du défaut T8 F1) : un crash entre `port.publish` et `markPublished`
+  // laisse une ligne en 'draft' avec le F13 déjà émis auprès du port — rien
+  // ne la fait progresser et elle occupe indéfiniment le slot d'adressage
+  // (A-DEADLOCK, index partiel migration 0018). Rejoue EXACTEMENT le
+  // pipeline de `publishLigne` étapes 2-4 (generate→validate→port.publish→
+  // markPublished) à partir de l'état PERSISTÉ de la ligne — jamais un
+  // nouvel insertLigne (la ligne existe déjà).
+  //
+  // Idempotent PAR CONSTRUCTION, sans code supplémentaire ici :
+  //  - `port.publish` est write-once par clé `publicationRef` (=id de la
+  //    ligne, LocalFilesystemAnnuaireStore/Task 6) : si le crash original a
+  //    eu lieu APRÈS l'écriture du F13, ce second appel retrouve la clé déjà
+  //    prise et renvoie le trackingRef D'ORIGINE — jamais un second écrit ;
+  //  - `markPublished` est un CAS (`WHERE status = 'draft'`, Task 5) : si la
+  //    ligne a entre-temps été publiée par un AUTRE passage du sweep (course
+  //    entre deux sweeps concurrents, ou le job crashé original qui a fini
+  //    par committer après tout), le CAS échoue avec le message générique
+  //    `is not in 'draft' status` — traité ICI comme une résolution
+  //    concurrente bénigne ('skipped'), jamais une erreur : le résultat final
+  //    (ligne publiée) est le même quel que soit le passage qui l'a obtenu.
+  //
+  // Appelé par `AnnuaireSyncProcessor` (Task 9) sur un job `annuaire-
+  // republish` posé par `AnnuaireSweepService.sweepStuckDrafts` — jamais par
+  // une route HTTP (motif `recordAck`, D7).
+  async republishDraft(
+    tenantId: string,
+    ligneId: string,
+  ): Promise<'republished' | 'skipped'> {
+    const ligne = await this.repo.findLigne(tenantId, ligneId)
+    // id inconnu/hors tenant (RLS) OU déjà résolue par un autre chemin
+    // (publiée/rejetée/masquée entre le SD et ce traitement) : rien à faire,
+    // ce n'est PAS une anomalie — le sweep suivant ne la reverra plus de
+    // toute façon puisque `find_stale_annuaire_drafts` ne renvoie que les
+    // lignes encore 'draft'.
+    if (ligne?.status !== 'draft') return 'skipped'
+
+    const candidate: LigneAdressage = {
+      maille: toMaille(ligne),
+      nature: ligne.nature,
+      dateDebut: ligne.dateDebut,
+      dateFin: ligne.dateFin ?? undefined,
+      plateforme: ligne.plateforme,
+    }
+    const xml = generateActualisationXml({
+      codesRoutage: [],
+      lignes: [candidate],
+    })
+    const validation = await validateAnnuaireActualisationXml(xml)
+    if (!validation.valid) {
+      // La ligne avait DÉJÀ validé XSD à l'insertion initiale (publishLigne
+      // étape 2, born-rejetee) — une donnée persistée immuable régénérant un
+      // F13 XSD-invalide est une ANOMALIE inattendue (régression du
+      // générateur/validateur, jamais un cas nominal) : erreur OPÉRATIONNELLE
+      // qui remonte telle quelle (throw -> retry BullMQ, politique de la file
+      // `annuaire-sync` — jamais un rejet silencieux/born-rejetee ici, la
+      // machine n'autorise pas draft→rejetee hors genèse, Task 4).
+      throw new Error(
+        `republishDraft: F13 régénéré XSD-invalide pour la ligne ${ligneId} (anomalie inattendue — ${validation.errors})`,
+      )
+    }
+
+    const result = await this.port.publish({
+      tenantId,
+      publicationRef: ligneId,
+      xml,
+    })
+    try {
+      await this.repo.markPublished(tenantId, ligneId, result.trackingRef)
+    } catch (err) {
+      if (err instanceof Error && CAS_STALE_RE.test(err.message))
+        return 'skipped'
+      throw err
+    }
+    return 'republished'
   }
 }

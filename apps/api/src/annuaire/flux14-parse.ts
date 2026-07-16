@@ -1,7 +1,12 @@
 import { create } from 'xmlbuilder2'
 import { validateAnnuaireConsultationXml } from './annuaire-xsd-validator.js'
 import type { LigneAdressage, Maille } from './ligne-adressage.js'
-import { NATURES, type Nature } from './nomenclature.js'
+import {
+  NATURES,
+  type Nature,
+  TYPE_FLUX,
+  type TypeFlux,
+} from './nomenclature.js'
 
 // Parseur XSD-validé du Flux 14 (Consultation, PPF→PA — D3/plan 2.4).
 // InfoAdressageConsultationType (Annuaire_Commun.xsd) : identifiants PLATS,
@@ -40,8 +45,23 @@ export class UnknownLigneNatureError extends Error {
   }
 }
 
+// Task 9 (injection revue T3, INFO) : TypeFlux racine est lui aussi
+// xs:string NON restreint côté XSD (Annuaire_Consultation_F14.xsd) — même
+// motif qu'UnknownLigneNatureError ci-dessus (A-MIRROR-KEY), une valeur hors
+// {C,D} validerait le XSD mais ne correspondrait à aucun `TypeFlux` de
+// nomenclature.ts consommé par l'ingestion (Task 9, choix upsert vs
+// remplacement complet).
+export class UnknownTypeFluxError extends Error {
+  constructor(readonly rawValue: string) {
+    super(
+      `TypeFlux "${rawValue}" hors nomenclature {C,D} — XSD xs:string non restrictif, rejet applicatif requis`,
+    )
+    this.name = 'UnknownTypeFluxError'
+  }
+}
+
 export interface ConsultationF14 {
-  typeFlux: string
+  typeFlux: TypeFlux
   horodate: string
   lignes: LigneAdressage[]
 }
@@ -159,6 +179,12 @@ function toLigneAdressage(
     ...(raw.DateEffet.DateFin !== undefined
       ? { dateFin: raw.DateEffet.DateFin }
       : {}),
+    // DateFinEffective (Task 9, injection revue T3) : DateType (\d{8}), pas
+    // d'entités XML possibles — même absence de decodeXmlEntities que
+    // DateDebut/DateFin ci-dessus (cohérence, pas un oubli).
+    ...(raw.DateEffet.DateFinEffective !== undefined
+      ? { dateFinEffective: raw.DateEffet.DateFinEffective }
+      : {}),
     plateforme: decodeXmlEntities(raw.IdPlateforme),
   }
 }
@@ -179,12 +205,17 @@ export async function parseConsultationF14(
   const parsed = create(xml).end({ format: 'object' }) as unknown as RawRoot
   const root = parsed.AnnuaireConsultationF14
 
+  const rawTypeFlux = decodeXmlEntities(root.TypeFlux)
+  if (!(TYPE_FLUX as readonly string[]).includes(rawTypeFlux)) {
+    throw new UnknownTypeFluxError(rawTypeFlux)
+  }
+
   const lignes = root.BlocLignesAnnuaire
     ? asArray(root.BlocLignesAnnuaire.LigneAnnuaire).map(toLigneAdressage)
     : []
 
   return {
-    typeFlux: decodeXmlEntities(root.TypeFlux),
+    typeFlux: rawTypeFlux as TypeFlux,
     horodate: decodeXmlEntities(root.HorodateProduction),
     lignes,
   }

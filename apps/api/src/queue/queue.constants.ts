@@ -6,3 +6,10 @@ export const MAINTENANCE_QUEUE = 'maintenance'
 // @Processor qui la consomme arrive en Task 8 — la file est enregistrée dès
 // Task 7 (WorkerQueueModule) car le PRODUCTEUR (sweep) en a besoin.
 export const EREPORTING_GENERATION_QUEUE = 'ereporting-generation'
+// File dédiée annuaire (Task 9, plan 2.4) : DEUX job.name distincts, UN seul
+// @Processor (annuaire-sync.processor.ts, motif MaintenanceProcessor) —
+// ANNUAIRE_SYNC_JOB (ingestion F14, un par tenant×TypeFlux, posé par
+// AnnuaireSweepService.sweepSync) et ANNUAIRE_REPUBLISH_JOB (reprise de
+// draft figé, un par ligne, posé par AnnuaireSweepService.sweepStuckDrafts —
+// injection revue Task 9, fix du défaut T8 F1).
+export const ANNUAIRE_SYNC_QUEUE = 'annuaire-sync'

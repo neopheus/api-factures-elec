@@ -5,6 +5,7 @@ import {
   InvalidConsultationF14XmlError,
   parseConsultationF14,
   UnknownLigneNatureError,
+  UnknownTypeFluxError,
 } from '../../src/annuaire/flux14-parse.js'
 import { validateAgainstAnnuaireConsultationXsd } from '../helpers/annuaire-xsd.js'
 
@@ -160,6 +161,43 @@ const piiBearingF14 = `<?xml version="1.0" encoding="UTF-8"?>
   </BlocLignesAnnuaire>
 </AnnuaireConsultationF14>`
 
+// Task 9 (injection revue T3, MED) : DateFinEffective (DT-7-3-3,
+// PeriodeEffetConsultationType — DateDebut, DateFin?, DateFinEffective?)
+// doit être porté par le parseur jusqu'au modèle LigneAdressage, additif
+// (ne remplace pas dateFin ici — c'est l'ingestion, Task 9, qui calcule la
+// fin EFFECTIVE min(dateFin, dateFinEffective)).
+const dateFinEffectiveF14 = `<?xml version="1.0" encoding="UTF-8"?>
+<AnnuaireConsultationF14>
+  <HorodateProduction>20260910120000</HorodateProduction>
+  <TypeFlux>D</TypeFlux>
+  <BlocLignesAnnuaire>
+    <LigneAnnuaire>
+      <IdInstance>1</IdInstance>
+      <MotifPresence>S</MotifPresence>
+      <Nature>D</Nature>
+      <DateEffet>
+        <DateDebut>20260101</DateDebut>
+        <DateFin>20270101</DateFin>
+        <DateFinEffective>20260601</DateFinEffective>
+      </DateEffet>
+      <InfoAdressage>
+        <Identifiant>123456789</Identifiant>
+        <IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>
+      </InfoAdressage>
+      <IdPlateforme>0007</IdPlateforme>
+    </LigneAnnuaire>
+  </BlocLignesAnnuaire>
+</AnnuaireConsultationF14>`
+
+// Task 9 (injection revue T3, INFO) : TypeFlux racine est lui aussi
+// xs:string non restreint (Annuaire_Consultation_F14.xsd) — même
+// discipline de coercition applicative que Nature (A-MIRROR-KEY).
+const unknownTypeFluxF14 = `<?xml version="1.0" encoding="UTF-8"?>
+<AnnuaireConsultationF14>
+  <HorodateProduction>20260910120000</HorodateProduction>
+  <TypeFlux>X</TypeFlux>
+</AnnuaireConsultationF14>`
+
 describe('parseConsultationF14 (Annuaire_Consultation_F14.xsd)', () => {
   it('A-FIXTURE : la fixture hand-authored est elle-même XSD-valide avant tout usage', () => {
     const { valid, errors } =
@@ -239,6 +277,32 @@ describe('parseConsultationF14 (Annuaire_Consultation_F14.xsd)', () => {
         plateforme: '9998',
       },
     ])
+  })
+
+  it('porte DateFinEffective jusqu’à LigneAdressage quand présente (injection revue T3)', async () => {
+    const { valid, errors } =
+      validateAgainstAnnuaireConsultationXsd(dateFinEffectiveF14)
+    expect(errors).toBe('')
+    expect(valid).toBe(true)
+    const result = await parseConsultationF14(dateFinEffectiveF14)
+    expect(result.lignes).toEqual([
+      {
+        maille: { siren: '123456789' },
+        nature: 'D',
+        dateDebut: '20260101',
+        dateFin: '20270101',
+        dateFinEffective: '20260601',
+        plateforme: '0007',
+      },
+    ])
+  })
+
+  it('coerce TypeFlux (xs:string) vers {C,D} et rejette toute autre valeur (injection revue T3)', async () => {
+    const { valid } = validateAgainstAnnuaireConsultationXsd(unknownTypeFluxF14)
+    expect(valid).toBe(true)
+    await expect(
+      parseConsultationF14(unknownTypeFluxF14),
+    ).rejects.toBeInstanceOf(UnknownTypeFluxError)
   })
 
   it('PII-drop (D8) : aucune trace du Nom/Adresse porté par BlocUnitesLegales/BlocEtablissements', async () => {

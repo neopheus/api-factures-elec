@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, isNull, notInArray, sql } from 'drizzle-orm'
+import type { Db } from '../db/client.js'
 import {
   annuaireConsents,
   annuaireDirectoryEntries,
@@ -530,6 +531,32 @@ export class AnnuaireRepository {
   // cette liste d'expressions, qu'il ait été créé via contrainte ou via
   // `CREATE INDEX` — cf. migration 0018 pour la définition exacte de
   // l'index visé ici.
+  // Un seul upsert (extrait de `upsertDirectoryEntries` ci-dessus, Task 5) —
+  // partagé avec `replaceDirectoryEntries` (Task 9) pour ne jamais dupliquer
+  // le SQL d'upsert entre le chemin différentiel et le chemin complet.
+  private async upsertOneDirectoryEntry(
+    db: Db,
+    tenantId: string,
+    entry: NewDirectoryEntry,
+  ): Promise<void> {
+    await db.execute(sql`
+      INSERT INTO annuaire_directory_entries
+        (tenant_id, id_instance, siren, siret, routage_id, suffixe, nature, date_debut, date_fin, plateforme, source_horodate)
+      VALUES (
+        ${tenantId}, ${entry.idInstance ?? null}, ${entry.siren}, ${entry.siret ?? null},
+        ${entry.routageId ?? null}, ${entry.suffixe ?? null}, ${entry.nature}, ${entry.dateDebut},
+        ${entry.dateFin ?? null}, ${entry.plateforme}, ${entry.sourceHorodate ?? null}
+      )
+      ON CONFLICT (tenant_id, siren, coalesce(siret, ''), coalesce(routage_id, ''), coalesce(suffixe, ''), date_debut, nature)
+      DO UPDATE SET
+        id_instance = EXCLUDED.id_instance,
+        date_fin = EXCLUDED.date_fin,
+        plateforme = EXCLUDED.plateforme,
+        source_horodate = EXCLUDED.source_horodate,
+        updated_at = now()
+    `)
+  }
+
   async upsertDirectoryEntries(
     tenantId: string,
     entries: NewDirectoryEntry[],
@@ -537,23 +564,50 @@ export class AnnuaireRepository {
     if (entries.length === 0) return
     await this.tenant.run(tenantId, async (db) => {
       for (const entry of entries) {
-        await db.execute(sql`
-          INSERT INTO annuaire_directory_entries
-            (tenant_id, id_instance, siren, siret, routage_id, suffixe, nature, date_debut, date_fin, plateforme, source_horodate)
-          VALUES (
-            ${tenantId}, ${entry.idInstance ?? null}, ${entry.siren}, ${entry.siret ?? null},
-            ${entry.routageId ?? null}, ${entry.suffixe ?? null}, ${entry.nature}, ${entry.dateDebut},
-            ${entry.dateFin ?? null}, ${entry.plateforme}, ${entry.sourceHorodate ?? null}
-          )
-          ON CONFLICT (tenant_id, siren, coalesce(siret, ''), coalesce(routage_id, ''), coalesce(suffixe, ''), date_debut, nature)
-          DO UPDATE SET
-            id_instance = EXCLUDED.id_instance,
-            date_fin = EXCLUDED.date_fin,
-            plateforme = EXCLUDED.plateforme,
-            source_horodate = EXCLUDED.source_horodate,
-            updated_at = now()
-        `)
+        await this.upsertOneDirectoryEntry(db, tenantId, entry)
       }
+    })
+  }
+
+  // Remplacement COMPLET du miroir pour ce tenant (TypeFlux='C', A-SYNC-
+  // RECONCILE — injection revue Task 9) : upsert de toutes les entrées du
+  // flux complet PUIS DELETE des entrées ABSENTES de ce flux — sans quoi le
+  // miroir dérive indéfiniment vers des plateformes défuntes que le PPF a
+  // cessé d'annoncer. Le DELETE est accordé sur CETTE table (migration
+  // 0019 — contrairement aux 3 autres tables annuaire, où seule la révocation
+  // par UPDATE existe).
+  //
+  // Détermination de l'ensemble à supprimer VIA `now()` plutôt qu'une clause
+  // IN sur la clé composite (A-MIRROR-KEY) : `now()` est le TIMESTAMP DE
+  // TRANSACTION Postgres — figé au BEGIN, identique pour tous les appels
+  // dans cette même transaction (`tenant.run`, tenant-context.ts), au
+  // contraire de `clock_timestamp()`. Chaque upsert touche donc `updated_at`
+  // à EXACTEMENT cette même valeur (défaut `now()` sur INSERT, `DO UPDATE
+  // SET updated_at = now()` sur conflit) — après la boucle, toute ligne dont
+  // `updated_at` est resté STRICTEMENT antérieur n'a été touchée par AUCUNE
+  // entrée du flux : c'est exactement l'ensemble à supprimer, sans construire
+  // de liste de tuples.
+  //
+  // GARDE « empty F14 → no-op » (injection revue Task 9) : un flux complet
+  // VIDE (`entries.length === 0`) est bien plus probablement un signal de
+  // port mal configuré/fixture absente (cf. `LocalFilesystemAnnuaireStore
+  // .emptyConsultationXml`, servi PAR DÉFAUT tant qu'aucun fixture F14 n'a
+  // été déposé) qu'une authentique désactivation totale de la plateforme —
+  // ne JAMAIS vider le miroir sur cette seule base. `AnnuaireSyncService`
+  // court-circuite déjà AVANT d'appeler cette méthode ; gardé ICI en défense
+  // en profondeur (méthode publique, appelable directement).
+  async replaceDirectoryEntries(
+    tenantId: string,
+    entries: NewDirectoryEntry[],
+  ): Promise<void> {
+    if (entries.length === 0) return
+    await this.tenant.run(tenantId, async (db) => {
+      for (const entry of entries) {
+        await this.upsertOneDirectoryEntry(db, tenantId, entry)
+      }
+      await db.execute(
+        sql`DELETE FROM annuaire_directory_entries WHERE updated_at < now()`,
+      )
     })
   }
 

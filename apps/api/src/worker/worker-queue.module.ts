@@ -3,10 +3,12 @@ import { Module } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import type { ConnectionOptions } from 'bullmq'
 import type { EnvConfig } from '../config/env.js'
+import { annuaireSyncJobOptions } from '../queue/annuaire-sync.job-options.js'
 import { ereportingGenerationJobOptions } from '../queue/ereporting-generation.job-options.js'
 import { invoiceGenerationJobOptions } from '../queue/invoice-generation.job-options.js'
 import { InvoiceGenerationQueue } from '../queue/invoice-generation.queue.js'
 import {
+  ANNUAIRE_SYNC_QUEUE,
   EREPORTING_GENERATION_QUEUE,
   INVOICE_GENERATION_QUEUE,
   MAINTENANCE_QUEUE,
@@ -64,6 +66,20 @@ import {
       inject: [ConfigService],
       useFactory: (config: ConfigService<EnvConfig, true>) => ({
         defaultJobOptions: ereportingGenerationJobOptions(config),
+      }),
+    }),
+    // `annuaire-sync` (Task 9) : même motif que `ereporting-generation`
+    // ci-dessus — enregistrée ICI car c'est le PRODUCTEUR
+    // (AnnuaireSweepService, `@InjectQueue`) ET le CONSOMMATEUR
+    // (AnnuaireSyncProcessor, `@Processor`), tous deux dans CE process
+    // (worker). `annuaireSyncJobOptions` fournit attempts/backoff/rétention
+    // (SEULE source de vérité) pour les DEUX job.name qui y transitent
+    // (ANNUAIRE_SYNC_JOB, ANNUAIRE_REPUBLISH_JOB).
+    BullModule.registerQueueAsync({
+      name: ANNUAIRE_SYNC_QUEUE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<EnvConfig, true>) => ({
+        defaultJobOptions: annuaireSyncJobOptions(config),
       }),
     }),
   ],

@@ -62,6 +62,19 @@ export interface LigneAdressage {
   nature: Nature
   dateDebut: string // AAAAMMJJ, inclus
   dateFin?: string // AAAAMMJJ, exclu — absent = en vigueur indéfiniment
+  // DateFinEffective (F14 uniquement, DT-7-3-3, Annuaire_Commun.xsd
+  // PeriodeEffetConsultationType) : date de fin RÉELLEMENT constatée d'une
+  // ligne close par anticipation sur `dateFin` (ex. changement de plateforme
+  // avant l'échéance prévue) — Task 9, injection revue T3. Portée ICI en
+  // simple passthrough du parseur F14 (flux14-parse.ts) jusqu'à l'ingestion
+  // (annuaire-sync.service.ts), qui calcule la fin EFFECTIVE
+  // (min(dateFin, dateFinEffective)) avant d'écrire le miroir — AUCUNE
+  // fonction de ce fichier (isInForce/overlaps/resolveRecipient) ne lit ce
+  // champ : le F13 (nos propres publications) n'a pas de notion équivalente,
+  // et le miroir de consultation stocke directement la fin déjà réconciliée
+  // dans sa colonne `dateFin` unique — champ additif, jamais consommé par la
+  // résolution de routage elle-même.
+  dateFinEffective?: string // AAAAMMJJ, F14 seulement
   plateforme: string // matricule PPF (4 chiffres, nomenclature.ts)
 }
 

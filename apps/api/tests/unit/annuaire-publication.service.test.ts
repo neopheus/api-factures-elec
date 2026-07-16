@@ -368,3 +368,104 @@ describe('AnnuairePublicationService.getLigne', () => {
     expect(result).toMatchObject({ id: 'ligne-1' })
   })
 })
+
+// Task 9 (injection revue contrôleur — STUCK-DRAFT RE-PUBLISH SWEEP, fix du
+// défaut T8 F1) : rejoue generate→validate→port.publish→markPublished pour
+// une ligne restée en 'draft' (crash entre `port.publish` et
+// `markPublished`). Idempotent PAR CONSTRUCTION : le port write-once renvoie
+// le résultat D'ORIGINE au re-publish (prouvé e2e, annuaire-sync.e2e.test.ts
+// — ici mocké) ; le CAS de `markPublished` absorbe la concurrence (prouvé ci-
+// dessous).
+const draftLigne = {
+  id: 'ligne-draft-1',
+  siren: '111111111',
+  siret: null,
+  routageId: null,
+  suffixe: null,
+  nature: 'D' as const,
+  dateDebut: '20260101',
+  dateFin: null,
+  plateforme: '0001',
+  status: 'draft' as const,
+  consentId: 'consent-1',
+  trackingRef: null,
+  rejectReason: null,
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+}
+
+describe('AnnuairePublicationService.republishDraft', () => {
+  beforeEach(() => {
+    mockValidate.mockReset()
+    mockValidate.mockResolvedValue({ valid: true, errors: '' })
+  })
+
+  it("ligne inconnue/hors tenant (findLigne null) : 'skipped', port JAMAIS appelé", async () => {
+    const { service, port } = build({
+      findLigne: vi.fn().mockResolvedValue(null),
+    })
+    const result = await service.republishDraft(TENANT, 'ligne-inconnue')
+    expect(result).toBe('skipped')
+    expect(port.publish).not.toHaveBeenCalled()
+  })
+
+  it("ligne déjà résolue (status != 'draft') : 'skipped', port JAMAIS appelé (course avec un autre chemin)", async () => {
+    const { service, repo, port } = build({
+      findLigne: vi
+        .fn()
+        .mockResolvedValue({ ...draftLigne, status: 'published' }),
+    })
+    const result = await service.republishDraft(TENANT, draftLigne.id)
+    expect(result).toBe('skipped')
+    expect(port.publish).not.toHaveBeenCalled()
+    expect(repo.markPublished).not.toHaveBeenCalled()
+  })
+
+  it("rejoue generate→validate→port.publish→markPublished pour un draft : 'republished'", async () => {
+    const { service, repo, port } = build({
+      findLigne: vi.fn().mockResolvedValue(draftLigne),
+    })
+    const result = await service.republishDraft(TENANT, draftLigne.id)
+    expect(result).toBe('republished')
+    expect(port.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: TENANT,
+        publicationRef: draftLigne.id,
+      }),
+    )
+    expect(repo.markPublished).toHaveBeenCalledWith(
+      TENANT,
+      draftLigne.id,
+      'TRACK-1',
+    )
+  })
+
+  it("CAS périmé sur markPublished (déjà publiée entre-temps, concurrence) : 'skipped', pas d'erreur propagée", async () => {
+    const { service } = build(
+      {
+        findLigne: vi.fn().mockResolvedValue(draftLigne),
+        markPublished: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              `markPublished: ligne ${draftLigne.id} is not in 'draft' status`,
+            ),
+          ),
+      },
+      {},
+    )
+    const result = await service.republishDraft(TENANT, draftLigne.id)
+    expect(result).toBe('skipped')
+  })
+
+  it('F13 régénéré XSD-invalide (anomalie inattendue) : propage une erreur, JAMAIS un rejet silencieux', async () => {
+    mockValidate.mockResolvedValue({ valid: false, errors: 'boom' })
+    const { service, port } = build({
+      findLigne: vi.fn().mockResolvedValue(draftLigne),
+    })
+    await expect(
+      service.republishDraft(TENANT, draftLigne.id),
+    ).rejects.toThrow()
+    expect(port.publish).not.toHaveBeenCalled()
+  })
+})

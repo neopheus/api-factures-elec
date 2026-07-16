@@ -229,6 +229,7 @@ describe('validateEnv', () => {
     expect(env.ANNUAIRE_SYNC_EVERY_MS).toBe(86_400_000)
     expect(env.ANNUAIRE_COMPLETE_EVERY_MS).toBe(604_800_000)
     expect(env.ANNUAIRE_PUBLISH_JOB_ATTEMPTS).toBe(3)
+    expect(env.ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS).toBe(300_000)
   })
 
   it('accepts an override of ANNUAIRE_DRIVER', () => {
@@ -267,5 +268,11 @@ describe('validateEnv', () => {
         ANNUAIRE_PUBLISH_JOB_ATTEMPTS: '0',
       }),
     ).toThrow(/ANNUAIRE_PUBLISH_JOB_ATTEMPTS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS: '0',
+      }),
+    ).toThrow(/ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS/)
   })
 })

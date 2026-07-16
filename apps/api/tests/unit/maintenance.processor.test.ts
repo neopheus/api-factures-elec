@@ -14,11 +14,16 @@ function build() {
   const ereportingSweep = {
     sweep: vi.fn().mockResolvedValue(4),
   }
+  const annuaireSweep = {
+    sweepSync: vi.fn().mockResolvedValue(5),
+    sweepStuckDrafts: vi.fn().mockResolvedValue(6),
+  }
   const processor = new MaintenanceProcessor(
     reconciliation as never,
     sessionMaintenance as never,
     archiveRetry as never,
     ereportingSweep as never,
+    annuaireSweep as never,
   )
   return {
     processor,
@@ -26,6 +31,7 @@ function build() {
     sessionMaintenance,
     archiveRetry,
     ereportingSweep,
+    annuaireSweep,
   }
 }
 
@@ -76,6 +82,36 @@ describe('MaintenanceProcessor.process', () => {
     expect(archiveRetry.sweepFailedArchives).not.toHaveBeenCalled()
   })
 
+  it('dispatches annuaire-sync-diff jobs to the annuaire sweep service (TypeFlux=D, Task 9)', async () => {
+    const { processor, annuaireSweep, ereportingSweep } = build()
+
+    await processor.process({ name: 'annuaire-sync-diff' } as never)
+
+    expect(annuaireSweep.sweepSync).toHaveBeenCalledTimes(1)
+    expect(annuaireSweep.sweepSync).toHaveBeenCalledWith('D')
+    expect(annuaireSweep.sweepStuckDrafts).not.toHaveBeenCalled()
+    expect(ereportingSweep.sweep).not.toHaveBeenCalled()
+  })
+
+  it('dispatches annuaire-sync-full jobs to the annuaire sweep service (TypeFlux=C, Task 9)', async () => {
+    const { processor, annuaireSweep } = build()
+
+    await processor.process({ name: 'annuaire-sync-full' } as never)
+
+    expect(annuaireSweep.sweepSync).toHaveBeenCalledTimes(1)
+    expect(annuaireSweep.sweepSync).toHaveBeenCalledWith('C')
+    expect(annuaireSweep.sweepStuckDrafts).not.toHaveBeenCalled()
+  })
+
+  it('dispatches annuaire-republish-sweep jobs to the annuaire sweep service (Task 9, injection revue STUCK-DRAFT)', async () => {
+    const { processor, annuaireSweep } = build()
+
+    await processor.process({ name: 'annuaire-republish-sweep' } as never)
+
+    expect(annuaireSweep.sweepStuckDrafts).toHaveBeenCalledTimes(1)
+    expect(annuaireSweep.sweepSync).not.toHaveBeenCalled()
+  })
+
   it('ignores a genuinely unknown job name without throwing (forward-compat)', async () => {
     const {
       processor,
@@ -83,6 +119,7 @@ describe('MaintenanceProcessor.process', () => {
       sessionMaintenance,
       archiveRetry,
       ereportingSweep,
+      annuaireSweep,
     } = build()
 
     await expect(
@@ -92,5 +129,7 @@ describe('MaintenanceProcessor.process', () => {
     expect(sessionMaintenance.purgeExpiredSessions).not.toHaveBeenCalled()
     expect(archiveRetry.sweepFailedArchives).not.toHaveBeenCalled()
     expect(ereportingSweep.sweep).not.toHaveBeenCalled()
+    expect(annuaireSweep.sweepSync).not.toHaveBeenCalled()
+    expect(annuaireSweep.sweepStuckDrafts).not.toHaveBeenCalled()
   })
 })

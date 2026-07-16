@@ -141,6 +141,13 @@
       "when": 1784161800000,
       "tag": "0019_annuaire_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784161900000,
+      "tag": "0020_annuaire_stale_drafts",
+      "breakpoints": true
     }
   ]
 }
