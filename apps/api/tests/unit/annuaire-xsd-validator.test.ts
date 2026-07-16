@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ANNUAIRE_ACTUALISATION_XSD_PATH,
   ANNUAIRE_CONSULTATION_XSD_PATH,
   AnnuaireXsdToolingError,
+  validateAnnuaireActualisationXml,
   validateAnnuaireConsultationXml,
 } from '../../src/annuaire/annuaire-xsd-validator.js'
-import { ANNUAIRE_CONSULTATION_XSD as TEST_XSD_PATH } from '../helpers/annuaire-xsd.js'
+import { generateActualisationXml } from '../../src/annuaire/flux13-xml.js'
+import {
+  ANNUAIRE_ACTUALISATION_XSD as TEST_ACTUALISATION_XSD_PATH,
+  ANNUAIRE_CONSULTATION_XSD as TEST_XSD_PATH,
+} from '../helpers/annuaire-xsd.js'
 
 // Miroir tests/unit/ereporting-xsd-validator.test.ts (helper PROD async, cf.
 // annuaire-xsd-validator.ts) — distingue valide / XSD-invalide (résultat) /
@@ -53,5 +59,49 @@ describe('validateAnnuaireConsultationXml (PROD)', () => {
     const err = new AnnuaireXsdToolingError('raw string cause')
     expect(err.message).toContain('raw string cause')
     expect(err.cause).toBe('raw string cause')
+  })
+})
+
+// Prod validator du F13 (Task 8) — AnnuairePublicationService valide son
+// PROPRE XML généré avant publication (defense-in-depth born-rejetee).
+describe('validateAnnuaireActualisationXml (PROD)', () => {
+  it('résout le MÊME chemin XSD que le helper de test (dev/test/prod cohérents)', () => {
+    expect(ANNUAIRE_ACTUALISATION_XSD_PATH).toBe(TEST_ACTUALISATION_XSD_PATH)
+  })
+
+  it('valide un F13 XSD-conforme (golden generateActualisationXml)', async () => {
+    const xml = generateActualisationXml({
+      codesRoutage: [],
+      lignes: [
+        {
+          nature: 'D',
+          dateDebut: '20260901',
+          maille: { siren: '123456789', siret: '12345678900011' },
+          plateforme: '0007',
+        },
+      ],
+    })
+    const result = await validateAnnuaireActualisationXml(xml)
+    expect(result).toEqual({ valid: true, errors: '' })
+  })
+
+  it('rapporte un F13 XSD-invalide comme un RÉSULTAT (pas une exception) — rejet sémantique (born-rejetee)', async () => {
+    const result = await validateAnnuaireActualisationXml(
+      '<AnnuaireActualisation><Bogus/></AnnuaireActualisation>',
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors.length).toBeGreaterThan(0)
+  })
+
+  it("lève AnnuaireXsdToolingError (jamais un rejet sémantique) quand l'outil est indisponible (ENOENT)", async () => {
+    let caught: unknown
+    try {
+      await validateAnnuaireActualisationXml('<AnnuaireActualisation/>', {
+        binary: 'xmllint-does-not-exist-factelec-test',
+      })
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(AnnuaireXsdToolingError)
   })
 })

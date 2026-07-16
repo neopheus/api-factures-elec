@@ -24,7 +24,11 @@ import { DATE_RE, SIREN_RE, SIRET_RE } from './nomenclature.js'
 //     (annuaire.repository.ts upsertDirectoryEntries) — un piège de
 //     collision entre « absent » et « vide » (le « coalesce('') latent
 //     trap » nommé dans la revue).
-function emptyToUndefined(v: unknown): unknown {
+// Exportée (Task 8) : `annuaire-publication.schema.ts` réutilise EXACTEMENT
+// cette même normalisation pour les champs optionnels du BODY (siret/
+// routageId/suffixe/dateFin/consentId, injection revue T5#1) plutôt que de
+// redéfinir une seconde fonction subtilement différente.
+export function emptyToUndefined(v: unknown): unknown {
   return v === '' ? undefined : v
 }
 
@@ -35,7 +39,9 @@ function emptyToUndefined(v: unknown): unknown {
 // une contrainte réglementaire : ne jamais la confondre avec un pattern XSD.
 const DEFENSIVE_MAX_LEN = 70
 
-function optionalToken(pattern?: RegExp, message?: string) {
+// Exportée (Task 8) : réutilisée par `annuaire-publication.schema.ts` pour
+// les mêmes identifiants de maille optionnels, cette fois portés en BODY.
+export function optionalToken(pattern?: RegExp, message?: string) {
   const base = pattern
     ? z.string().trim().min(1).max(DEFENSIVE_MAX_LEN).regex(pattern, message)
     : z.string().trim().min(1).max(DEFENSIVE_MAX_LEN)

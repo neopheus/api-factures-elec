@@ -1,17 +1,36 @@
 import {
+  Body,
   ConflictException,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   NotFoundException,
+  Param,
+  Post,
+  Put,
   Query,
+  UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
-import { parseQuery } from '../common/validation.js'
+import { parseBody, parseQuery } from '../common/validation.js'
+import { LigneSlotConflictError } from './annuaire.repository.js'
 // biome-ignore lint/style/useImportType: AnnuaireConsultationService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { AnnuaireConsultationService } from './annuaire-consultation.service.js'
+import {
+  endEffectBodySchema,
+  publishLigneBodySchema,
+} from './annuaire-publication.schema.js'
+// biome-ignore lint/style/useImportType: AnnuairePublicationService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
+import {
+  AnnuairePublicationService,
+  ConsentRequiredError,
+  InvalidLignePeriodError,
+  StaleLigneTransitionError,
+} from './annuaire-publication.service.js'
 import {
   lignesQuerySchema,
   resolutionQuerySchema,
@@ -22,15 +41,20 @@ import {
   RecipientUnaddressableError,
 } from './ligne-adressage.js'
 
-// Consultation annuaire (Task 7, plan 2.4) — dual-auth (`TenantAuthGuard` :
-// clé API OU session, jamais admin — motif `EreportingController`, 2.3
-// Task 9). Surface de LECTURE SEULE sur le miroir tenant-scopé (alimenté par
-// la sync Flux 14, Task 9) et sur la résolution de routage (Task 2) — la
-// brique que le futur routage d'émission consommera (câblage différé,
-// périmètre 2.4).
+// Consultation (Task 7) + publication consent-gated (Task 8, plan 2.4) —
+// dual-auth (`TenantAuthGuard` : clé API OU session, jamais admin — motif
+// `EreportingController`, 2.3 Task 9) sur TOUS les endpoints. Deux services
+// distincts injectés (`consultation`/`publication`, noms distincts des
+// méthodes du contrôleur — attention prêtée au shadowing propriété/méthode,
+// cf. message de tâche) : `AnnuaireConsultationService` (lecture seule du
+// miroir Flux 14) et `AnnuairePublicationService` (écriture Flux 13 côté PA,
+// gate consentement D5, machine à états Task 4).
 @Controller('annuaire')
 export class AnnuaireController {
-  constructor(private readonly consultation: AnnuaireConsultationService) {}
+  constructor(
+    private readonly consultation: AnnuaireConsultationService,
+    private readonly publication: AnnuairePublicationService,
+  ) {}
 
   // Recherche dans le miroir de consultation, filtrée par SIREN (RLS fait
   // déjà toute l'isolation tenant côté repository — aucun autre tenant
@@ -85,5 +109,107 @@ export class AnnuaireController {
       }
       throw err
     }
+  }
+
+  // Publication d'une ligne (Task 8) : gate consentement (422 AVANT toute
+  // écriture, D5) → validité/génération F13 XSD-validée → transmission via
+  // le port → draft→published. Succès partiel au grain ligne (D13) : un F13
+  // localement invalide (born-rejetee, T4-F1) répond quand même 201 — la
+  // RESSOURCE (la ligne) a bien été créée, seul SON statut interne est
+  // `rejetee` (cf. `status`/`rejectReason` du corps de réponse).
+  @Post('lignes')
+  @UseGuards(TenantAuthGuard)
+  async publish(@CurrentTenant() tenantId: string, @Body() body: unknown) {
+    const parsed = parseBody(publishLigneBodySchema, body)
+    try {
+      return await this.publication.publishLigne(tenantId, parsed)
+    } catch (err) {
+      throw this.mapPublicationError(err)
+    }
+  }
+
+  // Fin d'effet (Task 8) : positionne `dateFin` sur une ligne EXISTANTE du
+  // tenant. 404 anti-fuite si l'id est inconnu/hors tenant (même motif que
+  // `resolution`), 422 si `dateFin` ne suit pas strictement la `dateDebut`
+  // existante, 409 si la ligne est déjà dans un statut terminal
+  // (rejetee/masked — `updateDateFin`, annuaire.repository.ts).
+  @Put('lignes/:id')
+  @UseGuards(TenantAuthGuard)
+  async endEffect(
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const existing = await this.publication.getLigne(tenantId, id)
+    if (!existing) throw this.notFound()
+    const parsed = parseBody(endEffectBodySchema, body)
+    try {
+      await this.publication.endEffect(tenantId, id, parsed.dateFin)
+    } catch (err) {
+      throw this.mapPublicationError(err)
+    }
+    return { id, dateFin: parsed.dateFin }
+  }
+
+  // Masquage (Task 8) : deposee→masked (A-DEADLOCK, immédiat-terminal, D6).
+  // 404 anti-fuite si l'id est inconnu/hors tenant, 409 si la ligne n'est pas
+  // dans le statut `deposee` (déjà masquée, encore draft/published, ou née
+  // rejetee).
+  @Delete('lignes/:id')
+  @HttpCode(204)
+  @UseGuards(TenantAuthGuard)
+  async mask(
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+  ): Promise<void> {
+    const existing = await this.publication.getLigne(tenantId, id)
+    if (!existing) throw this.notFound()
+    try {
+      await this.publication.maskLigne(tenantId, id)
+    } catch (err) {
+      throw this.mapPublicationError(err)
+    }
+  }
+
+  // Ne mappe QUE les erreurs qu'un endpoint HTTP de ce contrôleur peut
+  // effectivement produire (`publishLigne`/`endEffect`/`maskLigne`) —
+  // `MotifRequiredError` (levée uniquement par `recordAck`, SANS route HTTP
+  // dans cette tâche, D7 — motif `EreportingStatusService`) n'apparaît
+  // délibérément PAS ici : un branchement mort pour une erreur qu'aucun
+  // appelant HTTP ne peut jamais déclencher serait un faux sentiment de
+  // couverture (`recordAck` est testé directement, e2e/unitaire).
+  private mapPublicationError(err: unknown): unknown {
+    if (err instanceof ConsentRequiredError) {
+      return new UnprocessableEntityException(
+        problem(422, ProblemType.businessRule, 'Consent required', {
+          detail:
+            'aucun consentement actif ne couvre cette maille (§3.5.5.5, D5)',
+        }),
+      )
+    }
+    if (err instanceof InvalidLignePeriodError) {
+      return new UnprocessableEntityException(
+        problem(422, ProblemType.validation, 'Invalid period', {
+          detail: err.message,
+        }),
+      )
+    }
+    if (
+      err instanceof LigneSlotConflictError ||
+      err instanceof StaleLigneTransitionError
+    ) {
+      return new ConflictException(
+        problem(409, ProblemType.conflict, 'Conflict', {
+          detail: err.message,
+        }),
+      )
+    }
+    return err
+  }
+
+  private notFound(): NotFoundException {
+    return new NotFoundException(
+      problem(404, ProblemType.notFound, 'Unknown ligne'),
+    )
   }
 }

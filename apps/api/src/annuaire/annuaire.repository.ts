@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, notInArray, sql } from 'drizzle-orm'
 import {
   annuaireConsents,
   annuaireDirectoryEntries,
@@ -50,6 +50,14 @@ export interface NewLigne {
   // REQUIS (A-DEADLOCK/plan D5) : une ligne ne peut jamais exister sans sa
   // preuve de consentement (FK restrict, migration 0018).
   consentId: string
+  // Rejet sémantique LOCAL pré-transmission (Task 8, injection revue
+  // born-rejetee — miroir EreportingRepository.insertTransmission
+  // /rejectMotif, 2.3-T8) : quand fourni, la ligne naît DIRECTEMENT
+  // `rejetee` (événement de GENÈSE fromStatus=null → toStatus='rejetee',
+  // actor='platform') — JAMAIS une transition draft→rejetee, INTERDITE par
+  // la machine (Task 4, ALLOWED.draft = ['published'] seulement). Omis
+  // (défaut) : comportement STRICTEMENT inchangé (statut initial 'draft').
+  rejectMotif?: string
 }
 
 export interface LigneSummary {
@@ -157,7 +165,12 @@ export class AnnuaireRepository {
 
   // Preuve de consentement (§3.5.5.5, D5) : INSERT seul, la révocation se
   // fait par `revokedAt` (pas de méthode de mutation ici — hors périmètre
-  // Task 5 ; Task 8 pilotera la révocation via un UPDATE dédié si besoin).
+  // Task 5). Task 8 (Produces/Endpoints) ne liste AUCUN endpoint/méthode de
+  // révocation — DÉLIBÉRÉMENT DIFFÉRÉ (cf. rapport Task 8) : la colonne et
+  // le grant UPDATE (migration 0019) existent déjà et permettent une
+  // révocation par UPDATE direct (identique à
+  // annuaire-persistence.e2e.test.ts) le jour où un endpoint/outillage
+  // ops est spécifié.
   async insertConsent(
     tenantId: string,
     input: NewConsent,
@@ -231,6 +244,36 @@ export class AnnuaireRepository {
     })
   }
 
+  // Lecture RLS-scopée d'un consentement par id (Task 8 : chemin
+  // `consentId` explicite du body `POST /annuaire/lignes` — l'appelant DOIT
+  // encore vérifier `revokedAt`/couverture, cf. AnnuairePublicationService ;
+  // cette méthode ne fait qu'exposer la ligne, elle n'arbitre rien).
+  async findConsentById(
+    tenantId: string,
+    id: string,
+  ): Promise<ConsentSummary | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          id: annuaireConsents.id,
+          siren: annuaireConsents.siren,
+          siret: annuaireConsents.siret,
+          routageId: annuaireConsents.routageId,
+          suffixe: annuaireConsents.suffixe,
+          consentType: annuaireConsents.consentType,
+          signerIdentity: annuaireConsents.signerIdentity,
+          evidenceRef: annuaireConsents.evidenceRef,
+          obtainedAt: annuaireConsents.obtainedAt,
+          revokedAt: annuaireConsents.revokedAt,
+          createdAt: annuaireConsents.createdAt,
+        })
+        .from(annuaireConsents)
+        .where(eq(annuaireConsents.id, id))
+        .limit(1)
+      return rows[0] ?? null
+    })
+  }
+
   // INSERT (statut initial `draft`, consentId REQUIS) + événement genèse
   // `draft` (from=NULL, actor='platform') dans la MÊME transaction — miroir
   // d'InvoicesRepository.insertReceived / EreportingRepository
@@ -243,6 +286,14 @@ export class AnnuaireRepository {
     input: NewLigne,
   ): Promise<{ id: string }> {
     return this.tenant.run(tenantId, async (db) => {
+      // Born-rejetee (Task 8) : statut initial 'rejetee' quand `rejectMotif`
+      // est fourni — cette ligne n'occupe JAMAIS le slot d'adressage (l'index
+      // partiel migration 0018 exclut `status IN ('rejetee','masked')`), donc
+      // aucun risque de conflit 23505 même si une Définition active existe
+      // déjà sur la même maille×date.
+      const initialStatus: AnnuaireLigneStatus = input.rejectMotif
+        ? 'rejetee'
+        : 'draft'
       let inserted: { id: string }[]
       try {
         inserted = await db
@@ -258,7 +309,8 @@ export class AnnuaireRepository {
             dateFin: input.dateFin ?? null,
             plateforme: input.plateforme,
             consentId: input.consentId,
-            status: 'draft',
+            status: initialStatus,
+            rejectReason: input.rejectMotif ?? null,
           })
           .returning({ id: annuaireLignes.id })
       } catch (err) {
@@ -273,7 +325,8 @@ export class AnnuaireRepository {
         tenantId,
         ligneId: row.id,
         fromStatus: null,
-        toStatus: 'draft',
+        toStatus: initialStatus,
+        motif: input.rejectMotif ?? null,
         actor: 'platform',
       })
       return { id: row.id }
@@ -355,6 +408,65 @@ export class AnnuaireRepository {
         motif: motif ?? null,
         actor,
       })
+    })
+  }
+
+  // Lecture RLS-scopée d'une ligne unique (Task 8 : existence/appartenance
+  // tenant pour le 404 anti-fuite des endpoints PUT/DELETE, miroir
+  // EreportingRepository.findTransmissionStatus — ici la ligne COMPLÈTE, pas
+  // seulement le statut, car `endEffect` a aussi besoin de `dateDebut`).
+  async findLigne(tenantId: string, id: string): Promise<LigneSummary | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          id: annuaireLignes.id,
+          siren: annuaireLignes.siren,
+          siret: annuaireLignes.siret,
+          routageId: annuaireLignes.routageId,
+          suffixe: annuaireLignes.suffixe,
+          nature: annuaireLignes.nature,
+          dateDebut: annuaireLignes.dateDebut,
+          dateFin: annuaireLignes.dateFin,
+          plateforme: annuaireLignes.plateforme,
+          status: annuaireLignes.status,
+          consentId: annuaireLignes.consentId,
+          trackingRef: annuaireLignes.trackingRef,
+          rejectReason: annuaireLignes.rejectReason,
+          createdAt: annuaireLignes.createdAt,
+          updatedAt: annuaireLignes.updatedAt,
+        })
+        .from(annuaireLignes)
+        .where(eq(annuaireLignes.id, id))
+        .limit(1)
+      return rows[0] ?? null
+    })
+  }
+
+  // "Fin d'effet" (Task 8, PUT /annuaire/lignes/:id) : positionne `dateFin`
+  // SANS transiter le statut (ce n'est pas un changement de cycle de vie,
+  // Task 4 — aucun événement journal n'est donc écrit ici). Exclut les
+  // statuts TERMINAUX (`rejetee`/`masked`, annuaire-lifecycle.ts) : une ligne
+  // déjà close ne peut plus voir sa période modifiée. Renvoie `false` si
+  // aucune ligne n'a été affectée (id inconnu/hors tenant/déjà terminale) —
+  // à l'appelant de distinguer 404 (existence, via `findLigne`) de 409
+  // (statut terminal).
+  async updateDateFin(
+    tenantId: string,
+    id: string,
+    dateFin: string,
+  ): Promise<boolean> {
+    return this.tenant.run(tenantId, async (db) => {
+      const updated = await db
+        .update(annuaireLignes)
+        .set({ dateFin, updatedAt: new Date() })
+        .where(
+          and(
+            eq(annuaireLignes.id, id),
+            notInArray(annuaireLignes.status, ['rejetee', 'masked']),
+          ),
+        )
+        .returning({ id: annuaireLignes.id })
+      return updated.length > 0
     })
   }
 

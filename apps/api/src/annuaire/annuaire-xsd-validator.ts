@@ -21,6 +21,16 @@ export const ANNUAIRE_CONSULTATION_XSD_PATH = resolve(
   '../../../../docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/0 - Annuaire/consultation/Annuaire_Consultation_F14.xsd',
 )
 
+// Chemin du XSD DGFiP annuaire — Actualisation F13 (Task 8, prod validator :
+// AnnuairePublicationService valide le F13 QU'ELLE VIENT DE GÉNÉRER, avant
+// tout appel au port de transmission — miroir EreportingGenerationService
+// /validateEreportingXml, 2.3-T8). Même résolution relative que
+// tests/helpers/annuaire-xsd.ts (ANNUAIRE_ACTUALISATION_XSD).
+export const ANNUAIRE_ACTUALISATION_XSD_PATH = resolve(
+  import.meta.dirname,
+  '../../../../docs/reglementaire/specifications-externes-v3.2/3- XSD_v3.2/0 - Annuaire/actualisation/Annuaire_Actualisation_F12-F13.xsd',
+)
+
 export interface XsdValidationResult {
   valid: boolean
   errors: string
@@ -45,8 +55,9 @@ export class AnnuaireXsdToolingError extends Error {
   }
 }
 
-// Validation XSD DGFiP (PROD, async — execFile, jamais execFileSync) du flux
-// F14 reçu en consultation. Distingue TROIS issues (jamais confondues,
+// Validation XSD DGFiP (PROD, async — execFile, jamais execFileSync) — noyau
+// partagé par les deux sens du flux annuaire (Consultation F14 reçue,
+// Actualisation F13 générée). Distingue TROIS issues (jamais confondues,
 // discipline Task 8 e-reporting #6) :
 //  (a) XML valide -> { valid: true } ;
 //  (b) XML XSD-invalide (xmllint s'exécute, rapporte des erreurs de schéma
@@ -56,22 +67,18 @@ export class AnnuaireXsdToolingError extends Error {
 //      opérationnelle, jamais un rejet.
 // `opts.binary` n'est overridable QUE pour forcer déterministement le chemin
 // ENOENT en test (jamais en usage normal).
-export async function validateAnnuaireConsultationXml(
+async function validateAgainstXsd(
+  xsdPath: string,
   xml: string,
-  opts: { binary?: string } = {},
+  opts: { binary?: string },
 ): Promise<XsdValidationResult> {
   const binary = opts.binary ?? 'xmllint'
   const dir = await mkdtemp(join(tmpdir(), 'factelec-annuaire-xsd-'))
-  const xmlPath = join(dir, 'consultation.xml')
+  const xmlPath = join(dir, 'instance.xml')
   try {
     await writeFile(xmlPath, xml, 'utf8')
     try {
-      await execFileAsync(binary, [
-        '--noout',
-        '--schema',
-        ANNUAIRE_CONSULTATION_XSD_PATH,
-        xmlPath,
-      ])
+      await execFileAsync(binary, ['--noout', '--schema', xsdPath, xmlPath])
       return { valid: true, errors: '' }
     } catch (error) {
       const e = error as NodeJS.ErrnoException & { stderr?: string }
@@ -83,4 +90,26 @@ export async function validateAnnuaireConsultationXml(
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+}
+
+export async function validateAnnuaireConsultationXml(
+  xml: string,
+  opts: { binary?: string } = {},
+): Promise<XsdValidationResult> {
+  return validateAgainstXsd(ANNUAIRE_CONSULTATION_XSD_PATH, xml, opts)
+}
+
+// Validation PROD du F13 (Actualisation) — appelée par
+// AnnuairePublicationService sur le XML QU'ELLE VIENT ELLE-MÊME DE GÉNÉRER
+// (defense-in-depth : generateActualisationXml/Task 3 est déjà testé
+// XSD-valide à 100 % sur golden vectors, cette validation couvre un champ
+// non contraint par un pattern XSD positif — ex. Suffixe/RoutageId,
+// xs:token libre — qui échapperait à la validation zod de la frontière HTTP
+// mais resterait structurellement invalide une fois sérialisé). Un échec ICI
+// est un rejet born-rejetee (Task 8), jamais une transition depuis `draft`.
+export async function validateAnnuaireActualisationXml(
+  xml: string,
+  opts: { binary?: string } = {},
+): Promise<XsdValidationResult> {
+  return validateAgainstXsd(ANNUAIRE_ACTUALISATION_XSD_PATH, xml, opts)
 }
