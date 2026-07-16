@@ -1,7 +1,9 @@
+import Big from 'big.js'
 import { create } from 'xmlbuilder2'
 import type { XMLBuilder } from 'xmlbuilder2/lib/interfaces.js'
 import type {
   Flux10Invoice,
+  Flux10PaymentAggregate,
   Flux10PaymentInvoice,
   Flux10Report,
   PaymentsReport,
@@ -17,6 +19,16 @@ import type {
 // targetNamespace mais ereporting.xsd, qui déclare l'élément racine <Report>,
 // n'en a pas). Confirmé empiriquement par xmllint (tests/unit/flux10-xml).
 export function generateEreportingXml(report: Flux10Report): string {
+  // XOR (D7, revue T7 MEDIUM-2) : un Report porte transactions OU payments,
+  // jamais les deux — le type ne l'impose pas (discipline d'appelant, T8).
+  // Sans ce garde, un appelant fautif verrait son PaymentsReport PERDU en
+  // silence (l'ancien `else if` avalait payments quand transactions était
+  // non-null).
+  if (report.transactions && report.payments) {
+    throw new Error(
+      'generateEreportingXml: un Flux10Report doit porter transactions OU payments, jamais les deux (XOR, D7)',
+    )
+  }
   const doc = create({ version: '1.0', encoding: 'UTF-8' })
   const root = doc.ele('Report')
   appendReportDocument(root, report.document)
@@ -101,14 +113,26 @@ function appendInvoice(tr: XMLBuilder, inv: Flux10Invoice): void {
   }
 }
 
-// TB-3 supporté structurellement (D10) ; l'agrégation des paiements (montants
-// encaissés par taux) est différée faute de source de capture des encaissements.
+// TB-3 : PaymentsReport — DEUX sous-flux (D7, Task 7) émis dans l'ORDRE de la
+// séquence XSD (payment.xsd, TB-3) : ReportPeriod, puis Invoice(0..n, 10.2),
+// puis Transactions(0..n, 10.4) — la coexistence des deux est XSD-valide
+// (round-trip xmllint, tests/unit/flux10-xml.test.ts).
 function appendPaymentsReport(root: XMLBuilder, pmt: PaymentsReport): void {
   const pr = root.ele('PaymentsReport')
   const p = pr.ele('ReportPeriod')
   p.ele('StartDate').txt(pmt.periodStart)
   p.ele('EndDate').txt(pmt.periodEnd)
   for (const inv of pmt.invoices) appendPaymentInvoice(pr, inv)
+  for (const agg of pmt.transactions) appendPaymentAggregate(pr, agg)
+}
+
+// TT-95/TT-99 : MONTANT 19.6 (Annexe 6 v1.10) — les montants CAPTURÉS/agrégés
+// en amont (Tasks 4/5/7, payments/flux10-payments-aggregate) restent en 2
+// décimales (motif AMOUNT_RE, cohérent avec les totaux facture) ; l'ÉMETTEUR,
+// seule frontière qui connaît le format XSD cible, reformate ici à 6
+// décimales (D7 : « l'émetteur formate — les captures sont en 2 décimales »).
+function formatPaymentAmount(amount: string): string {
+  return new Big(amount).toFixed(6)
 }
 
 function appendPaymentInvoice(pr: XMLBuilder, inv: Flux10PaymentInvoice): void {
@@ -121,6 +145,24 @@ function appendPaymentInvoice(pr: XMLBuilder, inv: Flux10PaymentInvoice): void {
     const s = pay.ele('SubTotals')
     s.ele('TaxPercent').txt(st.taxPercent)
     if (st.currency) s.ele('CurrencyCode').txt(st.currency)
-    s.ele('Amount').txt(st.amount)
+    s.ele('Amount').txt(formatPaymentAmount(st.amount))
+  }
+}
+
+// TG-37/38/39 : forme agrégée B2C (10.4) — un `<Transactions>` par date de
+// paiement, SubTotals par taux à l'intérieur (aucune réf facture ni
+// catégorie — cf. bannière `Flux10PaymentAggregate`, flux10-model.ts).
+function appendPaymentAggregate(
+  pr: XMLBuilder,
+  agg: Flux10PaymentAggregate,
+): void {
+  const x = pr.ele('Transactions')
+  const pay = x.ele('Payment')
+  pay.ele('Date').txt(agg.paymentDate)
+  for (const st of agg.subtotals) {
+    const s = pay.ele('SubTotals')
+    s.ele('TaxPercent').txt(st.taxPercent)
+    if (st.currency) s.ele('CurrencyCode').txt(st.currency)
+    s.ele('Amount').txt(formatPaymentAmount(st.amount))
   }
 }

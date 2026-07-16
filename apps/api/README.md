@@ -44,7 +44,19 @@ de livraison **distincte** du CDV facture (`prepared → transmitted →
 {acknowledged, rejected(601)}`, `parked` retryable) et une **frontière
 d'acquittement** dédiée. Adhésion **OpenPeppol** + PKI + SMP + stack AS4 et
 adaptateurs de transport réels (sftp/as2/as4/as4-peppol/api) différés au
-déploiement. Consomme
+déploiement, puis en **3.2** avec la **ventilation biens/services** et les
+**paiements TB-3 (Flux 10)** : discriminant `nature` optionnel au niveau
+ligne dans `@factelec/invoice-core` (**0.4.0**, rétro-compat sans migration),
+ventilation **réelle** (total conservé, résidu ≤ 1 centime absorbé côté
+services) des cadres de facturation **mixtes** M1/M2/M4 pour les factures
+**naturées**, activation du **10.1 B2Bi par facture** (TG-8, misrouting
+export B2C résolu), **capture des encaissements** (idempotente, intégrité
+anti-taux-inconnu/anti-sur-encaissement) et **agrégation/transmission**
+TB-3 (10.2 per-facture / 10.4 agrégé) selon la règle **SERVICES-ONLY**
+(note 119, autoliquidation et option débits exclues), sur une **2ᵉ cadence
+de transmission dédiée** (le Tableau 13 distingue paiements et
+transactions pour le régime réel normal mensuel) et un ordonnanceur à 3
+couches étendu (`flux_kind='payments'`). Consomme
 `@factelec/invoice-core` (validation, calculs, génération des formats du socle)
 et expose l'ensemble derrière une couche d'authentification et d'isolation
 multi-tenant Postgres.
@@ -488,47 +500,86 @@ endpoints (`ereporting.controller.ts`).
 
 **LIVRÉ de bout en bout : le sous-flux 10.3 (B2C domestique), transactions
 (TB-2)**, de la classification par facture jusqu'à l'acquittement PPF et la
-consultation. **DIFFÉRÉS EXPLICITES — ne pas surpromettre « B2B international
-livré »** :
+consultation. **Étendu en 3.2** (plan « paiements & ventilation biens/
+services ») : le **10.1 (B2Bi, transactions internationales)** est désormais
+**émis par facture** (TG-8, § Agrégation et classification ci-dessous) ; les
+**cadres mixtes M1/M2/M4** sont **réellement ventilés** (TLB1/TPS1) pour les
+factures **naturées** ; les **paiements TB-3** (10.2 per-facture / 10.4
+agrégé) sont **capturés et transmis**, mais **réservés aux prestations de
+services** (note 119, § Paiements ci-dessous). **DIFFÉRÉS EXPLICITES — ne pas
+surpromettre « B2B international/paiements complets » :**
 
-- **10.1/10.2 (B2Bi, transactions internationales)** — `classifyEreportingOperation`
-  (`flux10-aggregate.ts`) **classifie** correctement une opération
-  transfrontalière en `'10.1'`, mais aucune agrégation ni émission n'en est
-  faite : `aggregateTransactions` ne retient que la classe `'10.3'`. Le mapping
-  par facture (`TransactionsReport.invoices`, TG-8) reste une infrastructure
-  de type non câblée (toujours `[]` en sortie).
-- **TB-3 (paiements, 10.2/10.4)** — aucun modèle de capture des encaissements
-  n'existe dans `@factelec/invoice-core` ; `Flux10Report.payments` est
-  systématiquement `null` (XOR par construction, jamais les deux blocs à la
-  fois).
-- **Cadres de facturation MIXTES M1/M2/M4** — le modèle `Invoice` n'a **aucun
-  discriminant biens/services au niveau ligne** (`vatBreakdown` est groupé par
-  taux, pas par nature de ligne). Une ventilation forcée entre TLB1
-  (livraisons) et TPS1 (prestations) aurait **doublé** la base et la TVA
-  déclarées (un cadre M1 à 1000,00 €/200,00 € aurait été déclaré
-  2000,00 €/400,00 €). Décision : les factures à cadre mixte sont **exclues**
-  de l'agrégation (différées, comme 10.1/TB-3) plutôt que de fabriquer une
-  ventilation incorrecte — une période dont les seules factures 10.3 sont à
-  cadre mixte part donc à blanc.
+- **Cadres de facturation MIXTES M1/M2/M4, factures NON NATURÉES** — le
+  discriminant `nature` (`'goods'`/`'services'`, plan 3.2 D1) est
+  **optionnel** au niveau ligne (rétro-compat JSONB **sans migration**,
+  `@factelec/invoice-core` reste en **0.4.0**) : une facture historique, ou
+  dont **au moins une** ligne n'a pas de `nature`, reste **indécidable** —
+  `computeVatBreakdownByNature` renvoie `complete:false` et
+  `aggregateTransactions`/`aggregatePayments` la **différent** (skip typé +
+  log `deferredMixed`/`deferredIncomplete`), exactement comme en 2.3 —
+  **aucune ventilation partielle fabriquée**. Une période dont les seules
+  factures 10.3 sont à cadre mixte non naturé part donc toujours à blanc.
+- **Heuristique d'assujettissement de l'acheteur + repli export B2C→10.3 —
+  INTERPRÉTATIONS, à confirmer Annexe 7 (go-live)** : `classifyEreportingOperation`
+  (`flux10-aggregate.ts`) n'a **aucun** champ dédié « assujetti » dans le
+  modèle `Invoice` — l'heuristique retenue (présence d'un SIREN/SIRET,
+  BT-47, **ou** d'un numéro de TVA intracommunautaire, BT-48) fait primer le
+  **statut d'acheteur** sur le **pays** (correction du misrouting initial) :
+  un acheteur **non-assujetti** étranger (ex. particulier allemand achetant à
+  un vendeur FR) est un **export B2C** → `'10.3'`, agrégé **et émis** dans le
+  même bucket que le B2C domestique — **aucun sous-code export dédié**
+  aujourd'hui — jamais `'10.1'`. Un acheteur **assujetti** étranger est
+  `'10.1'` (B2Bi, émis PAR FACTURE, TG-8). Chaque export B2C est compté
+  séparément pour l'audit go-live (`isExportB2C`, log dédié, transactions
+  **et** paiements), sans effet sur les montants déclarés.
+- **TB-3 (paiements) — SERVICES-ONLY, note 119 citée verbatim** (§3.7.4 du
+  Dossier général v3.2, revue T7 finding A-T7-1, BINDING) : « les données de
+  paiement ne doivent être transmises qu'en cas de prestations de services,
+  hors opérations donnant lieu à autoliquidation de la TVA et option de TVA
+  sur les débits ». La part **biens** d'un encaissement n'est **jamais**
+  transmise (proratisation par taux, § Agrégation des paiements) ; une
+  facture 100 % biens ne produit **aucune** opération paiement. La clause
+  « hors option de TVA sur les débits » **n'a aucun champ correspondant**
+  dans le modèle `Invoice` — **différée honnêtement**, aucun signal fabriqué.
+- **Auto-seed du 212 (Encaissée) depuis un paiement capturé — REFUSÉ,
+  décision projet** : capturer un encaissement TB-3 (`POST /payments`)
+  **n'appose jamais automatiquement** la transition CDV `212 Encaissée`
+  (§ Cycle de vie CDV ci-dessus) — l'événement de statut CDV `212` ne porte
+  lui-même **ni montant ni taux** ; le déduire d'un encaissement
+  partiel/multi-référence aurait fabriqué une équivalence non garantie par la
+  spec. Les deux mécanismes restent **strictement indépendants** : une
+  facture peut être `212 Encaissée` sans aucun paiement TB-3 capturé, et
+  réciproquement.
 - **Adaptateurs de transport réels** (`sftp`/`as2`/`as4`/`api`) — `EreportingTransmissionModule`
   lève une erreur explicite et testée tant qu'un de ces drivers est
   sélectionné sans implémentation ; seul `local` (write-once testable) est
-  câblé en 2.3. Activation **au déploiement**.
+  câblé, **transactions et paiements confondus**. Activation **au
+  déploiement**.
 - **Push/acquittement PPF réel** — `EreportingStatusService.recordPpfStatus`
   est la **frontière** qu'un futur adaptateur webhook/annuaire appliquera ;
   elle est exercée **directement par les e2e** (aucune route HTTP entrante
-  n'existe pour recevoir un acquittement PPF push dans ce plan).
+  n'existe pour recevoir un acquittement PPF push dans ce plan) — même
+  frontière pour les deux `flux_kind` (transactions/paiements).
 - **Schematron / contrôles sémantiques Annexe 7** — non implémentés ; seule la
   validation **structurelle** XSD est faite (voir plus bas).
 - **Chemin RE (rectificatif)** — le type `RE` (`TRANSMISSION_TYPES`) est
   modélisé et n'entre jamais en conflit avec l'index unique `IN`, mais aucun
   flux applicatif ne produit de rectificatif dans ce plan (voir aussi le
-  runbook du slot A2 ci-dessous).
+  runbook du slot A2 ci-dessous — la même dette s'applique au slot
+  `flux_kind='payments'`).
 - **Provisioning des déclarants** — `EreportingRepository.upsertDeclarant`
   existe et est testé, mais **aucun endpoint HTTP ni script CLI** ne l'expose
   (contrairement à `pnpm provision:tenant`) : à ce jour, une ligne
   `ereporting_declarants` ne peut être créée qu'en insérant directement en
   base ou via un futur endpoint d'administration — non fourni dans ce plan.
+- **Validation de la devise capturée** — `POST /payments` accepte tout
+  `currency` non vide (`z.string().min(1)`), **jamais confrontée** à
+  `invoice.currency` ni à une liste ISO 4217 ; l'intégrité anti-sur-
+  encaissement compare les montants **par taux** sans tenir compte d'un
+  éventuel écart de devise. Différé (revue T5, LOW-2).
+- **Rôle `viewer` non testé en e2e sur `POST /payments`** — le triplet
+  `owner`/`admin`/`accountant` est prouvé en e2e ; le refus d'un `viewer` est
+  prouvé au niveau **unitaire** `RolesGuard` seulement (revue T5, LOW-3).
 
 **Aucun scellement ni signature au niveau message** (contraste explicite avec
 2.2) : le XSD `ereporting.xsd` DGFiP ne porte aucun élément de signature —
@@ -581,17 +632,43 @@ consultation) :
   (`fromStatus: 'transmitted'`, `actor: 'ppf'`), appliqué via
   `EreportingStatusService.recordPpfStatus`.
 
-### Agrégation et classification (10.3)
+### Agrégation et classification (10.1/10.3)
 
-`classifyEreportingOperation(invoice)` (pure) classe chaque facture en
-`'10.1'` (transfrontalière — différée), `'10.3'` (acheteur français **et**
-non-assujetti — agrégée) ou `'out'` (acheteur français **et** assujetti —
-relève de l'e-invoicing, exclue de l'e-reporting). `aggregateTransactions`
-regroupe les factures `'10.3'` éligibles d'une période par (date ‖ devise ‖
-catégorie TLB1/TPS1), sommant les montants en `big.js` (BT→TT). **Transmission
-à blanc optionnelle** (§2.3.3) : si aucune facture n'est éligible sur la
-période (ou si les seules factures 10.3 sont à cadre mixte, différées
-ci-dessus), `aggregateTransactions` renvoie `null` et **aucune écriture, aucun
+`classifyEreportingOperation(invoice)` (pure) classe chaque facture selon
+deux règles appliquées dans l'ordre (amendement A1, revue Task 3, BINDING —
+« non-assujetti PRIME la règle pays ») : (1) acheteur **non-assujetti** (FR
+**ou** étranger, faute de champ dédié — heuristique SIREN/SIRET/vatId, voir
+§ Périmètre ci-dessus) → **toujours** `'10.3'`, y compris un export B2C ; (2)
+acheteur **assujetti et transfrontalier** → `'10.1'` ; (3) acheteur
+**assujetti et domestique** (les deux parties en FR) → `'out'`, exclue
+(relève de l'e-invoicing, pas de l'e-reporting).
+
+`aggregateTransactions` traite les deux classes retenues séparément (3.2,
+Task 3 — **activation** du 10.1, resté classifié-mais-non-émis en 2.3) :
+
+- **`'10.3'`** — regroupées par (date ‖ devise ‖ catégorie TLB1/TPS1),
+  montants sommés en `big.js` (BT→TT), dans `TransactionsReport.aggregated`
+  (TG-31). Le **cadre de facturation** (`businessProcessType`, BT-23)
+  détermine la catégorie : un cadre **unique** (M1 pur biens ou pur services)
+  va directement dans son bucket TLB1/TPS1 ; un cadre **MIXTE** (M1/M2/M4,
+  TLB1+TPS1 simultanés, plan 3.2 D2/D3) est ventilé via
+  `computeVatBreakdownByNature` — **total conservé, base exacte, résidu TVA
+  ≤ 1 centime absorbé côté services** (voir `compute.ts`,
+  `@factelec/invoice-core`) — pour les factures **naturées** (`nature`
+  renseigné sur **toutes** les lignes) ; une facture mixte **non naturée**
+  reste différée (§ Périmètre ci-dessus, compteur `deferredMixed`). BT-23
+  absent → repli **TLB1** par défaut (INTERPRÉTATION PROJET, à confirmer
+  go-live).
+- **`'10.1'`** — émises **PAR FACTURE** (TG-8) dans
+  `TransactionsReport.invoices` (`buildFlux10Invoice`) : ventilation TVA
+  **canonique** (UNTDID 5305, `vatBreakdown`), **pas** l'axe TLB1/TPS1 — le
+  discriminant `nature` ne concerne **que** l'agrégat B2C 10.3. `CompanyId`
+  vendeur vide si aucun SIREN côté vendeur (branche « acheteur FR assujetti +
+  vendeur étranger », à confirmer Annexe 7).
+
+**Transmission à blanc optionnelle** (§2.3.3) : si **aucune** opération
+e-reportable n'est éligible sur la période (ni agrégat 10.3, ni facture 10.1
+émise), `aggregateTransactions` renvoie `null` et **aucune écriture, aucun
 appel au port de transmission** n'a lieu — pas de « transmission vide »
 générée pour le principe.
 
@@ -600,9 +677,9 @@ compteur (persisté sur `ereporting_transmissions`) compte **toutes** les
 factures classées `'10.3'` sur la période, y compris celles à cadre mixte
 finalement **exclues** de l'agrégation — il peut donc **sur-compter** par
 rapport au nombre réel de factures reflétées dans les montants du XML. Les
-**montants déclarés au PPF restent exacts** (aucune facture à cadre mixte
-n'entre dans les sommes) ; seul ce compteur est une approximation à ne pas
-utiliser comme preuve d'exhaustivité.
+**montants déclarés au PPF restent exacts** (aucune facture à cadre mixte non
+naturée n'entre dans les sommes) ; seul ce compteur est une approximation à
+ne pas utiliser comme preuve d'exhaustivité.
 
 ### Génération et validation XML
 
@@ -639,6 +716,33 @@ branche `switch`/`if` sur le régime dans la logique de calcul) :
 > `simplifie`/`franchise` initialement codées un mois trop tôt (mois+1 au lieu
 > de mois+2) ont été corrigées suite à cette revue.
 
+**2ᵉ cadence — paiements TB-3 (même Tableau 13 primaire p.68, colonne dédiée,
+plan 3.2 D6)** : `computeDuePaymentPeriods`/`PAYMENTS_CADENCE_BY_REGIME`
+(`period.ts`) réutilisent **exclusivement** les formes existantes de
+`PeriodCadence` — aucune nouvelle forme (ni `quarter`, ni décades-paiement,
+ni « dernier jour du bimestre ») :
+
+| Régime TVA | Cadence PAIEMENT | Échéance (Tableau 13, verbatim) | vs cadence transactions |
+| --- | --- | --- | --- |
+| `reel_normal_mensuel` | Mensuelle (mois civil, **pas** de décades) | 11 du mois suivant, à 8h00 | **DIFFÈRE** — seul régime où paiements ≠ transactions (transactions décadaires 21 / 1ᵉʳ M+1 / 11 M+1) |
+| `reel_normal_trimestriel` | Mensuelle (mois civil) | 11 du mois suivant, à 8h00 | identique (post-hotfix `91531d3`) |
+| `simplifie` | Mensuelle (mois civil) | 1ᵉʳ du **2ᵉ** mois suivant, à 8h00 | identique |
+| `franchise` | Bimestrielle (bimestres civils) | 1ᵉʳ du **2ᵉ** mois suivant la fin du bimestre, à 8h00 | identique |
+
+> ⚠️ **CORRECTION BINDING (revue plan 3.2, Task 9)** — une transcription
+> antérieure du Tableau 13 avait fait circuler un texte **FAUX** pour cette
+> cadence (décades 20/10/10, « trimestriel trimestriel », franchise
+> « dernier jour du bimestre ») — vestige d'avant la réécriture D6. La table
+> ci-dessus est la cadence **réelle**, **triple-vérifiée** (extraction
+> cellule par cellule du Tableau 13 PRIMAIRE p.68, revue T6, source unique
+> `apps/api/src/ereporting/period.ts`) — même motif constant que la cadence
+> transactions (échéance PA = échéance de dépôt du déclarant + 1 jour).
+
+Même moteur de calcul que les transactions (`computeDuePeriodsForCadence`,
+fonction **pure**, `referenceDate` en paramètre — aucun `Date.now()`), même
+fenêtre bornée `MAX_DUE_PERIODS=2`, mêmes « 8h00 » modélisées en **08:00 UTC**
+(interprétation résiduelle, voir ci-dessous).
+
 **Interprétations projet résiduelles, à confirmer au go-live** :
 
 - Les « 8h00 » du Tableau 13 sont modélisées en **08:00 UTC** (≈ 09h/10h heure
@@ -665,23 +769,168 @@ branche `switch`/`if` sur le régime dans la logique de calcul) :
 `EreportingSweepService` (job répétable `EREPORTING_SWEEP_JOB`, périodicité
 `EREPORTING_SWEEP_EVERY_MS`) énumère les déclarants actifs de **tous les
 tenants** via la fonction `SECURITY DEFINER` `find_ereporting_declarants_due()`
-(hors contexte tenant, miroir de `find_failed_archives` 2.2), calcule pour
-chacun les périodes dues (`computeDuePeriods`) et enfile un job
-`ereporting-generate` par couple (déclarant, période due). **Trois couches de
-défense, aucune suffisante seule** :
+(hors contexte tenant, miroir de `find_failed_archives` 2.2), et enfile pour
+chacun, sur **deux cadences DISTINCTES et indépendantes** (plan 3.2, Task 8) :
 
-1. **Fenêtre bornée** (`MAX_DUE_PERIODS`, `period.ts`) — le balayage ne peut
-   jamais ré-enfiler un historique entier.
-2. **`jobId` déterministe** `${declarantId}:${fluxKind}:${periodStart}` —
-   BullMQ déduplique tant que le job existe encore dans Redis.
+- les périodes **transactions** dues (`computeDuePeriods`, `flux_kind='transactions'`) ;
+- les périodes **paiements** dues (`computeDuePaymentPeriods`, `flux_kind='payments'`
+  — la cadence PAIEMENT du Tableau 13, qui ne coïncide avec la cadence
+  transactions que pour 3 régimes sur 4, § Cadence ci-dessus).
+
+Un déclarant peut avoir des périodes transactions dues sans période paiement
+due, et réciproquement. **Trois couches de défense, identiques pour les deux
+flux, aucune suffisante seule** :
+
+1. **Fenêtre bornée** (`MAX_DUE_PERIODS`, table de cadence dédiée par flux,
+   `period.ts`) — le balayage ne peut jamais ré-enfiler un historique
+   entier, quelle que soit l'ancienneté du dernier passage réussi.
+2. **`jobId` déterministe** — BullMQ déduplique tant que le job existe
+   encore dans Redis. Transactions : `${declarantId}:${fluxKind}:${periodStart}`
+   (séparateur `:`, **legacy pré-existant** — dette BullMQ post-5.80.5, hors
+   périmètre). Paiements : `${declarantId}-payments-${periodStart}`
+   (séparateur `-`, **leçon 2.4-T9** — jamais `:` pour un flux introduit
+   après cette leçon ; voir le runbook ci-dessous pour le risque latent sur
+   le format legacy transactions).
 3. **Backstop base de données** — l'index unique partiel `WHERE type='IN'`
-   (migration `0016`) + `insertTransmission` idempotent (`created: false` →
-   le worker relit le statut et saute la période déjà traitée au lieu de la
-   ré-émettre au PPF).
+   (migration `0016`), **clé sur `flux_kind`** : un slot `payments` ne
+   collisionne **jamais** avec un slot `transactions` du même déclarant/
+   période. `insertTransmission` idempotent (`created: false` → le worker
+   relit le statut et saute la période déjà traitée au lieu de la
+   ré-émettre au PPF) complète la défense si les couches 1/2 laissaient
+   malgré tout passer un doublon.
 
-Le sweep n'enfile que des transactions **initiales** (`fluxKind='transactions'`,
-`type='IN'`) — les paiements (`payments`, différé D10) et les rectificatifs
-(`RE`) ne sont jamais enfilés automatiquement.
+Le sweep n'enfile que des flux **initiaux** (`type='IN'`) — les rectificatifs
+(`RE`) ne sont jamais enfilés automatiquement, quel que soit le `flux_kind`.
+
+### Paiements — capture des encaissements et agrégation TB-3 (3.2, D5/D7)
+
+Sous-domaine `apps/api/src/payments/*` (indépendant du sous-domaine
+`ereporting/*`, consommé par lui en aval) : modèle de capture
+(`payment.model.ts`), persistance (`payments.repository.ts`), service
+applicatif (`payments.service.ts`) et endpoints (`payments.controller.ts`).
+L'agrégation TB-3 elle-même (10.2/10.4) vit côté `ereporting/*`
+(`flux10-payments-aggregate.ts`), au même titre que `flux10-aggregate.ts`
+(10.1/10.3).
+
+**Capture EXPLICITE, jamais dérivée d'un statut CDV** — `POST /payments`
+(`{ invoiceId, paymentDate, reference, subtotals: [{ taxPercent, amount }] }`)
+enregistre un encaissement **constaté**, sans lien automatique avec le cycle
+de vie CDV facture (§ Auto-seed du 212, § Périmètre ci-dessus) : l'événement
+de statut `212 Encaissée` ne porte lui-même ni montant ni taux, il ne peut
+donc jamais servir de source pour fabriquer un paiement.
+
+**Idempotence `(invoice_id, reference)`** (index unique
+`payments_invoice_reference_unique`, migration `0024`) : `insertPayment`
+(`ON CONFLICT DO NOTHING` + reload, miroir `EreportingRepository
+.insertTransmission`/`CdvTransmissionRepository.insertTransmission`) — un
+re-POST de la **même** référence ne réécrit **jamais** rien de nouveau,
+même si le payload posté diffère (montants/taux) : **200 `created:false`**,
+valeurs d'**origine** conservées, payload divergent **silencieusement
+ignoré**. **Correction d'un encaissement mal saisi = poster une NOUVELLE
+référence**, jamais re-poster la même avec des valeurs différentes (aucun
+endpoint de correction en place). `payments`/`payment_subtotals` ne portent
+que `SELECT`+`INSERT` en grants RLS (migration `0025`) — un encaissement
+capturé est un fait constaté, **jamais corrigé en place**.
+
+**Intégrité (D5), contrôlée UNIQUEMENT sur une capture réellement nouvelle**
+(le rejeu idempotent court-circuite les deux contrôles ci-dessous, sans quoi
+un rejeu légitime doublerait artificiellement le cumul et échouerait à tort
+en 422) :
+- **Taux ⊆ ventilation facture** (`assertKnownRates`) — chaque `taxPercent`
+  posté doit appartenir à `vatBreakdown` de la facture liée (comparaison
+  normalisée via `big.js`, `"20.0" ≡ "20.00"`) ; un taux étranger → **422
+  validation**.
+- **Anti-sur-encaissement par taux** (`assertNoOverpayment`) — le plafond
+  TTC par taux est reconstruit (`taxableAmount + taxAmount` de la
+  ventilation, cumulé sur **toutes** les catégories TVA partageant ce taux,
+  ex. Z et E à 0 %) et comparé **strictement** (`≤`, **aucune tolérance
+  d'arrondi**) au cumul déjà capturé + nouveau montant ; dépassement → **422
+  business-rule**. INTERPRÉTATION projet flaggée (tolérance/arrondi à
+  confirmer go-live).
+- **TOCTOU sur-encaissement concurrent, MEDIUM, non résolu** (revue T5,
+  finding MEDIUM-3) — deux `POST` concurrents sur des références
+  **distinctes** lisent chacun le cumul déjà capturé **avant** l'insertion
+  de l'autre : aucune contrainte DB ni sérialisation (`SELECT … FOR UPDATE`/
+  verrou avisoire/`CHECK` cumulatif) ne les empêche de passer tous les deux,
+  cumul final **> TTC**. Race **réelle**, jugée acceptable en l'état
+  (mono-tenant, opérateur authentifié, conséquence = qualité de donnée TB-3
+  sur-déclarée, pas une fuite cross-tenant ; capture = action basse
+  fréquence) — voir le runbook ci-dessous pour la note de vigilance go-live.
+
+**Agrégation TB-3 — `aggregatePayments` (`flux10-payments-aggregate.ts`,
+D7)**, appelée par le worker sur les encaissements de la période
+(`listPaymentsForPeriod`, bornes `paymentDate` AAAAMMJJ inclusives) :
+
+1. **Règle SERVICES-ONLY (note 119, verbatim)** — « les données de paiement
+   ne doivent être transmises qu'en cas de prestations de services, hors
+   opérations donnant lieu à autoliquidation de la TVA et option de TVA sur
+   les débits ». Le modèle de capture (D5) ne porte qu'un `taxPercent`+
+   `amount` par sous-total, **jamais** d'identifiant de ligne — impossible
+   de savoir directement quelles lignes un encaissement solde (un
+   encaissement référence une facture, qui peut mêler biens et services sur
+   des lignes distinctes, `nature` étant au niveau ligne). Règle retenue
+   (INTERPRÉTATION PROJET, la plus défendable, testée, à confirmer go-live) :
+   la part **services** d'un encaissement, **par taux**, est estimée au
+   **prorata** de la part que les services représentent, pour ce taux, dans
+   le TTC canonique de la facture liée
+   (`ratio(taux) = servicesTTC(taux) / canonicalTTC(taux)`, `big.js`,
+   2 décimales). Une facture **tout-services** (ratio 1) n'est jamais
+   tronquée ; une facture **tout-biens** (ratio 0) est **intégralement
+   exclue**. Le numérateur exclut en outre la catégorie TVA `AE`
+   (autoliquidation, UNTDID 5305) — application directe de la clause « hors
+   autoliquidation ». La clause « hors option de TVA sur les débits »
+   **n'a aucun champ correspondant** dans `Invoice` — différée honnêtement.
+2. **Cas indécidable** — une facture liée dont au moins une ligne n'a pas de
+   `nature` (`computeVatBreakdownByNature` → `complete:false`) est
+   **différée** (skip typé + log `deferredIncomplete`), même posture que le
+   différé des cadres M* ci-dessus — **jamais** de ventilation partielle
+   fabriquée.
+3. **Deux sous-flux, comme la classification 10.1/10.3** — `'10.1'` (B2Bi)
+   produit une `Flux10PaymentInvoice` **par encaissement** dans
+   `PaymentsReport.invoices` (10.2 — la forme XSD porte un seul `Payment`
+   par `Invoice` : plusieurs encaissements partiels de la même facture
+   produisent naturellement plusieurs éléments `<Invoice>`, **jamais**
+   fusionnés) ; `'10.3'` (B2C) **agrège** dans `PaymentsReport.transactions`
+   par (`paymentDate`, `taxPercent` normalisé, **devise**) — 10.4, **sans**
+   référence facture ni catégorie. La **devise fait partie de la clé**
+   (revue T7, MEDIUM-1) : deux encaissements même date/taux en devises
+   différentes (EUR domestique + USD export B2C) restent deux sous-totaux
+   distincts sous leur propre `CurrencyCode` — les sommer sous une seule
+   devise fausserait la figure réglementaire. `'out'` exclue.
+4. **MAILLE DÉCLARANT** (revue T8, MAJOR-1, correction appliquée) —
+   `payments` ne porte **aucune** colonne siren/rôle (D5, la facture liée
+   porte tout) : sans filtre, un tenant à **plusieurs déclarants**
+   transmettrait les **mêmes** encaissements sous **chaque** déclarant dû à
+   la même période (sur-déclaration N-fold). `filterInvoice` (miroir du
+   filtre SQL `eq(partySiren, siren)` d'`invoicesForPeriod`, côté
+   transactions) s'applique en aval du chargement : `SE` → SIREN
+   **vendeur**, `BY` → SIREN **acheteur** ; un encaissement hors maille est
+   **skippé silencieusement** (hors périmètre du rapport courant, pas une
+   anomalie).
+5. **XOR structurel, gardé au runtime** (D7, revue T7 MEDIUM-2) —
+   `generateEreportingXml` **throw** si un `Flux10Report` porte
+   `transactions` **et** `payments` simultanément (le type ne l'impose pas,
+   discipline d'appelant) : sans ce garde, un appelant fautif verrait son
+   `PaymentsReport` **perdu en silence** (l'ancien `else if` avalait
+   `payments` quand `transactions` était non-null).
+6. **Montants 19.6** (TT-95/TT-99, Annexe 6 v1.10) — les montants
+   **capturés/agrégés** en amont (Tasks 4/5/7) restent en **2 décimales**
+   (cohérentes avec les totaux facture) ; **seul l'émetteur XML**
+   (`formatPaymentAmount`, `flux10-xml.ts`), unique frontière connaissant le
+   format XSD cible, reformate à **6 décimales**.
+7. **Garde `CurrencyCode` optionnelle** — `Flux10PaymentSubTotal.currency`
+   est `string | undefined` ; l'élément `<CurrencyCode>` n'est émis dans le
+   XML que si la valeur est présente (`row.currency` vaut toujours `'EUR'`
+   par défaut à la capture, jamais une chaîne vide qui produirait un
+   élément creux).
+
+**Transmission à blanc** : si **aucune** opération e-reportable n'est
+éligible sur la période (agrégats vides **et** aucune facture 10.1),
+`aggregatePayments` renvoie `null` — **zéro écriture, zéro appel au port**,
+mais **journalisée** (§ Runbook ci-dessous, contrairement au silence côté
+transactions) : un encaissement peut exister sur la période sans jamais
+produire d'opération e-reportable (services-only), ce qui mérite une trace
+distincte d'un bug d'agrégation amont.
 
 ### Port de transmission
 
@@ -702,7 +951,15 @@ SIREN, rôle, régime TVA), `ereporting_transmissions` (sans `DELETE`), et
 seulement). L'index unique partiel `ereporting_transmissions_declarant_flux_period_in_unique`
 (`declarant_id, flux_kind, period_start` **où** `type='IN'`) porte l'A2
 (anti double-envoi, voir ci-dessus **et** le runbook ci-dessous — c'est aussi
-la cause du deadlock du slot A2).
+la cause du deadlock du slot A2, y compris pour `flux_kind='payments'`).
+
+**Paiements (plan 3.2, migrations `0024` Drizzle / `0025` hand)** : deux
+tables tenant-scopées sous RLS **`ENABLE`+`FORCE`**, grants **`SELECT`+
+`INSERT` seulement** (immuabilité par grants — un encaissement est un fait
+constaté, jamais corrigé en place, § Paiements ci-dessus) — `payments`
+(index unique `payments_invoice_reference_unique` sur
+`(invoice_id, reference)`, FK `invoice_id` en `ON DELETE RESTRICT`) et
+`payment_subtotals` (FK `payment_id` en `ON DELETE RESTRICT`).
 
 ## Runbook opérationnel — e-reporting Flux 10
 
@@ -715,7 +972,12 @@ Section dédiée aux **dettes opérationnelles** identifiées en revue (Tasks 5 
 `REJ_SEMAN`, XML non XSD-valide produit par une donnée source incohérente)
 occupe **définitivement** le slot unique (déclarant × flux × période **où**
 `type='IN'`) : `rejetee` est un statut **terminal** (§ Machine à états
-ci-dessus). Une fois la donnée source corrigée en amont, le balayage suivant
+ci-dessus). **Identique pour `flux_kind='payments'`** (plan 3.2) — le slot
+est clé sur `(declarant_id, flux_kind, period_start)` (§ Persistance
+ci-dessus), donc une transmission paiements née `rejetee` occupe son propre
+slot exactement selon la même mécanique, sans interférence avec le slot
+transactions du même déclarant/période. Une fois la donnée source corrigée
+en amont, le balayage suivant
 tente de régénérer la période, mais `insertTransmission` retombe sur le
 conflit d'index existant (`created: false`), recharge la ligne `rejetee`
 existante, et le worker constate un statut **non-`prepared`** → il **ne fait
@@ -751,6 +1013,80 @@ ne jamais le faire pour « corriger » le deadlock.
      modélisé mais aucun flux applicatif ne le produit à ce jour).
 5. Vérifier après re-balayage que la nouvelle transmission `IN` passe bien
    `prepared → transmitted → deposee`.
+
+### Transmission à blanc PAIEMENTS — journalisée (≠ silence transactions, 3.2)
+
+`generatePayments` (`ereporting-generation.service.ts`) journalise
+explicitement (`logger.log`) toute période sans **aucune** opération
+e-reportable (`aggregatePayments` → `null`) — comportement **différent** du
+chemin transactions, qui reste silencieux dans le même cas. Motif : côté
+paiements, une période « à blanc » peut recouvrir deux situations très
+différentes qu'il faut pouvoir distinguer en exploitation — (a) aucun
+encaissement capturé sur la période (normal, rien à signaler) et (b) des
+encaissements existent mais **aucun** ne franchit le filtre services-only
+(note 119) ou la maille déclarant — auquel cas l'absence de trace serait
+indiscernable d'un bug d'agrégation amont. Un « à blanc » paiements
+**fréquent** sur un déclarant qui capture pourtant des encaissements
+mérite donc d'être investigué (cadre de facturation des factures liées,
+`nature` de ligne renseignée) avant d'être considéré normal.
+
+### `jobId` paiements (`-`) vs legacy transactions (`:`) — dette BullMQ latente (3.2)
+
+Le séparateur du `jobId` transactions (`${declarantId}:${fluxKind}:${periodStart}`)
+est un **legacy pré-existant** (2.3), documenté comme une dette BullMQ
+post-5.80.5 hors périmètre de ce plan. Le `jobId` paiements
+(`${declarantId}-payments-${periodStart}`) a délibérément choisi `-` (leçon
+2.4-T9) pour ne **pas** reproduire ce risque sur un flux introduit après
+qu'il a été identifié. **Ne jamais aligner rétroactivement le format
+transactions sur `-`** sans traiter la dette BullMQ sous-jacente au même
+moment (changer le séparateur d'un jobId existant en production changerait
+la clé de déduplication Redis pour tous les jobs déjà enfilés).
+
+### Sur-encaissement concurrent (TOCTOU) — vigilance go-live (3.2, MEDIUM)
+
+Deux `POST /payments` concurrents portant des **références distinctes** sur
+la **même** facture peuvent chacun passer le contrôle anti-sur-encaissement
+(`assertNoOverpayment`) avant que l'autre n'ait écrit sa ligne — cumul final
+possible **> TTC** de la facture (§ Paiements ci-dessus, revue T5
+MEDIUM-3). **Aucune correction automatique en place** (pas de verrou
+`(tenant, invoice)` ni de contrainte DB cumulative). **Procédure de
+vigilance** (jusqu'à un correctif dédié — verrou applicatif ou contrainte
+`CHECK`, non livré à ce jour) :
+
+1. Un sur-encaissement détecté a posteriori (rapprochement comptable, ou
+   `GET /payments?invoiceId=…` dont la somme des sous-totaux dépasse le TTC
+   facture) n'est **pas** un bug applicatif à corriger en base — c'est une
+   trace d'une race réelle entre deux captures concurrentes.
+2. Aucune référence n'est à supprimer (grants `SELECT`+`INSERT` seulement,
+   § Persistance ci-dessus — un encaissement capturé est un fait constaté) :
+   traiter l'écart en aval (rapprochement comptable, remboursement hors
+   système) plutôt qu'en réécrivant l'historique.
+3. Risque jugé faible en pratique (capture = action opérateur basse
+   fréquence, mono-tenant) mais **à surveiller** si le volume de captures
+   concurrentes sur une même facture augmente (intégration avec un moyen de
+   paiement à confirmations multiples, par exemple).
+
+### Bypass CSRF/rôles pour l'authentification par clé API (garde-fou hérité, 3.2)
+
+`POST /payments` est le **premier endpoint de mutation** du projet à
+composer `TenantAuthGuard` (dual-auth clé API/session) avec `RolesGuard` **et**
+`CsrfGuard` (`payments.controller.ts`). Les deux derniers guards
+court-circuitent explicitement sur `req.apiKeyId` (posé par
+`TenantAuthGuard` **uniquement après vérification cryptographique réussie**
+de la clé, `tenant-auth.guard.ts` — jamais avant, jamais sur une clé
+invalide) : un appel machine (clé API) n'a ni cookie ni
+`authUser`/`authAdmin`, donc `RolesGuard`/`CsrfGuard` l'auraient sinon
+**toujours** rejeté (403/401) en l'absence de ce bypass. **Garde-fou
+documenté, pas une faille** : `apiKeyId` n'est jamais forgeable côté client,
+et ce bypass ne change le comportement d'**aucune** route existante (aucune
+ne combinait encore les trois guards avant `POST /payments`). **Toute
+future route dual-auth qui empile `RolesGuard`/`CsrfGuard` après
+`TenantAuthGuard` hérite automatiquement de ce même bypass** — à garder en
+tête lors de l'ajout d'une nouvelle mutation dual-auth : le bypass est
+correct pour une clé API (pas de notion de rôle utilisateur applicatif, pas
+de cookie CSRF à vérifier), mais suppose que **rien** entre
+`TenantAuthGuard` et ces deux guards ne pose `req.apiKeyId` sur un chemin
+non authentifié.
 
 ### `libxml2`/`xmllint` — prérequis de l'hôte du **worker**
 
@@ -1562,6 +1898,8 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `EREPORTING_PA_NAME` | Raison sociale de la PA (TT-9) | `Factelec PA` |
 | `EREPORTING_SWEEP_EVERY_MS` | Périodicité (ms) du job répétable d'ordonnancement e-reporting (`EreportingSweepService`) | `3600000` (1 h) |
 | `EREPORTING_GENERATION_JOB_ATTEMPTS` | Tentatives max d'un job de génération e-reporting avant `failed` — distingue une erreur **opérationnelle** (`xmllint` absent, DB/port transitoire) d'un rejet sémantique `REJ_SEMAN` (qui n'est jamais rejoué, il ne throw pas) | `3` |
+| `PAYMENTS_SWEEP_EVERY_MS` | **Déclarée pour compléter le contrat env (plan 3.2), NON CONSOMMÉE** — la passe paiements (`EreportingSweepService.sweep()`) tourne aujourd'hui sur le même planificateur que les transactions (`EREPORTING_SWEEP_EVERY_MS`) ; réservée à un futur planificateur paiements dédié si l'exploitation souhaite découpler les cadences | `3600000` (1 h) |
+| `PAYMENTS_LOOKBACK_MS` | **Déclarée, NON CONSOMMÉE** (même motif) — la fenêtre bornée réelle des paiements est `computeDuePaymentPeriods`/`MAX_DUE_PERIODS` (`period.ts`), pas ce paramètre | `172800000` (48 h) |
 | `ANNUAIRE_DRIVER` | Adaptateur de transport annuaire : `local` (`LocalFilesystemAnnuaireStore`, testable) \| `api`\|`edi` (API PISTE-OAuth2 / EDI SFTP-AS2-AS4, **activés au déploiement**, lèvent une erreur explicite tant que non fournis) | `local` |
 | `ANNUAIRE_LOCAL_DIR` | Répertoire local du driver `local` | `./var/annuaire` |
 | `ANNUAIRE_SYNC_EVERY_MS` | Périodicité (ms) de l'ordonnanceur de synchronisation différentielle (Flux 14, quotidien) | `86400000` (24 h) |
@@ -1655,6 +1993,8 @@ README racine.
 | `GET /cdv/transmissions?invoiceId=…` | Liste des transmissions CDV (Flux 6) d'une facture (résumés — **sans** le XML), `dgfipCode`/`statusLabel` dérivés | 200, 401 |
 | `GET /cdv/transmissions/:id/xml` | XML `text/xml` de la transmission (absent si `parked`) — 404 anti-fuite (inconnue ou d'un autre tenant) | 200, 401, 404 |
 | `GET /cdv/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
+| `POST /payments` | Capture d'un encaissement (`{ invoiceId, paymentDate, currency?, reference, subtotals: [{ taxPercent, amount }] }`) — dual-auth **et** session owner/admin/accountant + CSRF (voir ci-dessous), idempotent sur `(invoiceId, reference)` : **201** si nouveau, **200** si rejeu (`created:false`, payload divergent ignoré) | 201, 200, 401, 403, 404, 422 |
+| `GET /payments?invoiceId=…` | Liste des encaissements capturés d'une facture (dual-auth, sans garde de rôle) | 200, 401, 404 |
 
 **Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
 route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
@@ -1691,6 +2031,14 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   une clé API n'ouvre pas cette route (`SessionGuard` → 401, pas de cookie).
   L'apposition automatique par un connecteur/le réseau Peppol est différée
   (phase 3).
+- **`POST /payments`** (capture d'un encaissement, plan 3.2) combine les
+  **deux** régimes précédents — **premier endpoint de mutation** du projet à
+  le faire : `TenantAuthGuard` (dual-auth, clé API **ou** session) **puis**
+  `RolesGuard` (`owner`/`admin`/`accountant`) **et** `CsrfGuard`, ces deux
+  derniers court-circuitant explicitement sur `req.apiKeyId` pour laisser
+  passer un appel machine sans cookie/session (§ Runbook — bypass CSRF/rôles
+  ci-dessus). `GET /payments` reste `TenantAuthGuard` seul, sans garde de
+  rôle (lecture).
 - **`/auth/*`, `/api-keys/*`, `/admin/*`** sont exclusivement pilotés par
   **session serveur httpOnly** (cookie `factelec_session`) + **CSRF
   double-submit** (`X-CSRF-Token` face au cookie lisible `factelec_csrf`) sur
@@ -1919,8 +2267,9 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   procédure manuelle documentée, pas d'automatisation de libération de slot
   à ce jour. Voir § Runbook opérationnel.
 - **`invoiceCount` sur-compte les factures 10.3 à cadre mixte différées**
-  (2.3) — métadonnée indicative uniquement ; les montants déclarés restent
-  exacts. Voir § Agrégation et classification.
+  (2.3, toujours vrai en 3.2 pour les cadres mixtes **non naturés**) —
+  métadonnée indicative uniquement ; les montants déclarés restent exacts.
+  Voir § Agrégation et classification.
 - **Rôle SD `find_ereporting_declarants_due` cross-tenant** (2.3, dette
   sécurité) — expose `(tenant_id, siren, name)` de tous les tenants au rôle
   applicatif partagé API/worker ; à durcir au split du rôle worker au
@@ -1980,16 +2329,47 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   cross-tenant** (3.1, même dette que 2.3/2.4) — exposent `tenant_id` de
   tous les tenants au rôle applicatif partagé API/worker ; à durcir au même
   split du rôle worker.
+- **Résolu en 3.2** : ventilation biens/services et paiements TB-3 — discriminant
+  `nature` optionnel au niveau ligne (rétro-compat JSONB sans migration,
+  `computeVatBreakdownByNature`, total conservé) ; cadres mixtes M1/M2/M4
+  **réellement ventilés** (TLB1/TPS1) pour les factures **naturées** ; **10.1
+  B2Bi émis par facture** (TG-8), misrouting résolu (statut d'acheteur prime
+  le pays) ; **paiements TB-3 capturés** (`POST /payments`, idempotent,
+  intégrité anti-taux-inconnu et anti-sur-encaissement) et **agrégés/transmis**
+  (10.2 per-facture / 10.4 agrégé) selon la règle **SERVICES-ONLY** (note 119) ;
+  **2ᵉ cadence de transmission dédiée** (Tableau 13, paiements ≠ transactions
+  pour le régime mensuel) ; ordonnanceur à 3 couches étendu (`flux_kind='payments'`).
+  Voir §§ Agrégation et classification / Paiements / Cadence / Runbook
+  opérationnel ci-dessus pour le détail complet et les différés.
+- **Sur-encaissement concurrent (TOCTOU)** (3.2, MEDIUM, non résolu) — deux
+  captures de paiement concurrentes sur des références distinctes peuvent
+  toutes deux passer le contrôle anti-sur-encaissement avant l'écriture de
+  l'autre ; aucun verrou/contrainte DB en place, procédure de vigilance
+  documentée. Voir § Runbook opérationnel.
+- **Validation de la devise capturée absente** (3.2) — `POST /payments`
+  n'oppose `currency` ni à `invoice.currency` ni à une liste ISO 4217. Voir
+  § Paiements.
+- **Rôle `viewer` non testé en e2e sur `POST /payments`** (3.2) — refus
+  prouvé au niveau unitaire `RolesGuard` seulement.
+- **`PAYMENTS_SWEEP_EVERY_MS`/`PAYMENTS_LOOKBACK_MS` déclarées, non
+  consommées** (3.2) — la passe paiements partage aujourd'hui le
+  planificateur/la fenêtre bornée des transactions ; variables réservées à
+  un futur découplage. Voir § Variables d'environnement.
 
-### Différé explicitement (hors périmètre 2.4/3.1)
+### Différé explicitement (hors périmètre 2.4/3.1/3.2)
 
-- **E-reporting DGFiP au-delà du 10.3** (Flux 10, plan 2.3) : 10.1/10.2 B2Bi
-  (classifiées mais non émises), TB-3 paiements (10.2/10.4, aucun modèle de
-  capture des encaissements), cadres de facturation mixtes M1/M2/M4 (aucun
-  discriminant biens/services par ligne dans le modèle `Invoice`),
-  adaptateurs de transport réels (sftp/as2/as4/api), push/acquittement PPF
-  réel (webhook), schematron/contrôles sémantiques Annexe 7, chemin
-  RE/rectificatif — voir § E-reporting pour le détail de chaque point.
+- **E-reporting DGFiP au-delà du 10.1/10.3/TB-3** (Flux 10, plans 2.3/3.2) :
+  cadres de facturation mixtes M1/M2/M4 **non naturés** (au moins une ligne
+  sans `nature`, différés — aucune ventilation partielle fabriquée),
+  paiements pour la part **biens** d'un encaissement (règle services-only,
+  note 119 — jamais transmise) et pour la clause « option de TVA sur les
+  débits » de la même note (aucun champ correspondant dans `Invoice`),
+  auto-seed du statut CDV `212 Encaissée` depuis un paiement capturé
+  (**refusé, décision projet**), adaptateurs de transport réels
+  (sftp/as2/as4/api), push/acquittement PPF réel (webhook), schematron/
+  contrôles sémantiques Annexe 7, chemin RE/rectificatif, provisioning des
+  déclarants (aucun endpoint/CLI) — voir §§ E-reporting / Paiements pour le
+  détail de chaque point.
 - **Annuaire au-delà du domaine PA** (Flux 13/14, plan 2.4) : adaptateurs de
   transport réels (API PISTE-OAuth2, EDI SFTP/AS2/AS4), feeds
   d'initialisation INSEE/Chorus/DGFiP (lignes par défaut 9998/Chorus non

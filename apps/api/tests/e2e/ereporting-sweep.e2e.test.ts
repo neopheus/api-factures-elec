@@ -10,16 +10,20 @@ import { startTestDb, type TestDb } from './helpers/postgres.js'
 import { startTestRedis, type TestRedis } from './helpers/redis.js'
 import { createTestWorker, waitFor } from './helpers/worker.js'
 
-// Ordonnanceur e-reporting (Task 7, plan 2.3) : vérifie, contre un VRAI
-// Redis (BullMQ) et un VRAI Postgres (find_ereporting_declarants_due, SD
-// cross-tenant — migration 0017), que le balayage (1) enfile bien un job
-// `ereporting-generation` PAR (déclarant, période due), et (2) — amendement
-// plan A5, à vérifier EMPIRIQUEMENT — qu'un second balayage ne duplique
-// JAMAIS ces jobs : le `jobId` déterministe `${declarantId}:${fluxKind}:
-// ${periodStart}` est bien déduplique par BullMQ tant que le job existe
-// encore dans Redis. C'est la couche 2 de la défense en profondeur anti
-// double-envoi documentée dans ereporting-sweep.service.ts (couches 1 et 3 :
-// fenêtre bornée de period.ts, et index unique partiel + insertTransmission
+// Ordonnanceur e-reporting (Task 7, plan 2.3 ; passe payments Task 8, plan
+// 3.2) : vérifie, contre un VRAI Redis (BullMQ) et un VRAI Postgres
+// (find_ereporting_declarants_due, SD cross-tenant — migration 0017), que le
+// balayage (1) enfile bien un job `ereporting-generation` PAR (déclarant,
+// période due) de CHAQUE cadence (transactions ET payments — deux flux_kind
+// disjoints, régime `reel_normal_mensuel` choisi ici car ses deux cadences
+// ont TOUTES DEUX des périodes dues), et (2) — amendement plan A5, à vérifier
+// EMPIRIQUEMENT — qu'un second balayage ne duplique JAMAIS ces jobs : le
+// `jobId` déterministe (`${declarantId}:${fluxKind}:${periodStart}` pour les
+// transactions, `${declarantId}-payments-${periodStart}` pour les paiements,
+// Task 8) est bien déduplique par BullMQ tant que le job existe encore dans
+// Redis. C'est la couche 2 de la défense en profondeur anti double-envoi
+// documentée dans ereporting-sweep.service.ts (couches 1 et 3 : fenêtre
+// bornée de period.ts, et index unique partiel + insertTransmission
 // idempotent, Task 5).
 describe('ereporting sweep — jobId dedup empirique + un job par déclarant×période (e2e)', () => {
   let db: TestDb
@@ -80,7 +84,7 @@ describe('ereporting sweep — jobId dedup empirique + un job par déclarant×p�
     }
   })
 
-  it('a sweep enqueues exactly MAX_DUE_PERIODS ereporting-generation jobs for the active declarant, none for the inactive one', async () => {
+  it('a sweep enqueues exactly MAX_DUE_PERIODS ereporting-generation jobs PER cadence for the active declarant, none for the inactive one', async () => {
     const worker = await createTestWorker(db.appUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
@@ -98,10 +102,19 @@ describe('ereporting sweep — jobId dedup empirique + un job par déclarant×p�
         'delayed',
         'completed',
       ])
-      // MAX_DUE_PERIODS = 2 (period.ts, amendement A2-plan) : la décade
-      // tout juste échue + une de rattrapage, pour l'UNIQUE déclarant actif.
-      expect(jobs).toHaveLength(2)
-      for (const job of jobs) {
+      // MAX_DUE_PERIODS = 2 (period.ts, amendement A2-plan), appliqué
+      // SÉPARÉMENT à chaque cadence (Task 8) : la décade tout juste échue +
+      // une de rattrapage côté transactions, ET le mois tout juste échu + un
+      // de rattrapage côté paiements, pour l'UNIQUE déclarant actif — deux
+      // flux_kind disjoints, jamais mélangés dans un même job.
+      const transactionsJobs = jobs.filter(
+        (j) => j.data.fluxKind === 'transactions',
+      )
+      const paymentsJobs = jobs.filter((j) => j.data.fluxKind === 'payments')
+      expect(jobs).toHaveLength(4)
+      expect(transactionsJobs).toHaveLength(2)
+      expect(paymentsJobs).toHaveLength(2)
+      for (const job of transactionsJobs) {
         expect(job.id?.startsWith(`${declarantId}:transactions:`)).toBe(true)
         expect(job.data).toMatchObject({
           tenantId,
@@ -109,6 +122,17 @@ describe('ereporting sweep — jobId dedup empirique + un job par déclarant×p�
           siren: '111111111',
           role: 'SE',
           fluxKind: 'transactions',
+          type: 'IN',
+        })
+      }
+      for (const job of paymentsJobs) {
+        expect(job.id?.startsWith(`${declarantId}-payments-`)).toBe(true)
+        expect(job.data).toMatchObject({
+          tenantId,
+          declarantId,
+          siren: '111111111',
+          role: 'SE',
+          fluxKind: 'payments',
           type: 'IN',
         })
       }
@@ -156,9 +180,10 @@ describe('ereporting sweep — jobId dedup empirique + un job par déclarant×p�
 
       // Même jeu de jobId AVANT/APRÈS le second balayage : ni doublon, ni
       // perte — la déduplication BullMQ par jobId fonctionne bien pendant
-      // la rétention du job (couche 2 de la défense en profondeur).
+      // la rétention du job (couche 2 de la défense en profondeur). 4 =
+      // 2 (transactions) + 2 (payments), Task 8.
       expect(afterIds).toEqual(beforeIds)
-      expect(afterIds).toHaveLength(2)
+      expect(afterIds).toHaveLength(4)
     } finally {
       await generationQueue.close()
       await maintenanceQueue.close()

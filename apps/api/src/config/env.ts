@@ -126,6 +126,23 @@ export const envSchema = z.object({
     .positive()
     .max(10)
     .default(3),
+  // Périodicité/fenêtre du slot `payments` (D7, Task 8) — motif nominal
+  // EREPORTING_SWEEP_EVERY_MS/CDV_TRANSMISSION_LOOKBACK_MS. La passe payments
+  // (EreportingSweepService.sweep()) tourne AUJOURD'HUI sur le MÊME
+  // planificateur que les transactions (EREPORTING_SWEEP_EVERY_MS,
+  // EreportingScheduler INCHANGÉ, hors périmètre Task 8) et sa fenêtre bornée
+  // réelle est `computeDuePaymentPeriods`/`MAX_DUE_PERIODS` (period.ts, D7
+  // couche 1) — PAS ce paramètre. `PAYMENTS_SWEEP_EVERY_MS`/
+  // `PAYMENTS_LOOKBACK_MS` sont déclarés ici pour compléter le contrat env
+  // (plan 3.2, Task 8 Step 1) mais restent NON CONSOMMÉS par cette tâche :
+  // réservés à un futur planificateur payments dédié si l'exploitation
+  // souhaite découpler les cadences (cf. task-8-report.md).
+  PAYMENTS_SWEEP_EVERY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(3_600_000),
+  PAYMENTS_LOOKBACK_MS: z.coerce.number().int().positive().default(172_800_000),
   // ── Annuaire Flux 13/14 (D1/D7) ──────────────────────────────────────────
   // 'local' = LocalFilesystemAnnuaireStore (write-once, dev/test) ; api/edi =
   // adaptateurs réels (PISTE-OAuth2 / SFTP-AS2-AS4, D1/D7) ACTIVÉS AU

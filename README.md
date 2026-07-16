@@ -303,7 +303,15 @@ Cœur métier de la facturation, aligné sur le modèle sémantique EN 16931 :
 - **Monnaie** (`src/model/money.ts`) : arithmétique décimale exacte via big.js,
   arrondi demi-supérieur (round half up).
 - **Moteur de calcul** (`src/model/compute.ts`) : `buildInvoice` calcule la
-  ventilation TVA et les totaux à partir des lignes.
+  ventilation TVA et les totaux à partir des lignes. `computeVatBreakdownByNature`
+  (plan 3.2, D1) ventile la ventilation TVA canonique entre biens et services
+  à partir du discriminant `nature` (`'goods'`\|`'services'`) **optionnel**
+  au niveau ligne (`invoiceLineNatureSchema`, rétro-compat JSONB **sans
+  migration**) — total conservé, base exacte, résidu TVA ≤ 1 centime absorbé
+  côté services ; `complete:false` (aucune ventilation fabriquée) dès qu'une
+  ligne n'a pas de `nature`. Consommé par l'agrégation e-reporting côté
+  `apps/api` (cadres mixtes M1/M2/M4, paiements TB-3 services-only) — voir
+  `apps/api/README.md`.
 - **Règles de gestion** (`src/model/rules.ts`) : contrôles de cohérence EN 16931
   (BR-CO-*) et motifs d'exonération BT-120/121 (BR-{E,AE,IC,G,O}-10), signalés en
   `RuleViolation`.
@@ -337,8 +345,8 @@ fichiers (hors tests).
 
 ## `@factelec/api`
 
-API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4 + 3.1** :
-ingestion et lecture des factures (consommant `@factelec/invoice-core`),
+API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4 + 3.1 +
+3.2** : ingestion et lecture des factures (consommant `@factelec/invoice-core`),
 authentification utilisateur (sessions httpOnly + CSRF), signup self-service
 transactionnel, gestion des clés API par session, super admin plateforme
 minimal, **workers BullMQ de génération asynchrone**, **cycle de vie des
@@ -347,12 +355,20 @@ chronologie monotone 2.1, bloqueur go-live devenu interprétation en attente
 d'AFNOR XP Z12-012), **transmission des CDV (Flux 6/CDAR)** vers PPF et
 destinataire (3.1, machine de livraison distincte, ordonnanceur borné 24h,
 adaptateurs de transport réels/OpenPeppol différés au déploiement),
-**e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, machine à états 300/301
-distincte, cadence par régime TVA, transmission différée au déploiement) et
-**annuaire central Flux 13/14** (domaine PA : ligne d'adressage 4 mailles,
-résolution de routage, génération F13/parsing F14 validés XSD, miroir de
-consultation PII-minimal, publication consent-gated, synchronisation bornée
-— transport réel et câblage dans l'émetteur différés).
+**e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, **10.1 B2Bi par facture
+et paiements TB-3 étendus en 3.2**, machine à états 300/301 distincte, deux
+cadences par régime TVA — transactions et paiements —, transmission différée
+au déploiement) et **annuaire central Flux 13/14** (domaine PA : ligne
+d'adressage 4 mailles, résolution de routage, génération F13/parsing F14
+validés XSD, miroir de consultation PII-minimal, publication consent-gated,
+synchronisation bornée — transport réel et câblage dans l'émetteur différés).
+**Ventilation biens/services et paiements TB-3** (3.2) : discriminant `nature`
+optionnel au niveau ligne (`@factelec/invoice-core` 0.4.0, rétro-compat sans
+migration), cadres mixtes M1/M2/M4 réellement ventilés pour les factures
+naturées, capture des encaissements idempotente et intégrité anti-sur-
+encaissement, agrégation/transmission TB-3 selon la règle **SERVICES-ONLY**
+(note 119) — voir § E-reporting dans `apps/api/README.md` pour le détail
+complet et les différés.
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -592,14 +608,40 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       entrante. **Runbook nouveau** : rattrapage manuel d'une panne worker
       > 48h, reset manuel d'un faux-`rejected` occupant son slot, horodate
       UTC = interprétation ouverte. Détail complet : `apps/api/README.md`.
+- [x] **3.2 — Ventilation biens/services & paiements TB-3 (Flux 10)**
+      (terminé) : discriminant `nature` (`'goods'`/`'services'`) **optionnel**
+      au niveau ligne (`@factelec/invoice-core`, rétro-compat JSONB **sans
+      migration**, reste en **0.4.0**), `computeVatBreakdownByNature` (total
+      conservé, base exacte, résidu TVA ≤ 1 centime absorbé côté services) ;
+      **cadres de facturation mixtes M1/M2/M4 réellement ventilés** (TLB1/
+      TPS1) pour les factures **naturées** — dette 2.3 soldée sur ce
+      sous-ensemble, les factures non naturées restant différées ; **10.1
+      B2Bi activé** (émis **par facture**, TG-8, misrouting export B2C
+      résolu — le statut d'acheteur prime le pays) ; **paiements TB-3**
+      (`POST`/`GET /payments`) : capture **explicite** des encaissements
+      (aucun auto-seed depuis le statut CDV `212`, refusé), **idempotente**
+      `(invoice_id, reference)`, intégrité anti-taux-inconnu et anti-sur-
+      encaissement (TOCTOU concurrent non résolu, vigilance documentée) ;
+      **agrégation et transmission** 10.2 (per-facture) / 10.4 (agrégé) selon
+      la règle **SERVICES-ONLY** (note 119, proratisation par ratio
+      services/TTC, autoliquidation et option débits exclues) ; **2ᵉ cadence
+      de transmission dédiée** (Tableau 13 §3.7.7 primaire, triple-vérifiée —
+      le régime réel normal mensuel est le seul où paiements ≠ transactions) ;
+      ordonnanceur BullMQ étendu à 3 couches (`flux_kind='payments'`, jobId
+      dédié). **Différés explicites** : part biens d'un encaissement (jamais
+      transmise), option de TVA sur les débits (note 119, aucun champ
+      modèle), cadres mixtes non naturés, validation devise vs ISO 4217,
+      rôle viewer non testé e2e. Détail complet : `apps/api/README.md`.
 
 > **Point de reprise → phase 3 (suite)** : adhésion OpenPeppol + PKI
 > test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport CDV
 > réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne, **achat
 > de la norme AFNOR XP Z12-012** pour lever l'interprétation projet restante
 > de la matrice DAG (bloqueur go-live PDP, s'applique aussi à
-> l'immatriculation PDP côté e-reporting), et câblage de la résolution de
-> routage annuaire (2.4) dans l'émetteur de factures.
+> l'immatriculation PDP côté e-reporting), câblage de la résolution de
+> routage annuaire (2.4) dans l'émetteur de factures, et correctif du
+> sur-encaissement concurrent (TOCTOU, 3.2, verrou applicatif ou contrainte
+> DB dédiée).
 
 ### Prérequis pré-production / pré-DGFiP
 
@@ -710,6 +752,18 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
   `find_parked_cdv_transmissions` exposent des identifiants de tenants
   **cross-tenant** au rôle applicatif partagé API/worker ; à durcir au même
   split du rôle worker.
+- **Sur-encaissement concurrent (TOCTOU) sur `POST /payments`** (3.2,
+  **NOUVEAU**, MEDIUM, fail-safe) — deux captures de paiement concurrentes
+  sur des références distinctes, même facture, peuvent toutes deux passer le
+  contrôle anti-sur-encaissement avant l'écriture de l'autre (cumul final
+  > TTC) ; aucun verrou/contrainte DB en place, procédure de vigilance
+  documentée (rapprochement comptable). Voir § Runbook opérationnel —
+  E-reporting dans `apps/api/README.md`.
+- **Validation de la devise capturée absente** (3.2, **NOUVEAU**) —
+  `POST /payments` n'oppose `currency` ni à `invoice.currency` ni à une
+  liste ISO 4217.
+- **Rôle `viewer` non testé en e2e sur `POST /payments`** (3.2, **NOUVEAU**)
+  — refus prouvé au niveau unitaire `RolesGuard` seulement.
 
 Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
 
@@ -731,14 +785,18 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
   le partage de cookies cross-subdomain dashboard/API.
 - **Throttle par tenant** (rate limiting actuellement par IP uniquement,
   `apps/api`) — non planifié à ce jour.
-- **E-reporting DGFiP (Flux 10) au-delà du 10.3** (2.3) : 10.1/10.2 B2Bi
-  (classifiées mais non émises), TB-3 paiements (10.2/10.4, aucune source de
-  capture des encaissements), cadres de facturation **mixtes M1/M2/M4**
-  (aucun discriminant biens/services par ligne dans le modèle `Invoice` — une
-  ventilation forcée aurait doublé la base/TVA déclarées), adaptateurs de
-  transport réels (sftp/as2/as4/api), push/acquittement PPF réel (webhook),
-  schematron/contrôles sémantiques Annexe 7, chemin RE/rectificatif — tous
-  différés, aucun n'est fabriqué. Détail : `apps/api/README.md`.
+- **E-reporting DGFiP (Flux 10) au-delà du 10.1/10.3/TB-3** (2.3, étendu
+  3.2) : cadres de facturation **mixtes M1/M2/M4 non naturés** (au moins une
+  ligne sans discriminant `nature` — différés, aucune ventilation partielle
+  fabriquée), part **biens** d'un encaissement (règle SERVICES-ONLY, note
+  119 — jamais transmise) et clause « option de TVA sur les débits » de la
+  même note (aucun champ correspondant dans le modèle `Invoice`), auto-seed
+  du statut CDV `212 Encaissée` depuis un paiement capturé (**refusé,
+  décision projet**), adaptateurs de transport réels (sftp/as2/as4/api),
+  push/acquittement PPF réel (webhook), schematron/contrôles sémantiques
+  Annexe 7, chemin RE/rectificatif, provisioning des déclarants (aucun
+  endpoint/CLI) — tous différés, aucun n'est fabriqué. Détail :
+  `apps/api/README.md`.
 - **Annuaire central (Flux 13/14) au-delà du domaine PA** (2.4) : adaptateurs
   de transport réels (API PISTE-OAuth2, EDI SFTP/AS2/AS4), feeds
   d'initialisation INSEE/Chorus/DGFiP (lignes par défaut 9998/Chorus non

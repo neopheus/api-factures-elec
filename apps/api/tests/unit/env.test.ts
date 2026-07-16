@@ -343,4 +343,27 @@ describe('validateEnv', () => {
       }),
     ).toThrow(/CDV_TRANSMISSION_JOB_ATTEMPTS/)
   })
+
+  it('applies payments (TB-3) sweep defaults', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.PAYMENTS_SWEEP_EVERY_MS).toBe(3_600_000)
+    expect(env.PAYMENTS_LOOKBACK_MS).toBe(172_800_000)
+  })
+
+  it('rejects a non-positive PAYMENTS_SWEEP_EVERY_MS/PAYMENTS_LOOKBACK_MS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        PAYMENTS_SWEEP_EVERY_MS: '0',
+      }),
+    ).toThrow(/PAYMENTS_SWEEP_EVERY_MS/)
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        PAYMENTS_LOOKBACK_MS: '0',
+      }),
+    ).toThrow(/PAYMENTS_LOOKBACK_MS/)
+  })
 })
