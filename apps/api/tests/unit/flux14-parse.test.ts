@@ -86,6 +86,15 @@ const emptySuffixeF14 = unknownNatureF14
     '<IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>',
     '<IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>\n        <Suffixe/>',
   )
+// I1b : IdLinRoutage = IdCodesRoutageType (xs:token SANS pattern,
+// Annuaire_Commun.xsd:50-56) — `<IdLinRoutage qualifiant="9999"/>` VIDE est
+// XSD-valide et se désérialise en {'@qualifiant':'9999'} SANS clé '#'.
+const emptyRoutageF14 = unknownNatureF14
+  .replace('<Nature>X</Nature>', '<Nature>D</Nature>')
+  .replace(
+    '<IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>',
+    '<IdLinSIREN qualifiant="0002">123456789</IdLinSIREN>\n        <IdLinSIRET qualifiant="0009">12345678900011</IdLinSIRET>\n        <IdLinRoutage qualifiant="9999"/>',
+  )
 
 // 2 lignes : IdLinSIRET/IdLinRoutage/Suffixe (flat F14 vs F13 imbriqué),
 // Nature 'D' et 'M', caractères XML dangereux dans Suffixe/Identifiant — prouve
@@ -347,6 +356,16 @@ describe('parseConsultationF14 (Annuaire_Consultation_F14.xsd)', () => {
     expect(parsed.lignes).toHaveLength(1)
     // Clé absente (pas '') : le piège coalesce('') des clés d'unicité (T5 #1).
     expect(parsed.lignes[0]!.maille).not.toHaveProperty('suffixe')
+  })
+
+  it('traite un <IdLinRoutage qualifiant="9999"/> VIDE (xs:token sans pattern, XSD-valide) comme ABSENT — jamais "" ni TypeError (I1b)', async () => {
+    const { valid } = validateAgainstAnnuaireConsultationXsd(emptyRoutageF14)
+    expect(valid).toBe(true)
+    const parsed = await parseConsultationF14(emptyRoutageF14)
+    expect(parsed.lignes).toHaveLength(1)
+    expect(parsed.lignes[0]!.maille).not.toHaveProperty('routageId')
+    // Les axes à pattern XSD restent portés normalement.
+    expect(parsed.lignes[0]!.maille.siret).toBe('12345678900011')
   })
 
   it('PII-drop (D8) : aucune trace du Nom/Adresse porté par BlocUnitesLegales/BlocEtablissements', async () => {

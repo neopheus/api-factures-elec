@@ -111,6 +111,19 @@ function textOf(node: RawIdLin): string {
   return decodeXmlEntities(node['#'])
 }
 
+// Revue finale 2.4 (I1b) : contrairement à IdLinSIREN/SIRET (patterns XSD
+// [0-9]{9}/[0-9]{14} — jamais vides ET valides), `IdLinRoutage` est
+// `IdCodesRoutageType` = xs:token SANS pattern (Annuaire_Commun.xsd:50-56) :
+// `<IdLinRoutage qualifiant="9999"/>` VIDE est XSD-VALIDE et xmlbuilder2 le
+// désérialise en `{'@qualifiant':'9999'}` SANS clé '#' → node['#'] undefined
+// → decodeXmlEntities(undefined) lèverait un TypeError non typé (même classe
+// que I1). Un routage vide est normalisé en ABSENT (jamais '' — piège
+// coalesce, revue T5 #1).
+function textOfOptional(node: RawIdLin): string | undefined {
+  const text = rawText(node['#'])
+  return text === undefined ? undefined : decodeXmlEntities(text)
+}
+
 interface RawDateEffet {
   DateDebut: string
   DateFin?: string
@@ -184,14 +197,18 @@ function toLigneAdressage(
 
   const info = raw.InfoAdressage
   const suffixeText = rawText(info.Suffixe)
+  // I1b : xs:token sans pattern → un élément vide est XSD-valide ; absent
+  // plutôt que TypeError/''.
+  const routageText =
+    info.IdLinRoutage !== undefined
+      ? textOfOptional(info.IdLinRoutage)
+      : undefined
   const maille: Maille = {
     siren: textOf(info.IdLinSIREN),
     ...(info.IdLinSIRET !== undefined
       ? { siret: textOf(info.IdLinSIRET) }
       : {}),
-    ...(info.IdLinRoutage !== undefined
-      ? { routageId: textOf(info.IdLinRoutage) }
-      : {}),
+    ...(routageText !== undefined ? { routageId: routageText } : {}),
     // `<Suffixe/>` vide (XSD-valide) → clé ABSENTE, jamais '' (revue finale
     // 2.4 I1 + piège coalesce('') revue T5 #1).
     ...(suffixeText !== undefined
