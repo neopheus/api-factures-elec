@@ -160,6 +160,100 @@ describe('payments capture & lecture (e2e)', () => {
     expect(Number(rows.rows[0].count)).toBe(1)
   })
 
+  it('rejeu divergent : re-POST même reference avec des montants DIFFÉRENTS → 200, valeurs d’ORIGINE conservées (revue T5, MEDIUM-2)', async () => {
+    const invoiceId = await seedInvoice('FA-PAY-DIVERG')
+    const first = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        invoiceId,
+        paymentDate: '20260715',
+        reference: 'REF-DIVERG',
+        subtotals: [{ taxPercent: '20.00', amount: '70.00' }],
+      })
+      .expect(201)
+
+    // Même (invoice, reference) mais montant ET date différents : sémantique
+    // T4 (ON CONFLICT DO NOTHING + reload) — le payload divergent est IGNORÉ,
+    // réponse idempotente 200 sur la capture d'ORIGINE. Une « correction »
+    // d'encaissement passe par une NOUVELLE référence, jamais par un rejeu.
+    const replay = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        invoiceId,
+        paymentDate: '20260716',
+        reference: 'REF-DIVERG',
+        subtotals: [{ taxPercent: '20.00', amount: '99.00' }],
+      })
+      .expect(200)
+    expect(replay.body).toEqual({ id: first.body.id, created: false })
+
+    const stored = await ownerPool.query(
+      `SELECT p.payment_date, s.amount
+         FROM payments p JOIN payment_subtotals s ON s.payment_id = p.id
+        WHERE p.invoice_id = $1`,
+      [invoiceId],
+    )
+    expect(stored.rows).toEqual([{ payment_date: '20260715', amount: '70.00' }])
+  })
+
+  it('plafonne le sur-encaissement par la SOMME des catégories partageant un taux (revue T5, LOW-1)', async () => {
+    // Deux catégories de ventilation au MÊME taux 0 % (Z et E) : le plafond
+    // du taux 0 doit être 100.00 + 50.00 = 150.00 (somme des buckets), pas le
+    // dernier bucket rencontré (50.00) — qui aurait produit un faux 422.
+    const { id: invoiceId } = await repo.insertReceived(
+      tenantId,
+      buildInvoice({
+        ...invoiceInput('FA-PAY-MULTI-CAT'),
+        lines: [
+          {
+            id: '1',
+            name: 'Z',
+            quantity: '1',
+            unitCode: 'C62',
+            unitPrice: '100.00',
+            vatCategory: 'Z',
+            vatRate: '0.00',
+          },
+          {
+            id: '2',
+            name: 'E',
+            quantity: '1',
+            unitCode: 'C62',
+            unitPrice: '50.00',
+            vatCategory: 'E',
+            vatRate: '0.00',
+            exemptionReason: 'Exonération art. 261 CGI',
+          },
+        ],
+      }),
+    )
+    await request(app.getHttpServer())
+      .post('/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        invoiceId,
+        paymentDate: '20260715',
+        reference: 'REF-MULTI-CAT',
+        subtotals: [{ taxPercent: '0.00', amount: '150.00' }],
+      })
+      .expect(201)
+
+    // Le plafond somme reste un plafond : 1 centime au-delà → 422.
+    const res = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        invoiceId,
+        paymentDate: '20260716',
+        reference: 'REF-MULTI-CAT-2',
+        subtotals: [{ taxPercent: '0.00', amount: '0.01' }],
+      })
+      .expect(422)
+    expect(res.body.type).toBe('urn:factelec:problem:business-rule-violation')
+  })
+
   it('refuse un taux absent de la ventilation de la facture (422 validation)', async () => {
     const invoiceId = await seedInvoice('FA-PAY-RATE')
     const res = await request(app.getHttpServer())

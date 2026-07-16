@@ -116,11 +116,18 @@ export class PaymentsService {
     vatBreakdown: VatBreakdown[],
     subtotals: PaymentSubtotalCapture[],
   ): Promise<void> {
+    // Le plafond par TAUX cumule TOUTES les catégories de ventilation portant
+    // ce taux (revue T5, LOW-1) : `vatBreakdown` est groupé par
+    // (catégorie, taux) — p. ex. Z et E partagent le taux 0 — et un `set`
+    // écraserait le bucket précédent, plafonnant à UNE catégorie au lieu de
+    // leur somme (422 à tort, jamais permissif, mais faux quand même).
     const ttcByRate = new Map<string, Big>()
     for (const entry of vatBreakdown) {
+      const key = normalizeRate(entry.rate)
+      const current = ttcByRate.get(key) ?? new Big(0)
       ttcByRate.set(
-        normalizeRate(entry.rate),
-        new Big(entry.taxableAmount).plus(entry.taxAmount),
+        key,
+        current.plus(entry.taxableAmount).plus(entry.taxAmount),
       )
     }
 
