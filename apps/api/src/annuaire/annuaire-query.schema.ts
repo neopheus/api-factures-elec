@@ -53,6 +53,15 @@ export const lignesQuerySchema = z.object({
 })
 export type LignesQuery = z.infer<typeof lignesQuerySchema>
 
+// Calque EXACT de `lignesQuerySchema` (Task 3, plan 3.3, D6) : même
+// contrainte SIREN, même frontière — l'énumération des codes-routage
+// publiés par le tenant (`GET /annuaire/codes-routage`) ne prend elle non
+// plus qu'un seul paramètre de requête.
+export const codesRoutageQuerySchema = z.object({
+  siren: z.string().regex(SIREN_RE, 'siren must be exactly 9 digits'),
+})
+export type CodesRoutageQuery = z.infer<typeof codesRoutageQuerySchema>
+
 export const resolutionQuerySchema = z.object({
   siren: z.string().regex(SIREN_RE, 'siren must be exactly 9 digits'),
   siret: optionalToken(SIRET_RE, 'siret must be exactly 14 digits'),

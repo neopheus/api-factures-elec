@@ -32,6 +32,7 @@ import {
   StaleLigneTransitionError,
 } from './annuaire-publication.service.js'
 import {
+  codesRoutageQuerySchema,
   lignesQuerySchema,
   resolutionQuerySchema,
 } from './annuaire-query.schema.js'
@@ -109,6 +110,36 @@ export class AnnuaireController {
       }
       throw err
     }
+  }
+
+  // Énumération de gestion des codes-routage PUBLIÉS PAR CE TENANT (Task 3,
+  // plan 3.3, D6) : `annuaire_lignes` (routageId non-null), PAS le miroir
+  // de consultation lu par `lignes` ci-dessus — le vrai trou de gestion
+  // HTTP comblé ici (aucun GET n'exposait `annuaire_lignes` jusqu'ici). Vue
+  // de gestion HONNÊTE : TOUTES les lignes à routageId non-null, quel que
+  // soit leur statut (draft/published/deposee/rejetee/masked, amendement
+  // m4) — aucun filtre de statut, contrairement à `resolution` qui ne
+  // considère que ce qui est effectivement adressable. Tableau VIDE si
+  // aucun code (énumération, PAS 404) ; non-fuite RLS identique à
+  // `lignes` (un SIREN d'un autre tenant renvoie un tableau vide, jamais
+  // une fuite d'existence).
+  //
+  // POST create autonome REFUSÉ (D6, ratifié) : un code-routage n'est PAS
+  // une entité indépendante — c'est un composant de maille
+  // (SIREN_SIRET_ROUTAGE) créé via `POST /annuaire/lignes`. Un POST
+  // « create code » fabriquerait une entité absente du modèle et
+  // dupliquerait le cycle de vie des lignes (aucune nouvelle table —
+  // contrainte du plan). Réexaminable en 3.4+ si un besoin métier autonome
+  // émerge.
+  @Get('codes-routage')
+  @UseGuards(TenantAuthGuard)
+  async codesRoutage(
+    @CurrentTenant() tenantId: string,
+    @Query() query: unknown,
+  ) {
+    const { siren } = parseQuery(codesRoutageQuerySchema, query)
+    const codes = await this.publication.listRoutingCodes(tenantId, siren)
+    return { codes }
   }
 
   // Publication d'une ligne (Task 8) : gate consentement (422 AVANT toute

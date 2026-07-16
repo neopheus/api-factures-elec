@@ -1,7 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ANNUAIRE_TRANSPORT, type AnnuairePort } from './annuaire.port.js'
 // biome-ignore lint/style/useImportType: AnnuaireRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
-import { AnnuaireRepository, type LigneSummary } from './annuaire.repository.js'
+import {
+  AnnuaireRepository,
+  type LigneSummary,
+  type RoutingCodeSummary,
+} from './annuaire.repository.js'
 import {
   type AnnuaireLigneStatus,
   motifRequired,
@@ -313,6 +317,18 @@ export class AnnuairePublicationService {
   // connaît que les services).
   async getLigne(tenantId: string, id: string): Promise<LigneSummary | null> {
     return this.repo.findLigne(tenantId, id)
+  }
+
+  // Passthrough RLS-scopé (Task 3, plan 3.3, D6) — miroir de `getLigne`
+  // ci-dessus : MÊME table (`annuaire_lignes`), simplement une vue
+  // ÉNUMÉRÉE orientée gestion (codes-routage publiés par le tenant) plutôt
+  // qu'un id unique. `AnnuaireController.codesRoutage` s'en sert pour `GET
+  // /annuaire/codes-routage`.
+  async listRoutingCodes(
+    tenantId: string,
+    siren: string,
+  ): Promise<RoutingCodeSummary[]> {
+    return this.repo.listRoutingCodes(tenantId, siren)
   }
 
   // STUCK-DRAFT RE-PUBLISH SWEEP (Task 9, injection revue contrôleur — fix
