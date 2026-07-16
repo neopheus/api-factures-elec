@@ -183,6 +183,13 @@
       "when": 1784203752276,
       "tag": "0025_payments_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784203852276,
+      "tag": "0026_invoice_routing",
+      "breakpoints": true
     }
   ]
 }

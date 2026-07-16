@@ -7,6 +7,7 @@ import {
   type invoiceStatus,
   invoiceStatusEvents,
   invoices,
+  type routingStatus,
 } from '../db/schema.js'
 // biome-ignore lint/style/useImportType: TenantContextService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { TenantContextService } from '../db/tenant-context.service.js'
@@ -15,6 +16,7 @@ import type { FormatKind, GeneratedFormat } from './format-generator.port.js'
 import type { LifecycleStatus } from './lifecycle-status.js'
 
 export type GenerationStatus = (typeof invoiceStatus.enumValues)[number]
+export type RoutingStatus = (typeof routingStatus.enumValues)[number]
 
 export interface InvoiceSummary {
   id: string
@@ -25,6 +27,14 @@ export interface InvoiceSummary {
   status: string
   lifecycleStatus: string
   createdAt: Date
+}
+
+// Détail d'UNE facture (GET /invoices/:id, Task 1) : étend le résumé de liste
+// avec le routage destinataire (métadonnée mutable, D3) — volontairement PAS
+// ajouté à `InvoiceSummary`/`list()` (on ne widen pas le DTO de liste).
+export interface InvoiceDetail extends InvoiceSummary {
+  routingStatus: string
+  recipientPlatform: string | null
 }
 
 export interface StatusEvent {
@@ -158,7 +168,7 @@ export class InvoicesRepository {
     })
   }
 
-  async findById(tenantId: string, id: string): Promise<InvoiceSummary | null> {
+  async findById(tenantId: string, id: string): Promise<InvoiceDetail | null> {
     return this.tenant.run(tenantId, async (db) => {
       const rows = await db
         .select({
@@ -170,6 +180,8 @@ export class InvoicesRepository {
           status: invoices.status,
           lifecycleStatus: invoices.lifecycleStatus,
           createdAt: invoices.createdAt,
+          routingStatus: invoices.routingStatus,
+          recipientPlatform: invoices.recipientPlatform,
         })
         .from(invoices)
         .where(eq(invoices.id, id))
@@ -443,6 +455,49 @@ export class InvoicesRepository {
           status: invoices.archiveStatus,
           location: invoices.archiveLocation,
           hash: invoices.archiveHash,
+        })
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .limit(1)
+      return rows[0] ?? null
+    })
+  }
+
+  // Marque le résultat de la résolution du destinataire, best-effort (Task 2,
+  // 3.3). `platform` omis (unaddressable/ambiguous/pending) → effacé (pas
+  // d'empreinte stale d'une résolution précédente). Idempotence : ré-écriture
+  // = écrasement déterministe (aucun CAS, aucun événement de journal — D2 :
+  // métadonnée mutable, orthogonale au cycle de vie CDV scellé).
+  async markRoutingStatus(
+    tenantId: string,
+    invoiceId: string,
+    status: RoutingStatus,
+    platform?: string,
+  ): Promise<void> {
+    await this.tenant.run(tenantId, async (db) => {
+      await db
+        .update(invoices)
+        .set({
+          routingStatus: status,
+          recipientPlatform: platform ?? null,
+          updatedAt: new Date(),
+        })
+        .where(eq(invoices.id, invoiceId))
+    })
+  }
+
+  async findRoutingState(
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<{
+    status: string
+    platform: string | null
+  } | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          status: invoices.routingStatus,
+          platform: invoices.recipientPlatform,
         })
         .from(invoices)
         .where(eq(invoices.id, invoiceId))
