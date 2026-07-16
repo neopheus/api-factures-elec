@@ -127,6 +127,43 @@ describe('aggregatePayments — TB-3 (10.2 per-facture / 10.4 agrégé, services
     ])
   })
 
+  it("agrège l'encaissement d'un export B2C (vendeur FR, particulier étranger) dans le 10.4 domestique et exerce la branche d'audit (revue T7, LOW/nit)", async () => {
+    // Même repli que côté transactions (D4/T3) : le particulier ÉTRANGER est
+    // classé 10.3 → agrégé en 10.4, tracé par le compteur/warn d'audit
+    // (interprétation à confirmer Annexe 7, go-live).
+    const exportB2C = inv({
+      number: 'FAC-EXPORT-DE',
+      buyer: { name: 'Privatperson DE', address: { countryCode: 'DE' } },
+    })
+    const domestic = inv({ number: 'FAC-B2C-FR' })
+    const rowExport = paymentRow({
+      id: 'pay-DE',
+      invoiceId: 'inv-DE',
+      reference: 'REF-DE',
+      subtotals: [{ taxPercent: '20.00', amount: '120.00' }],
+    })
+    const rowDomestic = paymentRow({
+      id: 'pay-FR',
+      invoiceId: 'inv-FR',
+      reference: 'REF-FR',
+      subtotals: [{ taxPercent: '20.00', amount: '80.00' }],
+    })
+    const report = await aggregatePayments([rowExport, rowDomestic], {
+      ...opts,
+      loadInvoice: loaderFor({ 'inv-DE': exportB2C, 'inv-FR': domestic }),
+    })
+
+    // Oracle indépendant : fusion RÉELLE export + domestique (même date,
+    // taux, devise) = 120.00 + 80.00 = 200.00 — jamais émis en 10.2.
+    expect(report?.invoices).toEqual([])
+    expect(report?.transactions).toEqual([
+      {
+        paymentDate: '20260915',
+        subtotals: [{ taxPercent: '20.00', amount: '200.00', currency: 'EUR' }],
+      },
+    ])
+  })
+
   it('NE fusionne PAS deux encaissements même (date, taux) en devises DIFFÉRENTES — la devise fait partie de la clé (revue T7, MEDIUM-1)', async () => {
     const invoiceEur = inv({ number: 'FAC-B2C-EUR' })
     const invoiceUsd = inv({ number: 'FAC-B2C-USD', currency: 'USD' })
