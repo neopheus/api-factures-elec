@@ -11,6 +11,7 @@ import type { Response } from 'express'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
+import { isUuid } from '../common/uuid.js'
 // biome-ignore lint/style/useImportType: résolus par Nest via design:paramtypes.
 import { InvoicesRepository } from '../invoices/invoices.repository.js'
 // biome-ignore lint/style/useImportType: résolus par Nest via design:paramtypes.
@@ -34,13 +35,10 @@ export class LedgerController {
   @Get(':id/ledger')
   @UseGuards(TenantAuthGuard)
   async ledger(@CurrentTenant() tenantId: string, @Param('id') id: string) {
+    if (!isUuid(id)) throw this.notFound()
     // 404 anti-fuite si la facture n'existe pas dans ce tenant (RLS).
     const status = await this.repo.getLifecycleStatus(tenantId, id)
-    if (status === null) {
-      throw new NotFoundException(
-        problem(404, ProblemType.notFound, 'Unknown invoice'),
-      )
-    }
+    if (status === null) throw this.notFound()
     const events = await this.repo.loadSealedEventsByInvoice(tenantId, id)
     // Deux vérifications complémentaires, exposées côte à côte (amendement
     // A-IMPORTANT, revue du plan) : `integrity` (self-check par-facture) ne
@@ -86,12 +84,9 @@ export class LedgerController {
     @Query('format') format: string | undefined,
     @Res() res: Response,
   ): Promise<void> {
+    if (!isUuid(id)) throw this.notFound()
     const doc = await this.pafService.buildPaf(tenantId, id)
-    if (doc === null) {
-      throw new NotFoundException(
-        problem(404, ProblemType.notFound, 'Unknown invoice'),
-      )
-    }
+    if (doc === null) throw this.notFound()
     if (format === 'csv') {
       res.type('text/csv')
       res.setHeader(
@@ -102,5 +97,11 @@ export class LedgerController {
       return
     }
     res.json(doc)
+  }
+
+  private notFound(): NotFoundException {
+    return new NotFoundException(
+      problem(404, ProblemType.notFound, 'Unknown invoice'),
+    )
   }
 }

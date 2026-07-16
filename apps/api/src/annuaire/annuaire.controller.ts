@@ -16,6 +16,7 @@ import {
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
+import { isUuid } from '../common/uuid.js'
 import { parseBody, parseQuery } from '../common/validation.js'
 import { LigneSlotConflictError } from './annuaire.repository.js'
 // biome-ignore lint/style/useImportType: AnnuaireConsultationService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
@@ -171,6 +172,7 @@ export class AnnuaireController {
     @Param('id') id: string,
     @Body() body: unknown,
   ) {
+    if (!isUuid(id)) throw this.notFound()
     const existing = await this.publication.getLigne(tenantId, id)
     if (!existing) throw this.notFound()
     const parsed = parseBody(endEffectBodySchema, body)
@@ -193,6 +195,7 @@ export class AnnuaireController {
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,
   ): Promise<void> {
+    if (!isUuid(id)) throw this.notFound()
     const existing = await this.publication.getLigne(tenantId, id)
     if (!existing) throw this.notFound()
     try {

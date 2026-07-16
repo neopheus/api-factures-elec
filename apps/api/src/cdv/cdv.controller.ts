@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
+import { isUuid } from '../common/uuid.js'
 import { parseQuery } from '../common/validation.js'
 // biome-ignore lint/style/useImportType: CdvTransmissionRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { CdvTransmissionRepository } from './cdv-transmission.repository.js'
@@ -79,6 +80,7 @@ export class CdvController {
     @Param('id') id: string,
     @Res() res: Response,
   ): Promise<void> {
+    if (!isUuid(id)) throw this.notFound()
     const row = await this.repo.findTransmission(tenantId, id)
     // `xml === null` (ex. `parked`, résolution annuaire jamais aboutie —
     // Task 6) traité comme absent : rien à servir, même 404 QUE pour un id
@@ -91,6 +93,7 @@ export class CdvController {
   @Get('transmissions/:id/events')
   @UseGuards(TenantAuthGuard)
   async events(@CurrentTenant() tenantId: string, @Param('id') id: string) {
+    if (!isUuid(id)) throw this.notFound()
     const row = await this.repo.findTransmission(tenantId, id)
     if (row === null) throw this.notFound()
     const events = await this.repo.listStatusEvents(tenantId, id)

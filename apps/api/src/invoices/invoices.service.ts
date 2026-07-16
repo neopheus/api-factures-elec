@@ -11,10 +11,10 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common'
 import { ProblemType, problem } from '../common/problem.js'
+import { isUuid } from '../common/uuid.js'
 // biome-ignore lint/style/useImportType: InvoiceGenerationQueue résolu par Nest via design:paramtypes.
 import { InvoiceGenerationQueue } from '../queue/invoice-generation.queue.js'
 import type { FormatKind } from './format-generator.port.js'
-import { isUuid } from './format-kind.js'
 import type { InvoiceDetail } from './invoices.repository.js'
 // biome-ignore lint/style/useImportType: InvoicesRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { InvoicesRepository } from './invoices.repository.js'

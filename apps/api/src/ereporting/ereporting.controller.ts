@@ -10,6 +10,7 @@ import type { Response } from 'express'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
+import { isUuid } from '../common/uuid.js'
 import type { EreportingStatusEventRow } from './ereporting.repository.js'
 // biome-ignore lint/style/useImportType: EreportingRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { EreportingRepository } from './ereporting.repository.js'
@@ -95,6 +96,7 @@ export class EreportingController {
     @Param('id') id: string,
     @Res() res: Response,
   ): Promise<void> {
+    if (!isUuid(id)) throw this.notFound()
     const status = await this.repo.findTransmissionStatus(tenantId, id)
     if (status === null) throw this.notFound()
     const xml = await this.repo.loadTransmissionXml(tenantId, id)
@@ -106,6 +108,7 @@ export class EreportingController {
   @Get('transmissions/:id/events')
   @UseGuards(TenantAuthGuard)
   async events(@CurrentTenant() tenantId: string, @Param('id') id: string) {
+    if (!isUuid(id)) throw this.notFound()
     const status = await this.repo.findTransmissionStatus(tenantId, id)
     if (status === null) throw this.notFound()
     const events = await this.repo.listStatusEvents(tenantId, id)
