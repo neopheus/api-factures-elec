@@ -51,6 +51,15 @@ export class PaymentsRepository {
   // reload). Sur INSERT réel, les sous-totaux s'insèrent dans LA MÊME
   // transaction — UNIQUEMENT si created (un re-POST du même (invoice,
   // reference) ne doit JAMAIS écraser ni dupliquer les sous-totaux d'origine).
+  //
+  // INVARIANT APPELANT (revue T4, MEDIUM-1) : l'appelant DOIT avoir vérifié
+  // sous RLS que `invoiceId` appartient au tenant AVANT d'appeler (motif
+  // loadCanonical → 404 anti-fuite, Task 5). Les contraintes FK Postgres
+  // IGNORENT la RLS : sans ce garde, un tenant pourrait créer un payment
+  // pointant la facture d'un autre tenant, et une collision
+  // (invoice_id, reference) avec une ligne d'un autre tenant rend le reload
+  // sous RLS aveugle → le throw défensif ci-dessous se déclenche alors de
+  // façon DÉTERMINISTE (ce n'est pas seulement une course improbable).
   async insertPayment(
     tenantId: string,
     input: PaymentCapture,
