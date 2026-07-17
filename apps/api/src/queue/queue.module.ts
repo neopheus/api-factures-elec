@@ -3,9 +3,12 @@ import { Module } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import type { ConnectionOptions } from 'bullmq'
 import type { EnvConfig } from '../config/env.js'
+import { ereportingGenerationJobOptions } from './ereporting-generation.job-options.js'
+import { EreportingGenerationQueue } from './ereporting-generation.queue.js'
 import { invoiceGenerationJobOptions } from './invoice-generation.job-options.js'
 import { InvoiceGenerationQueue } from './invoice-generation.queue.js'
 import {
+  EREPORTING_GENERATION_QUEUE,
   INVOICE_GENERATION_QUEUE,
   MAINTENANCE_QUEUE,
 } from './queue.constants.js'
@@ -83,8 +86,23 @@ import {
     // maintenance sont posés explicitement par leurs planificateurs, cf.
     // worker/reconciliation.scheduler.ts et, à venir, Task 7).
     BullModule.registerQueue({ name: MAINTENANCE_QUEUE }),
+    // `ereporting-generation` (plan 3.4, D2, Task 2) : jusqu'ici enregistrée
+    // UNIQUEMENT côté worker (WorkerQueueModule, producteur du sweep IN +
+    // consommateur). L'API devient ICI un SECOND producteur — l'endpoint
+    // opérateur de retransmission (EreportingRetransmissionService) enfile
+    // un job `type='RE'` via `EreportingGenerationQueue.enqueueRetransmission`
+    // sous ce MÊME `forRootAsync` skip*/HTTP (aucune divergence de politique
+    // de job : `ereportingGenerationJobOptions` reste la SEULE source de
+    // vérité, partagée avec worker-queue.module.ts).
+    BullModule.registerQueueAsync({
+      name: EREPORTING_GENERATION_QUEUE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<EnvConfig, true>) => ({
+        defaultJobOptions: ereportingGenerationJobOptions(config),
+      }),
+    }),
   ],
-  providers: [InvoiceGenerationQueue],
-  exports: [BullModule, InvoiceGenerationQueue],
+  providers: [InvoiceGenerationQueue, EreportingGenerationQueue],
+  exports: [BullModule, InvoiceGenerationQueue, EreportingGenerationQueue],
 })
 export class QueueModule {}

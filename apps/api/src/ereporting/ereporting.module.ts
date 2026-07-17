@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common'
 import { AuthModule } from '../auth/auth.module.js'
+import { RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
+import { QueueModule } from '../queue/queue.module.js'
 import { UsersModule } from '../users/users.module.js'
 import { EreportingController } from './ereporting.controller.js'
 import { EreportingRepository } from './ereporting.repository.js'
+import { EreportingRetransmissionService } from './ereporting-retransmission.service.js'
 import { EreportingStatusService } from './ereporting-status.service.js'
 
 // TenantAuthGuard dépend d'ApiKeyService (AuthModule) ET de SessionService
@@ -13,10 +16,22 @@ import { EreportingStatusService } from './ereporting-status.service.js'
 // AUCUN module existant (jusqu'ici seulement instancié comme provider de
 // WorkerModule, hors périmètre HTTP) : le fournir ICI en tant que provider
 // (TenantContextService, dont il dépend, est global via DbModule).
+// `QueueModule` (plan 3.4, D2, Task 2) : requis pour injecter
+// `EreportingGenerationQueue` (producteur du rectificatif RE) dans
+// `EreportingRetransmissionService` — motif InvoicesModule. `RolesGuard` ne
+// dépend que de `Reflector` (built-in Nest) — fourni en provider local
+// (motif PaymentsModule/InvoicesModule) ; `CsrfGuard`/`SessionService` ne
+// sont PAS re-déclarés ici : `UsersModule` les exporte déjà.
 @Module({
-  imports: [AuthModule, UsersModule],
+  imports: [AuthModule, UsersModule, QueueModule],
   controllers: [EreportingController],
-  providers: [EreportingRepository, EreportingStatusService, TenantAuthGuard],
+  providers: [
+    EreportingRepository,
+    EreportingStatusService,
+    EreportingRetransmissionService,
+    TenantAuthGuard,
+    RolesGuard,
+  ],
   exports: [EreportingStatusService],
 })
 export class EreportingModule {}

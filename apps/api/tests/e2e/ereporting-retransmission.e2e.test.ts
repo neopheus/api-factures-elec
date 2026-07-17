@@ -1,6 +1,8 @@
 import { buildInvoice, type InvoiceInput } from '@factelec/invoice-core'
+import type { INestApplication } from '@nestjs/common'
 import { Queue } from 'bullmq'
 import pg from 'pg'
+import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import { InvoicesRepository } from '../../src/invoices/invoices.repository.js'
@@ -9,8 +11,10 @@ import {
   type EreportingGenerationJob,
 } from '../../src/queue/ereporting-generation.job.js'
 import { EREPORTING_GENERATION_QUEUE } from '../../src/queue/queue.constants.js'
+import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
 import { startTestRedis, type TestRedis } from './helpers/redis.js'
+import { seedTenantWithKey } from './helpers/seed.js'
 import { createTestWorker, waitFor } from './helpers/worker.js'
 
 // Worker de génération e-reporting — branche RETRANSMISSION (plan 3.4, Task
@@ -22,6 +26,12 @@ import { createTestWorker, waitFor } from './helpers/worker.js'
 // HTTP — Task 2), motif identique à ereporting-generation.e2e.test.ts.
 // Postgres + Redis RÉELS (Testcontainers), sink de transmission en mémoire
 // (helpers/worker.ts). Un worker PAR test (createTestWorker/close).
+//
+// Dernier `it()` (Task 2, D1/D2) : bout-en-bout endpoint→worker — étend ce
+// fichier HEAVY plutôt que d'en créer un second (choix le plus simple,
+// justifié au brief : Postgres+Redis+worker y sont déjà disponibles). Le
+// fichier LIGHT `ereporting-retransmission-endpoint.e2e.test.ts` couvre
+// séparément l'enfilement/les garde-fous SANS worker (verrou heavy-suites).
 
 const b2cInvoice = (
   number: string,
@@ -405,6 +415,74 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       ).toEqual(['prepared', 'transmitted'])
     } finally {
       await queue.close()
+      await worker.close()
+    }
+  })
+
+  it('bout-en-bout : POST /ereporting/retransmissions (202) → le worker produit la transmission RE (plan 3.4, Task 2, D1/D2)', async () => {
+    const { tenantId, token } = await seedTenantWithKey(ownerPool, 'ERE-RE-5')
+    const siren = '655555555'
+    const declarantId = await makeDeclarant(tenantId, siren)
+    await invoicesRepo.insertReceived(
+      tenantId,
+      buildInvoice(b2cInvoice('FA-RE-5-1', siren, '2026-09-05')),
+    )
+
+    const worker = await createTestWorker(db.appUrl, redis)
+    const app: INestApplication = await createTestApp(db.appUrl, {
+      host: redis.host,
+      port: redis.port,
+    })
+    const seedQueue = new Queue<EreportingGenerationJob>(
+      EREPORTING_GENERATION_QUEUE,
+      { connection: { host: redis.host, port: redis.port } },
+    )
+    try {
+      // IN préalable requis par le garde D4 — via le worker, motif des
+      // autres `it()` de ce fichier (jamais via l'endpoint, réservé au RE).
+      await seedQueue.add(
+        EREPORTING_GENERATE_JOB,
+        jobPayload({ tenantId, declarantId, siren }),
+      )
+      await waitFor(
+        async () => (await transmittedCount(declarantId, 'IN')) === 1,
+      )
+
+      // Déclenchement OPÉRATEUR réel via l'endpoint dual-auth (D1 : AUCUN
+      // automatisme post-301 — le test appelle explicitement le POST, comme
+      // le ferait un opérateur après correction des données source).
+      const res = await request(app.getHttpServer())
+        .post('/ereporting/retransmissions')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          declarantId,
+          fluxKind: 'transactions',
+          periodStart: '20260901',
+        })
+        .expect(202)
+      expect(res.body).toEqual({
+        jobId: `${declarantId}-transactions-20260901-RE-0`,
+        transmissionRef: `ER-${declarantId.slice(0, 8)}-20260901-RE-0`,
+      })
+
+      await waitFor(
+        async () => (await transmittedCount(declarantId, 'RE')) === 1,
+      )
+
+      const re = await ownerPool.query(
+        `SELECT transmission_ref, status FROM ereporting_transmissions
+           WHERE declarant_id = $1 AND type = 'RE'`,
+        [declarantId],
+      )
+      expect(re.rows).toHaveLength(1)
+      // La transmission créée par le WORKER porte EXACTEMENT le ref annoncé
+      // par la réponse HTTP (le `reSeq` retourné à l'opérateur et celui du
+      // payload du job sont IDENTIQUES, cf. rapport Task 1).
+      expect(re.rows[0].transmission_ref).toBe(res.body.transmissionRef)
+      expect(re.rows[0].status).toBe('transmitted')
+    } finally {
+      await seedQueue.close()
+      await app.close()
       await worker.close()
     }
   })

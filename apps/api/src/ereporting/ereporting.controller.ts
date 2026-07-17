@@ -1,16 +1,23 @@
 import {
+  Body,
   Controller,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
+  Post,
   Res,
   UseGuards,
 } from '@nestjs/common'
 import type { Response } from 'express'
+import { z } from 'zod'
+import { CsrfGuard } from '../auth/csrf.guard.js'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
+import { Roles, RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
 import { isUuid } from '../common/uuid.js'
+import { parseBody } from '../common/validation.js'
 import type { EreportingStatusEventRow } from './ereporting.repository.js'
 // biome-ignore lint/style/useImportType: EreportingRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { EreportingRepository } from './ereporting.repository.js'
@@ -18,6 +25,24 @@ import {
   EREPORTING_STATUS_META,
   type EreportingStatus,
 } from './ereporting-lifecycle.js'
+// biome-ignore lint/style/useImportType: EreportingRetransmissionService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
+import { EreportingRetransmissionService } from './ereporting-retransmission.service.js'
+
+// AAAAMMJJ (motif payments/payment.model.ts DATE_RE) — REDÉFINIE localement
+// (pas d'import cross-domaine, décision contrôleur plan 3.2 Task 5) : chaque
+// jour valide du calendrier, y compris les débuts de décade (01/11/21).
+const PERIOD_RE = /^\d{4}(0[1-9]|1[012])(0[1-9]|[12][0-9]|3[01])$/
+
+const retransmissionSchema = z.object({
+  declarantId: z.uuid(),
+  fluxKind: z.enum(['transactions', 'payments']),
+  periodStart: z
+    .string()
+    .regex(
+      PERIOD_RE,
+      'periodStart must be AAAAMMJJ (8 digits, valid month/day)',
+    ),
+})
 
 type RejectOrigin = 'local' | 'ppf' | null
 
@@ -52,7 +77,31 @@ function statusView(status: EreportingStatus) {
 // (colonne lourde).
 @Controller('ereporting')
 export class EreportingController {
-  constructor(private readonly repo: EreportingRepository) {}
+  constructor(
+    private readonly repo: EreportingRepository,
+    private readonly retransmission: EreportingRetransmissionService,
+  ) {}
+
+  // Endpoint OPÉRATEUR de retransmission (plan 3.4, D1/D2/D4) — déclenchement
+  // MANUEL uniquement, jamais un automatisme post-301 (jugement humain après
+  // correction des données source). Dual-auth (motif EXACT
+  // PaymentsController.capture, 1ᵉ précédent de mutation dual-auth du
+  // projet) : TenantAuthGuard (clé API OU session) + RolesGuard/CsrfGuard
+  // (s'appliquent SEULEMENT à la session, bypass explicite sur apiKeyId).
+  // 202 (pas 200/201) : la génération/transmission RE reste ASYNCHRONE
+  // (BullMQ) — l'opérateur observe le résultat via GET /ereporting/transmissions
+  // (déjà livré 2.3).
+  @Post('retransmissions')
+  @HttpCode(202)
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
+  @Roles('owner', 'admin', 'accountant')
+  async retransmit(
+    @CurrentTenant() tenantId: string,
+    @Body() body: unknown,
+  ): Promise<{ jobId: string; transmissionRef: string }> {
+    const input = parseBody(retransmissionSchema, body)
+    return this.retransmission.retransmit(tenantId, input)
+  }
 
   @Get('transmissions')
   @UseGuards(TenantAuthGuard)
@@ -124,8 +173,18 @@ export class EreportingController {
   }
 
   private notFound(): NotFoundException {
-    return new NotFoundException(
-      problem(404, ProblemType.notFound, 'Unknown transmission'),
-    )
+    return ereportingNotFound()
   }
+}
+
+// Fabrique 404 PARTAGÉE (plan 3.4, Task 2) : le service de retransmission
+// (ereporting-retransmission.service.ts, garde D4 « déclarant inconnu ») la
+// réutilise TELLE QUELLE pour un corps byte-identique — anti-fuite
+// d'existence de déclarant, un seul body 404 pour TOUT le contrôleur
+// ereporting (nit revue du plan : la précision du wording cède devant
+// l'anti-fuite).
+export function ereportingNotFound(): NotFoundException {
+  return new NotFoundException(
+    problem(404, ProblemType.notFound, 'Unknown transmission'),
+  )
 }
