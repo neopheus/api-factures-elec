@@ -159,7 +159,7 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       )
 
       const re = await ownerPool.query(
-        `SELECT transmission_ref, invoice_count, status FROM ereporting_transmissions
+        `SELECT transmission_ref, invoice_count, status, xml FROM ereporting_transmissions
            WHERE declarant_id = $1 AND type = 'RE'`,
         [declarantId],
       )
@@ -170,6 +170,22 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       // Régénération COMPLÈTE depuis les données ACTUELLES : les DEUX
       // factures (celle de l'IN + celle ajoutée après) sont dans le RE.
       expect(re.rows[0].invoice_count).toBe(2)
+      // Oracle indépendant sur les MONTANTS du XML RE (revue T1, NIT-1) :
+      // 2 factures B2C à 1000.00 HT / 20 %, à des DATES DIFFÉRENTES (05/09 et
+      // 06/09) → l'agrégat 10.3 groupe par (date, devise, catégorie) : DEUX
+      // buckets de 1000.00 HT / 200.00 TVA chacun (calculé à la main) — la
+      // sémantique « annule et remplace » porte sur les montants, pas
+      // seulement le compte de factures.
+      const teaCount = (
+        re.rows[0].xml.match(
+          /<TaxExclusiveAmount>1000\.00<\/TaxExclusiveAmount>/g,
+        ) ?? []
+      ).length
+      expect(teaCount).toBe(2)
+      const dates = ['20260905', '20260906'].filter((d) =>
+        re.rows[0].xml.includes(`<Date>${d}</Date>`),
+      )
+      expect(dates).toEqual(['20260905', '20260906'])
 
       const inRow = await ownerPool.query(
         `SELECT invoice_count FROM ereporting_transmissions
