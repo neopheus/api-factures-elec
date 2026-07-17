@@ -20,6 +20,7 @@ const HEAVY_TESTS = [
   'tests/e2e/ereporting-sweep.e2e.test.ts',
   'tests/e2e/session-purge.e2e.test.ts',
   'tests/e2e/invoice-routing.e2e.test.ts',
+  'tests/e2e/routing-retry.e2e.test.ts',
 ]
 
 export default defineConfig({

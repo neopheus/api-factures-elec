@@ -100,6 +100,9 @@ export const envSchema = z.object({
     .default(5),
   // Périodicité de la reprise d'archivage (archive_status='failed').
   ARCHIVE_RETRY_EVERY_MS: z.coerce.number().int().positive().default(300_000),
+  // Périodicité de la reprise du routage destinataire (Task 3, plan 3.4) —
+  // routing_status 'pending'/'unaddressable' (miroir ARCHIVE_RETRY_EVERY_MS).
+  ROUTING_RETRY_EVERY_MS: z.coerce.number().int().positive().default(300_000),
   // ── e-reporting Flux 10 (D7/D11) ─────────────────────────────────────────
   // 'local' = LocalFilesystemTransmissionStore (write-once, dev/test) ;
   // sftp/as2/as4/api = adaptateurs réels (auth transport, D3/D7) ACTIVÉS AU

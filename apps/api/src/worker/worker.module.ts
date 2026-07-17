@@ -34,7 +34,9 @@ import { EreportingSweepService } from './ereporting-sweep.service.js'
 import { InvoiceGenerationProcessor } from './invoice-generation.processor.js'
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
 import { MaintenanceProcessor } from './maintenance.processor.js'
+import { RecipientRoutingRetryService } from './recipient-routing-retry.service.js'
 import { ReconciliationScheduler } from './reconciliation.scheduler.js'
+import { RoutingRetryScheduler } from './routing-retry.scheduler.js'
 import { SessionMaintenanceService } from './session-maintenance.service.js'
 import { SessionPurgeScheduler } from './session-purge.scheduler.js'
 import { WorkerQueueModule } from './worker-queue.module.js'
@@ -96,6 +98,8 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     CdvStuckRetryService,
     CdvTransmissionScheduler,
     CdvTransmissionProcessor,
+    RecipientRoutingRetryService,
+    RoutingRetryScheduler,
   ],
 })
 export class WorkerModule {}

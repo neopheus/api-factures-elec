@@ -11,6 +11,7 @@ import {
   EREPORTING_SWEEP_JOB,
   PURGE_SESSIONS_JOB,
   RECONCILE_INVOICES_JOB,
+  ROUTING_RETRY_JOB,
 } from '../queue/maintenance.job.js'
 import { MAINTENANCE_QUEUE } from '../queue/queue.constants.js'
 // biome-ignore lint/style/useImportType: AnnuaireSweepService résolu par Nest via design:paramtypes.
@@ -25,6 +26,8 @@ import { CdvTransmissionSweepService } from './cdv-transmission-sweep.service.js
 import { EreportingSweepService } from './ereporting-sweep.service.js'
 // biome-ignore lint/style/useImportType: InvoiceReconciliationService résolu par Nest via design:paramtypes.
 import { InvoiceReconciliationService } from './invoice-reconciliation.service.js'
+// biome-ignore lint/style/useImportType: RecipientRoutingRetryService résolu par Nest via design:paramtypes.
+import { RecipientRoutingRetryService } from './recipient-routing-retry.service.js'
 // biome-ignore lint/style/useImportType: SessionMaintenanceService résolu par Nest via design:paramtypes.
 import { SessionMaintenanceService } from './session-maintenance.service.js'
 
@@ -49,6 +52,7 @@ export class MaintenanceProcessor extends WorkerHost {
     private readonly annuaireSweep: AnnuaireSweepService,
     private readonly cdvSweep: CdvTransmissionSweepService,
     private readonly cdvStuckRetry: CdvStuckRetryService,
+    private readonly routingRetry: RecipientRoutingRetryService,
   ) {
     super()
   }
@@ -97,6 +101,11 @@ export class MaintenanceProcessor extends WorkerHost {
     if (job.name === CDV_STUCK_RETRY_JOB) {
       const n = await this.cdvStuckRetry.retryParked()
       this.logger.log(`cdv stuck-retry: ${n} transmission(s)`)
+      return
+    }
+    if (job.name === ROUTING_RETRY_JOB) {
+      const n = await this.routingRetry.sweepPendingRouting()
+      this.logger.log(`routing retry sweep: ${n} invoice(s)`)
       return
     }
     this.logger.warn(`unknown maintenance job: ${job.name}`)
