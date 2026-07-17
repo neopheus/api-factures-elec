@@ -42,16 +42,27 @@ export function periodDateToIso(aaaammjj: string): string {
 // transmissionRef (TT-1, TB-1, injection Task 8 #7) : DÉTERMINISTE et ≤ 50
 // caractères — sert d'identifiant de document (ReportDocument.Id) ET de clé
 // write-once côté port (LocalFilesystemTransmissionStore, Task 6). Ne DOIT
-// PAS dépendre de l'horloge : un rejeu (même déclarant/période/type) doit
-// pouvoir régénérer EXACTEMENT le même ref. Borne structurelle : "ER-" (3) +
+// PAS dépendre de l'horloge : un rejeu (même déclarant/période/type[/reSeq])
+// doit pouvoir régénérer EXACTEMENT le même ref.
+//
+// `reSeq` (plan 3.4, D3) : discriminant du rectificatif, IGNORÉ pour
+// type='IN' — l'IN reste BYTE-IDENTIQUE à avant ce plan (aucun appelant IN
+// existant ne change). Pour type='RE' avec `reSeq` fourni, un suffixe
+// `-${reSeq}` rend le ref unique par émission (index partiel RE, migration
+// 0027) — sans lui, TOUT RE d'un slot porterait le même ref que l'IN suffixé
+// `-RE`, collisionnant au store write-once. Borne structurelle : "ER-" (3) +
 // 8 (préfixe declarantId) + "-" (1) + periodStart (8) + "-" (1) + type (2,
-// IN|RE) = 23 caractères, toujours < 50 (TRANSMISSION_TYPES, nomenclature.ts).
+// IN|RE) [+ "-" (1) + reSeq (≤ 4 chiffres, largement suffisant en pratique)]
+// = 23 caractères (IN) ou ≤ 28 (RE), toujours < 50 (TRANSMISSION_TYPES,
+// nomenclature.ts).
 export function buildTransmissionRef(
   declarantId: string,
   periodStart: string,
   type: TransmissionType,
+  reSeq?: number,
 ): string {
-  return `ER-${declarantId.slice(0, 8)}-${periodStart}-${type}`
+  const base = `ER-${declarantId.slice(0, 8)}-${periodStart}-${type}`
+  return type === 'RE' && reSeq !== undefined ? `${base}-${reSeq}` : base
 }
 
 // AAAAMMJJHHMMSS (TT-3, TG-1) — horodatage de CRÉATION de la transmission, en
@@ -189,6 +200,7 @@ export class EreportingGenerationService {
       job.declarantId,
       job.periodStart,
       job.type,
+      job.reSeq,
     )
     const report: Flux10Report = {
       document: this.buildDocument(job, transmissionRef, declarant.name),
@@ -273,6 +285,7 @@ export class EreportingGenerationService {
       job.declarantId,
       job.periodStart,
       job.type,
+      job.reSeq,
     )
     const report: Flux10Report = {
       document: this.buildDocument(job, transmissionRef, declarant.name),

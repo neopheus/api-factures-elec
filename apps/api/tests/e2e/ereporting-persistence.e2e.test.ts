@@ -363,6 +363,155 @@ describe('e-reporting persistence (e2e)', () => {
     })
   })
 
+  // ── Repository : plan 3.4 Task 1 (D3/D4) — countRetransmissions/ ─────────
+  // findInitialTransmission (nouvelle surface publique consommée par Task 2).
+
+  describe('EreportingRepository — countRetransmissions / findInitialTransmission', () => {
+    it('countRetransmissions : 0 sans RE, exact après RE, ne compte ni l’IN ni les autres slots (flux/période)', async () => {
+      const declarantId = (
+        await ownerPool.query(
+          `INSERT INTO ereporting_declarants (tenant_id, siren, name, role, vat_regime)
+           VALUES ($1, '990000001', 'Count', 'SE', 'simplifie') RETURNING id`,
+          [tenantA],
+        )
+      ).rows[0].id
+
+      expect(
+        await repo.countRetransmissions(
+          tenantA,
+          declarantId,
+          'transactions',
+          '20260901',
+        ),
+      ).toBe(0)
+
+      await repo.insertTransmission(
+        tenantA,
+        transmission(declarantId, {
+          transmissionRef: 'TT-CNT-IN',
+          periodStart: '20260901',
+          periodEnd: '20260930',
+        }),
+      )
+      // L'IN ne compte JAMAIS comme RE.
+      expect(
+        await repo.countRetransmissions(
+          tenantA,
+          declarantId,
+          'transactions',
+          '20260901',
+        ),
+      ).toBe(0)
+
+      await repo.insertTransmission(
+        tenantA,
+        transmission(declarantId, {
+          transmissionRef: 'TT-CNT-RE-0',
+          type: 'RE',
+          periodStart: '20260901',
+          periodEnd: '20260930',
+        }),
+      )
+      expect(
+        await repo.countRetransmissions(
+          tenantA,
+          declarantId,
+          'transactions',
+          '20260901',
+        ),
+      ).toBe(1)
+
+      await repo.insertTransmission(
+        tenantA,
+        transmission(declarantId, {
+          transmissionRef: 'TT-CNT-RE-1',
+          type: 'RE',
+          periodStart: '20260901',
+          periodEnd: '20260930',
+        }),
+      )
+      expect(
+        await repo.countRetransmissions(
+          tenantA,
+          declarantId,
+          'transactions',
+          '20260901',
+        ),
+      ).toBe(2)
+
+      // Un autre flux_kind sur la MÊME période ne contamine pas le compte.
+      expect(
+        await repo.countRetransmissions(
+          tenantA,
+          declarantId,
+          'payments',
+          '20260901',
+        ),
+      ).toBe(0)
+    })
+
+    it('findInitialTransmission : null sans IN, renvoie id/status/periodEnd de l’IN (jamais un RE)', async () => {
+      const declarantId = (
+        await ownerPool.query(
+          `INSERT INTO ereporting_declarants (tenant_id, siren, name, role, vat_regime)
+           VALUES ($1, '990000002', 'FindIn', 'SE', 'simplifie') RETURNING id`,
+          [tenantA],
+        )
+      ).rows[0].id
+
+      expect(
+        await repo.findInitialTransmission(
+          tenantA,
+          declarantId,
+          'transactions',
+          '20260701',
+        ),
+      ).toBeNull()
+
+      const { id: inId } = await repo.insertTransmission(
+        tenantA,
+        transmission(declarantId, {
+          transmissionRef: 'TT-FIND-IN',
+          periodStart: '20260701',
+          periodEnd: '20260731',
+        }),
+      )
+      // Un RE co-existant sur le même slot ne doit JAMAIS être renvoyé ici.
+      await repo.insertTransmission(
+        tenantA,
+        transmission(declarantId, {
+          transmissionRef: 'TT-FIND-RE',
+          type: 'RE',
+          periodStart: '20260701',
+          periodEnd: '20260731',
+        }),
+      )
+
+      const found = await repo.findInitialTransmission(
+        tenantA,
+        declarantId,
+        'transactions',
+        '20260701',
+      )
+      expect(found).toEqual({
+        id: inId,
+        status: 'prepared',
+        periodEnd: '20260731',
+      })
+
+      // Statut de l'IN reflété tel quel (garde M-D4-1 appliqué par l'appelant,
+      // pas ici) — transmitted après markTransmitted.
+      await repo.markTransmitted(tenantA, inId, 'TRACK-FIND')
+      const foundAfter = await repo.findInitialTransmission(
+        tenantA,
+        declarantId,
+        'transactions',
+        '20260701',
+      )
+      expect(foundAfter?.status).toBe('transmitted')
+    })
+  })
+
   // ── Repository : déclarants ──────────────────────────────────────────────
 
   describe('EreportingRepository — déclarants', () => {
