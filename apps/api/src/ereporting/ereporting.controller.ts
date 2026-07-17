@@ -3,7 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
-  NotFoundException,
+  type NotFoundException,
   Param,
   Post,
   Res,
@@ -15,12 +15,12 @@ import { CsrfGuard } from '../auth/csrf.guard.js'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { Roles, RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
-import { ProblemType, problem } from '../common/problem.js'
 import { isUuid } from '../common/uuid.js'
 import { parseBody } from '../common/validation.js'
 import type { EreportingStatusEventRow } from './ereporting.repository.js'
 // biome-ignore lint/style/useImportType: EreportingRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { EreportingRepository } from './ereporting.repository.js'
+import { ereportingNotFound } from './ereporting-errors.js'
 import {
   EREPORTING_STATUS_META,
   type EreportingStatus,
@@ -173,18 +173,8 @@ export class EreportingController {
   }
 
   private notFound(): NotFoundException {
+    // Fabrique relogée dans ereporting-errors.ts (revue T2 N-1 : module
+    // neutre, plus de dépendance service→contrôleur).
     return ereportingNotFound()
   }
-}
-
-// Fabrique 404 PARTAGÉE (plan 3.4, Task 2) : le service de retransmission
-// (ereporting-retransmission.service.ts, garde D4 « déclarant inconnu ») la
-// réutilise TELLE QUELLE pour un corps byte-identique — anti-fuite
-// d'existence de déclarant, un seul body 404 pour TOUT le contrôleur
-// ereporting (nit revue du plan : la précision du wording cède devant
-// l'anti-fuite).
-export function ereportingNotFound(): NotFoundException {
-  return new NotFoundException(
-    problem(404, ProblemType.notFound, 'Unknown transmission'),
-  )
 }

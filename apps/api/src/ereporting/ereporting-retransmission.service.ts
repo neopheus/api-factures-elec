@@ -2,9 +2,9 @@ import { ConflictException, Injectable } from '@nestjs/common'
 import { ProblemType, problem } from '../common/problem.js'
 // biome-ignore lint/style/useImportType: EreportingGenerationQueue résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { EreportingGenerationQueue } from '../queue/ereporting-generation.queue.js'
-import { ereportingNotFound } from './ereporting.controller.js'
 // biome-ignore lint/style/useImportType: EreportingRepository résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { EreportingRepository, type FluxKind } from './ereporting.repository.js'
+import { ereportingNotFound } from './ereporting-errors.js'
 import { buildTransmissionRef } from './ereporting-generation.service.js'
 
 export interface RetransmissionInput {
