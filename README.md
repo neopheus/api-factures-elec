@@ -10,8 +10,8 @@ point d'accès Peppol interne. Connecteurs natifs PrestaShop, WooCommerce, Shopi
 API publique pour les systèmes custom.
 
 > **État du projet (18/07/2026) : plans 1.1, 1.2, 1.2bis, 1.3, 1.4, 2.1, 2.2,
-> 2.3, 2.4, 3.1, 3.2, 3.3 et 3.4 terminés et mergés ; plan 3.5 (consentement
-> probant & séparation des rôles) terminé sur cette branche ; dettes
+> 2.3, 2.4, 3.1, 3.2, 3.3, 3.4 et 3.5 terminés et mergés ; plan 3.6
+> (révocation de consentement) terminé sur cette branche ; dettes
 > héritées soldées avant chaque plan suivant.**
 > `invoice-core` (v0.3.1 — patch BT-9) livre les **formats du socle** : UBL 2.1
 > Invoice **et** CreditNote (avoir), extraits de flux DGFiP F1 (facture et
@@ -261,8 +261,16 @@ API publique pour les systèmes custom.
 > `factelec_worker`** de moindre privilège sont également livrés **côté
 > code** en 3.5 — les fournisseurs eIDAS réels de signature qualifiée et le
 > provisioning prod du rôle worker restent des **items Xavier** (voir
-> Déploiement ci-dessous). **Horizon 2.x** : journal d'audit des
-> authentifications (distinct du journal CDV).
+> Déploiement ci-dessous). La **révocation de consentement** (colonne
+> `revoked_at` prête depuis 2.4, non exposée) est **RÉSOLUE en 3.6** (`POST
+> /annuaire/consents/:id/revoke`, dual-auth, révocation-**seule** — voir
+> `apps/api/README.md` § Révocation de consentement — 3.6) : elle bloque
+> **toute publication neuve** adossée au consentement révoqué mais ne
+> rétracte **pas** l'adressage déjà publié — le miroir de consultation
+> continue de router les tiers vers la plateforme jusqu'à l'actualisation
+> opérateur (procédure §3.5.5.5 note 85, transmission Flux 13 réelle
+> différée). **Horizon 2.x** : journal d'audit des authentifications
+> (distinct du journal CDV).
 > **Déploiement** : confirmer `CREATE EXTENSION pgcrypto` sur le Postgres
 > managé Scaleway, fournir l'adaptateur `S3ObjectLockArchiveStore`,
 > adaptateurs de transmission e-reporting réels (sftp/as2/as4/api),
@@ -365,7 +373,7 @@ fichiers (hors tests).
 ## `@factelec/api`
 
 API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4 + 3.1 +
-3.2 + 3.3 + 3.4 + 3.5** : ingestion et lecture des factures (consommant `@factelec/invoice-core`),
+3.2 + 3.3 + 3.4 + 3.5 + 3.6** : ingestion et lecture des factures (consommant `@factelec/invoice-core`),
 authentification utilisateur (sessions httpOnly + CSRF), signup self-service
 transactionnel, gestion des clés API par session, super admin plateforme
 minimal, **workers BullMQ de génération asynchrone**, **cycle de vie des
@@ -458,8 +466,27 @@ du projet, preuve RED réelle (6 e2e négatifs ayant réellement exécuté les
 mutations avant correctif). Voir § Consentement scellé, rôle worker &
 re-résolution ambiguous dans `apps/api/README.md` pour le détail complet, la
 matrice de grants et les différés (fournisseurs eIDAS réels, déploiement du
-rôle worker, révocation de consentement, garde composé
-`DualAuthMutationGuard` — refusé à nouveau, en voie médiane).
+rôle worker, garde composé `DualAuthMutationGuard` — refusé à nouveau, en
+voie médiane).
+**Révocation de consentement** (3.6) : `POST
+/annuaire/consents/:id/revoke` (7ᵉ mutation dual-auth du projet, triple
+garde dès sa création) écrit `revoked_at` en **CAS write-once idempotent**
+(rejeu → `revokedAt` d'origine, monotone) et bloque **toute publication
+neuve** adossée au consentement révoqué (gate existant, non-régression
+prouvée sur les deux chemins de résolution du consentement). **Révocation-
+seule** (ancrage §3.5.5.5 note 85 + sémantique locale, non-propagée, de
+`maskLigne`) : **aucune cascade automatique** sur l'adressage déjà publié —
+formulé **sans euphémisme**, le miroir de consultation continue de router
+les tiers vers la plateforme pour les mailles déjà consolidées, jusqu'à
+l'actualisation opérateur (procédure clôturer/masquer/fallback, note 85 ;
+transmission Flux 13 réelle **différée**). Réponse
+`{ consentId, revokedAt, dependentActiveLignes }` — l'anti-silence sur les
+lignes actives encore dépendantes. Verrou d'architecture M1 étendu 6→7.
+Voir § Révocation de consentement — 3.6 dans `apps/api/README.md` pour le
+détail complet, le runbook opérateur et les différés (cascade Flux 13
+réelle, raison de révocation stockée, outils d'actualisation en masse,
+ainsi qu'une divergence Tableau 6 **pré-existante** et **non liée**,
+notée au backlog).
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -806,9 +833,43 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       négatifs ayant réellement exécuté les mutations avant correctif).
       **Différés explicites** : fournisseurs eIDAS réels, déploiement du
       rôle worker (incluant le retrait de suivi de l'`EXECUTE` superflu à
-      `factelec_app`), révocation de consentement, garde composé
-      `DualAuthMutationGuard` (**refusé à nouveau**, en voie médiane).
+      `factelec_app`), garde composé `DualAuthMutationGuard` (**refusé à
+      nouveau**, en voie médiane).
       Détail complet : `apps/api/README.md`.
+- [x] **3.6 — Révocation de consentement** (terminé) : ferme le seul axe
+      manquant du cycle de vie du consentement annuaire — la colonne
+      `annuaire_consents.revoked_at` (2.4) était déjà **lue** par le gate de
+      publication mais **aucun** endpoint ne l'écrivait. `POST
+      /annuaire/consents/:id/revoke` (7ᵉ mutation dual-auth du projet,
+      triple garde dès sa création) écrit `revoked_at` en **CAS write-once
+      idempotent** (rejeu → `revokedAt` d'origine, monotone), 404 anti-fuite
+      byte-identique, aucune migration (colonne et grant existants).
+      **Révocation-seule (D2)** — ancrée à la source primaire réextraite
+      (§3.5.5.5 note 85 : rupture PA↔client ⇒ actualisation **opérateur**
+      ligne par ligne, jamais une cascade automatique) et à la sémantique
+      réelle de `maskLigne` (transition **locale**, `deposee`-only, ne
+      transmet **rien** au PPF/miroir — une cascade aurait **fabriqué** une
+      rétractation) : **aucun** masquage automatique des lignes déjà
+      publiées. **AMENDEMENT M1-DOC (honnêteté sans euphémisme)** : la
+      révocation bloque **toute publication neuve** adossée au consentement
+      (gate existant, non-régression prouvée sur les deux chemins de
+      résolution du consentement) mais **ne rétracte pas** l'adressage déjà
+      publié — le miroir de consultation **continue de router** les tiers
+      vers la plateforme pour les mailles déjà consolidées, jusqu'à
+      l'actualisation opérateur (procédure clôturer/masquer/fallback note
+      85 ; transmission Flux 13 réelle **différée**). Réponse
+      `{ consentId, revokedAt, dependentActiveLignes }` — anti-silence sur
+      les lignes actives encore dépendantes, procédure runbook documentée.
+      Verrou d'architecture M1 étendu **6→7**. **Différés explicites** :
+      cascade réelle vers le PPF (Flux 13 masquage + clôture + ligne
+      fallback plateforme fictive `9998`), raison de révocation stockée
+      (aucune colonne), outils d'actualisation post-révocation en masse.
+      **Backlog dédié acté (hors périmètre, non lié à la révocation)** :
+      divergence Tableau 6 — `annuaire-lifecycle.ts` affirme « aucun code
+      officiel DGFiP » alors que §3.5.7 p.54 documente les codes **400
+      Acceptée / 401 Rejetée** pour le cycle de publication annuaire.
+      Détail complet : `apps/api/README.md` § Révocation de consentement —
+      3.6.
 
 > **Point de reprise → phase 3 (suite)** : adhésion OpenPeppol + PKI
 > test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport CDV
@@ -824,11 +885,18 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
 > reprise du routage destinataire**, différé depuis 3.3, est **RÉSOLU en
 > 3.4** ; la **sortie manuelle d'un routage `ambiguous`** est **RÉSOLUE en
 > 3.5** (voir `apps/api/README.md` § Couture annuaire → émission, amendement
-> M1 / § Consentement scellé, rôle worker & re-résolution ambiguous).
-> **Fournisseurs eIDAS réels** de signature qualifiée du consentement et
-> **provisioning prod du rôle `factelec_worker`** (3.5, items Xavier
-> bloquants au déploiement de cette version pour le second) restent à
-> fournir.
+> M1 / § Consentement scellé, rôle worker & re-résolution ambiguous). La
+> **révocation de consentement** est **RÉSOLUE en 3.6** (`POST
+> /annuaire/consents/:id/revoke`, dual-auth, révocation-**seule** — voir
+> `apps/api/README.md` § Révocation de consentement — 3.6) ; restent
+> différés côté révocation la **cascade réelle vers le PPF** (Flux 13), la
+> **raison de révocation stockée** et les **outils d'actualisation en
+> masse**, ainsi qu'une **divergence Tableau 6 pré-existante** (backlog
+> dédié, sans lien avec la révocation) notée dans ce même paragraphe du
+> détail complet. **Fournisseurs eIDAS réels** de signature qualifiée du
+> consentement et **provisioning prod du rôle `factelec_worker`** (3.5,
+> items Xavier bloquants au déploiement de cette version pour le second)
+> restent à fournir.
 
 ### Prérequis pré-production / pré-DGFiP
 
@@ -1039,16 +1107,22 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
   d'initialisation INSEE/Chorus/DGFiP (lignes par défaut 9998/Chorus non
   chargées), habilitations réelles, codes routage standalone (6 endpoints
   Swagger, `RoutageID` inline seulement — l'**énumération** de gestion, elle,
-  est livrée en 3.3, `GET /annuaire/codes-routage`), endpoint de révocation
-  de consentement — tous différés, aucun n'est fabriqué. **Câblage de la
-  résolution de routage annuaire dans l'émetteur de factures : RÉSOLU en
-  3.3** (§ Couture annuaire → émission, `apps/api/README.md`). **Connecteur
-  de signature électronique du consentement : livré en 3.5** en **motif
-  port établi** (`ConsentSignaturePort`, scellement **structurel** — sha256
-  + horodatage + write-once WORM, **aucune** valeur probante) ; seuls les
-  **fournisseurs eIDAS réels** de signature qualifiée restent différés
-  (item Xavier). Détail : `apps/api/README.md` § Consentement scellé, rôle
-  worker & re-résolution ambiguous.
+  est livrée en 3.3, `GET /annuaire/codes-routage`) — tous différés, aucun
+  n'est fabriqué. **Câblage de la résolution de routage annuaire dans
+  l'émetteur de factures : RÉSOLU en 3.3** (§ Couture annuaire → émission,
+  `apps/api/README.md`). **Connecteur de signature électronique du
+  consentement : livré en 3.5** en **motif port établi**
+  (`ConsentSignaturePort`, scellement **structurel** — sha256 + horodatage +
+  write-once WORM, **aucune** valeur probante) ; seuls les **fournisseurs
+  eIDAS réels** de signature qualifiée restent différés (item Xavier).
+  **Endpoint de révocation de consentement : livré en 3.6**
+  (`POST /annuaire/consents/:id/revoke`, révocation-**seule**, aucune
+  cascade sur l'adressage déjà publié — § Révocation de consentement — 3.6,
+  `apps/api/README.md`) ; restent différés côté révocation la cascade
+  réelle vers le PPF (Flux 13), la raison de révocation stockée et les
+  outils d'actualisation en masse. Détail : `apps/api/README.md` §
+  Consentement scellé, rôle worker & re-résolution ambiguous / § Révocation
+  de consentement — 3.6.
 - **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway,
   mode `COMPLIANCE`, rétention 10 ans) → **déploiement** — spécifié (2.2,
   même contrat que `ArchiveStore`) mais non écrit (infra à la main de
