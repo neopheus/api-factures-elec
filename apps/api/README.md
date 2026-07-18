@@ -574,11 +574,11 @@ surpromettre « B2B international/paiements complets » :**
   frontière pour les deux `flux_kind` (transactions/paiements).
 - **Schematron / contrôles sémantiques Annexe 7** — non implémentés ; seule la
   validation **structurelle** XSD est faite (voir plus bas).
-- **Chemin RE (rectificatif)** — le type `RE` (`TRANSMISSION_TYPES`) est
-  modélisé et n'entre jamais en conflit avec l'index unique `IN`, mais aucun
-  flux applicatif ne produit de rectificatif dans ce plan (voir aussi le
-  runbook du slot A2 ci-dessous — la même dette s'applique au slot
-  `flux_kind='payments'`).
+- **Chemin RE (rectificatif) — RÉSOLU en 3.4** — `POST
+  /ereporting/retransmissions` régénère une période sur jugement opérateur
+  (§ Chemin RE ci-dessous). Reste différé : aucun automatisme post-301
+  (refusé, décision projet — un rectificatif est **toujours** déclenché par
+  un humain après correction des données source).
 - **Provisioning des déclarants** — `EreportingRepository.upsertDeclarant`
   existe et est testé, mais **aucun endpoint HTTP ni script CLI** ne l'expose
   (contrairement à `pnpm provision:tenant`) : à ce jour, une ligne
@@ -814,6 +814,87 @@ flux, aucune suffisante seule** :
 Le sweep n'enfile que des flux **initiaux** (`type='IN'`) — les rectificatifs
 (`RE`) ne sont jamais enfilés automatiquement, quel que soit le `flux_kind`.
 
+### Chemin RE (rectificatif) — retransmission opérateur (3.4)
+
+**Extraction réglementaire primaire** (§3.7.7 p.68-69, notes 127/131) : la
+Plateforme Agréée **peut** transmettre un flux rectificatif (`type='RE'`)
+qui **annule et remplace l'ensemble** des données précédemment transmises au
+titre d'une période — jamais un diff. `POST /ereporting/retransmissions`
+(`{ declarantId, fluxKind, periodStart }`) déclenche cette régénération sur
+**jugement opérateur exclusivement** : la spec dit « peut », pas « doit » —
+**aucun automatisme post-301** n'existe ni n'est prévu (un déclenchement
+automatique fabriquerait une décision qu'aucun texte n'impose). La procédure
+réelle est toujours : corriger d'abord les données source (facture(s)/
+encaissement(s) concernés), puis appeler cet endpoint.
+
+**Dual-auth, motif `PaymentsController.capture`** (`TenantAuthGuard` +
+`RolesGuard` + `CsrfGuard`, `@Roles('owner','admin','accountant')`) —
+2ᵉ route du projet à composer les trois guards. Réponse **202** `{ jobId,
+transmissionRef }` : comme toute génération e-reporting, le RE est
+**asynchrone** (BullMQ) — l'endpoint n'attend pas la transmission, l'opérateur
+observe le résultat via `GET /ereporting/transmissions` (le champ `type`
+distingue déjà `IN`/`RE`, `rejectOrigin` s'applique identiquement aux deux).
+Le pipeline réutilisé est **exactement** `EreportingGenerationService.generate`
+(dispatch `fluxKind`, `buildTransmissionRef`, `persistAndTransmit`,
+`insertTransmission`) avec `type='RE'` — le worker régénère depuis les
+données source **lues à l'exécution** (`invoicesForPeriod`/
+`listPaymentsForPeriod`), la fraîcheur est donc intrinsèque au pipeline,
+**aucune logique de diff n'existe**. Câblage : la file `ereporting-generation`
+gagne un **producteur côté API** (`QueueModule`, jusqu'ici seul le process
+worker l'enregistrait, à la fois producteur du sweep et consommateur) —
+strict miroir de la façon dont `invoice-generation` est déjà produite côté
+HTTP pour l'ingestion.
+
+**Garde-fous (avant enfilement)** :
+
+| Condition | Effet |
+| --- | --- |
+| Déclarant inconnu ou d'un autre tenant | **404** byte-identique (anti-fuite, même fabrique que le reste du contrôleur) |
+| `declarantId` malformé (non-UUID) | **422** (`z.uuid()`, corps zod) |
+| Aucune transmission `IN` préalable pour `(declarantId, fluxKind, periodStart)` | **409** — « aucune transmission initiale à rectifier pour cette période » |
+| IN existant mais encore en statut `'prepared'` | **409, MÊME CORPS** que la ligne précédente — cet IN est en cours de reprise par le sweep backstop (2.3) ; admettre un RE ici créerait un aléa d'ordre RE-avant-IN au PPF. Le client ne distingue **pas** les deux cas (documentation honnête, pas de fuite d'état interne superflue) |
+| Déclarant `active=false` | **Sans effet — pas une garde.** Rectifier des données **passées** d'un déclarant devenu inactif depuis reste légitime (l'erreur portait sur des données transmises quand il était actif) ; exiger `active=true` bloquerait une correction valide |
+
+L'IN est accepté quel que soit son statut **hors `prepared`**
+(`transmitted`/`deposee`/`rejetee`) — cela couvre le cas normal (rectifier un
+`deposee`) **et** le cas du deadlock 2.3 (IN né-`rejetee`, § Runbook
+ci-dessous). `periodEnd` est **toujours** repris de l'IN trouvé, jamais fait
+confiance au client.
+
+**Idempotence RE — défense en profondeur à 3 couches, miroir exact de
+celle de l'IN** (aucun nouveau pipeline, `transmission_ref` n'a par nature
+**aucune** contrainte d'unicité et le store de transmission est write-once
+par ref — sans cette défense, un simple rejeu BullMQ dupliquerait la ligne) :
+
+1. **`reSeq`** = nombre de RE déjà committés pour
+   `(declarantId, fluxKind, periodStart)`, lu **à l'enfilement**
+   (`countRetransmissions`). Deux POST quasi-simultanés lisent le **même**
+   `reSeq` → collapse voulu (un seul RE réellement émis) ; un 2ᵉ RE
+   **délibéré** ultérieur (données re-corrigées) lit `reSeq` incrémenté →
+   émission distincte.
+2. **`jobId` déterministe** `${declarantId}-${fluxKind}-${periodStart}-RE-${reSeq}`
+   (séparateur `-` obligatoire, motif `payments` — pas `:`, qui ferait lever
+   BullMQ 5.80.x hors 3 segments) : BullMQ déduplique les ré-enfilements tant
+   que le job existe.
+3. **Backstop DB** — nouvel index partiel unique
+   `(declarant_id, flux_kind, period_start, transmission_ref) WHERE type='RE'`
+   (migration `0027`, additif, aucune table/colonne/RLS nouvelle).
+   `transmission_ref` du RE devient `ER-${id8}-${periodStart}-RE-${reSeq}`
+   (ex. `…-RE-0`, `…-RE-1`) — **l'IN reste byte-identique**
+   (`…-IN`, `reSeq` omis). `insertTransmission` arbitre désormais le conflit
+   **par `type`** : un RE rejoué retombe sur l'index RE, `created:false`, et
+   reprend la transmission verbatim (même logique de reprise que l'IN) —
+   **jamais de duplication**.
+
+**L'IN n'est jamais effacé ni muté par un RE** (D5) : le RE **ajoute** une
+ligne `type='RE'`, il ne supprime/ne réécrit rien de la ligne IN ni de son
+journal. La supersession « annule-et-remplace » est une sémantique **côté
+PPF** ; le journal `ereporting_status_events` reste append-only. Le RE suit
+le **même** cycle de vie interne que l'IN
+(`prepared → transmitted → { deposee | rejetee }`, § Machine à états
+ci-dessus) — y compris un rejet local `REJ_SEMAN` si les données corrigées
+restent invalides.
+
 ### Paiements — capture des encaissements et agrégation TB-3 (3.2, D5/D7)
 
 Sous-domaine `apps/api/src/payments/*` (indépendant du sous-domaine
@@ -978,9 +1059,9 @@ constaté, jamais corrigé en place, § Paiements ci-dessus) — `payments`
 Section dédiée aux **dettes opérationnelles** identifiées en revue (Tasks 5 et
 8), à connaître **avant** toute exploitation réelle.
 
-### Deadlock du slot A2 (MEDIUM, fail-safe — procédure manuelle requise)
+### Deadlock du slot A2 — débloqué par le chemin RE (3.4, conditionnel)
 
-**Symptôme.** Une transmission `IN` née `rejetee` (rejet **local**
+**Symptôme, inchangé.** Une transmission `IN` née `rejetee` (rejet **local**
 `REJ_SEMAN`, XML non XSD-valide produit par une donnée source incohérente)
 occupe **définitivement** le slot unique (déclarant × flux × période **où**
 `type='IN'`) : `rejetee` est un statut **terminal** (§ Machine à états
@@ -989,12 +1070,14 @@ est clé sur `(declarant_id, flux_kind, period_start)` (§ Persistance
 ci-dessus), donc une transmission paiements née `rejetee` occupe son propre
 slot exactement selon la même mécanique, sans interférence avec le slot
 transactions du même déclarant/période. Une fois la donnée source corrigée
-en amont, le balayage suivant
-tente de régénérer la période, mais `insertTransmission` retombe sur le
-conflit d'index existant (`created: false`), recharge la ligne `rejetee`
-existante, et le worker constate un statut **non-`prepared`** → il **ne fait
-rien** (`return` silencieux, § `ereporting-generation.service.ts`). **La
-période ne peut plus jamais être transmise en `IN` sans intervention.**
+en amont, le balayage suivant tente de régénérer la période, mais
+`insertTransmission` retombe sur le conflit d'index existant
+(`created: false`), recharge la ligne `rejetee` existante, et le worker
+constate un statut **non-`prepared`** → il **ne fait rien** (`return`
+silencieux, § `ereporting-generation.service.ts`). **La période ne peut
+toujours pas être transmise une seconde fois en `IN`** — le chemin RE
+(3.4) ne change **rien** à ce fait : il ouvre une voie **parallèle**, il ne
+« répare » pas le slot `IN`.
 
 **Pourquoi ce n'est PAS un bug à corriger en excluant `rejetee` de l'index.**
 L'index unique partiel `WHERE type='IN'` (sans filtre sur le statut) est ce
@@ -1004,27 +1087,64 @@ crash survient entre l'insertion et la transmission effective, le rejeu du
 balayage doit retomber sur la **même** ligne, quel que soit son statut, plutôt
 que d'en créer une seconde qui serait transmise deux fois au PPF. **Retirer
 `rejetee` de cet index rouvrirait cette fenêtre de double-envoi sur crash** —
-ne jamais le faire pour « corriger » le deadlock.
+ne jamais le faire pour « corriger » le deadlock. Le slot `IN` reste donc
+**occupé pour toujours** par la ligne `rejetee` — c'est voulu (§ Chemin RE
+ci-dessus, D5 : le RE ne prétend jamais être un IN).
 
-**Procédure manuelle (jusqu'à un chantier RE/libération de slot dédié)** :
+**⚠️ Distinguer IMPÉRATIVEMENT les deux origines de `rejetee` avant d'agir**
+— `GET /ereporting/transmissions` expose `rejectOrigin` (`'local'`\|`'ppf'`)
+pour chaque transmission rejetée, dérivé de `deriveRejectOrigin` (§ Machine
+à états ci-dessus). Les deux cas ne portent **pas** la même garantie de
+conformité :
 
-1. Identifier la transmission bloquée : `GET /ereporting/transmissions` (ou
-   requête directe), filtrer `status='rejetee'` et `rejectOrigin='local'`
-   (`fromStatus IS NULL` en base) — **ne pas confondre** avec un rejet PPF
-   réel (`rejectOrigin='ppf'`), qui lui est un 301 légitime, pas un deadlock.
+- **`rejectOrigin: 'ppf'`** — 301 réel : l'IN a été **transmis**, puis rejeté
+  par le PPF après contrôle. Le RE correspond ici **exactement** à la lettre
+  de la spec (§3.7.7 : « erreur sur des données **transmises** ») —
+  déblocage **sans réserve**.
+- **`rejectOrigin: 'local'`** (« born-rejetee ») — rejet **pré-transmission**
+  (`REJ_SEMAN`, XML jamais XSD-valide) : **le PPF n'a rien vu** de cette
+  période, le port de transmission n'a **jamais** été appelé. Le RE est
+  **permis par le code** sur ce cas (c'est précisément ce qui débloque le
+  deadlock de façon pragmatique — le garde D4 n'exige qu'un IN **existant**
+  hors `prepared`, pas un IN effectivement transmis) mais l'extraction
+  réglementaire primaire (§3.7.7 p.68-69) est **silencieuse** sur l'admission
+  d'un rectificatif sans IN transmis préalable. **INTERPRÉTATION PROJET
+  FLAGGÉE, À VALIDER EN PILOTE PPF** : rien ne garantit aujourd'hui que le
+  PPF acceptera un `RE` pour une période dont il n'a **jamais** reçu d'`IN` —
+  seul un pilote réel avec la DGFiP tranchera. Le déblocage local
+  (retriable-idempotent, testé) fonctionne dans tous les cas côté Factelec ;
+  c'est l'**acceptation PPF** de ce cas précis qui reste une hypothèse non
+  vérifiée.
+
+**Procédure de déblocage** :
+
+1. Identifier la transmission bloquée : `GET /ereporting/transmissions`,
+   filtrer `status='rejetee'`, noter `rejectOrigin` (`'local'` ou `'ppf'` —
+   voir la distinction ci-dessus, elle conditionne le niveau de confiance à
+   accorder au déblocage, pas la procédure elle-même).
 2. Consulter le motif exact (`GET /ereporting/transmissions/:id/events`) pour
    comprendre l'incohérence source (typiquement une donnée de facturation
-   invalide au regard du XSD e-reporting).
-3. Corriger la donnée source (facture concernée) dans le système amont.
-4. Débloquer le slot par **une** de ces deux voies :
-   - **(a)** Supprimer manuellement la ligne `ereporting_transmissions`
-     rejetée localement (accès DB direct, rôle propriétaire) — le prochain
-     balayage régénérera une transmission `IN` propre pour la période ;
-   - **(b)** Attendre un futur chantier **RE/rectificatif** ou de
-     **libération de slot** dédié (non livré dans ce plan — `type='RE'` est
-     modélisé mais aucun flux applicatif ne le produit à ce jour).
-5. Vérifier après re-balayage que la nouvelle transmission `IN` passe bien
-   `prepared → transmitted → deposee`.
+   invalide au regard du XSD e-reporting, ou un rejet 301 PPF réel).
+3. Corriger la donnée source (facture(s)/encaissement(s) concernés) dans le
+   système amont.
+4. `POST /ereporting/retransmissions { declarantId, fluxKind, periodStart }`
+   (dual-auth, § Chemin RE ci-dessus) → **202** `{ jobId, transmissionRef }`.
+   Le worker régénère la période **complète** depuis les données **actuelles**
+   et produit une transmission `RE` avec un `transmission_ref` **distinct**
+   (`…-RE-0`) qui **passe** l'index partiel RE (0027) et le store write-once
+   — **aucun conflit** avec la ligne `IN` rejetée, qui reste en base,
+   inchangée, comme enregistrement historique.
+5. Suivre la progression via `GET /ereporting/transmissions` (filtrer
+   `type='RE'`) : la nouvelle transmission passe
+   `prepared → transmitted → { deposee | rejetee }` exactement comme un IN.
+   Un nouveau rejet local (données encore invalides) est visible de la même
+   façon (`rejectOrigin: 'local'` sur **cette** ligne RE) — corriger à
+   nouveau et re-POST (`reSeq` s'incrémente automatiquement, `…-RE-1`).
+
+**Ce que la procédure ne fait PAS** : elle ne supprime, ne modifie ni ne
+« libère » jamais la ligne `IN` `rejetee` d'origine (aucun accès DB direct
+requis, contrairement à l'ancienne procédure manuelle) — le slot `IN` reste
+occupé, la période est **de facto** re-déclarée via le slot `RE` parallèle.
 
 ### Transmission à blanc PAIEMENTS — journalisée (≠ silence transactions, 3.2)
 
@@ -1805,9 +1925,10 @@ Les factures antérieures à 3.3 obtiennent `'pending'` par défaut — honnête
 elles précèdent la fonctionnalité. Repo (miroir `markArchiveStatus`/
 `findArchiveState`) : `markRoutingStatus(tenantId, invoiceId, status,
 platform?)`, `findRoutingState(tenantId, invoiceId)`. Exposé en lecture
-**uniquement** sur `GET /invoices/:id` (`InvoiceDetail` étend
-`InvoiceSummary` de `routingStatus`/`recipientPlatform`) — **volontairement
-pas** sur `GET /invoices` (on ne widen pas le DTO de liste).
+sur `GET /invoices/:id` (`InvoiceDetail`) **et**, depuis 3.4, sur
+`GET /invoices` (§ Filtre de liste ci-dessous — **revert assumé** de la
+restriction d'origine « on ne widen pas le DTO de liste », motivée à
+l'époque par l'absence de consommateur ; le filtre **est** ce consommateur).
 
 ### Sémantique d'erreur de la résolution (D4)
 
@@ -1823,31 +1944,75 @@ pas** sur `GET /invoices` (on ne widen pas le DTO de liste).
 **écrase** un résultat déterministe — aucun CAS, aucun journal, exactement
 comme `markArchiveStatus`.
 
-### ⚠️ AMENDEMENT M1 (BINDING) — aucun sweep de reprise en 3.3, lecture obligatoire
+### ⚠️ AMENDEMENT M1 — SOLDÉ en 3.4 (sweep de reprise + filtre de liste)
 
-Contrairement aux autres best-effort du projet (`ArchiveRetryService` pour
-l'archive, le sweep annuaire de 2.4), **le routage n'a aucun mécanisme de
-reprise automatique en 3.3** : `InvoiceReconciliationService.sweep` ne
-balaie **que** `received`/`generating` — une facture `generated` dont le
-routage est resté `'pending'` après une panne annuaire **n'est jamais
-reprise** (le job de génération a réussi, aucun retry BullMQ ne se
-redéclenche). Un `'pending'` opérationnel persiste donc **jusqu'au sweep
-dédié (3.4+, miroir `ArchiveRetryService`) ou à un re-enfilement manuel** du
-job de génération (qui re-résout, la résolution étant idempotente).
+**Rappel du trou 3.3, BINDING à l'époque.** Contrairement aux autres
+best-effort du projet (`ArchiveRetryService` pour l'archive, le sweep
+annuaire de 2.4), le routage n'avait **aucun** mécanisme de reprise
+automatique en 3.3 : `InvoiceReconciliationService.sweep` ne balaie **que**
+`received`/`generating` — une facture `generated` dont le routage est resté
+`'pending'` après une panne annuaire **n'était jamais reprise**. Ce trou est
+**soldé en 3.4** par deux livraisons indépendantes :
 
-**Observabilité** : `'pending'`/`'unaddressable'`/`'ambiguous'` ne sont
-visibles **que** via `GET /invoices/:id`, facture par facture — **aucun
-filtre de liste** par `routing_status` n'existe (`GET /invoices` reste
-volontairement inchangé, D3). Un opérateur qui veut identifier les factures
-en attente ou non-routées doit interroger directement la base :
+**1. Sweep de reprise (`RecipientRoutingRetryService`, worker), miroir EXACT
+`ArchiveRetryService.sweepFailedArchives`** :
 
-```sql
-SELECT id, number FROM invoices
-WHERE routing_status IN ('pending', 'unaddressable', 'ambiguous');
-```
+- **SD `find_pending_routing_invoices(p_limit)`** (migration `0028`,
+  `SECURITY DEFINER` read-only, cross-tenant, motif `find_failed_archives`)
+  sélectionne les factures `status='generated'` **et**
+  `routing_status IN ('pending', 'unaddressable')` **et** `updated_at` âgé de
+  plus de **15 minutes** (gate de fraîcheur — ne pas concurrencer une
+  résolution en cours), triées par `updated_at`, bornées par un batch de 100.
+- Pour chaque ligne : rejeu **direct** de `resolveAndRecord` (aucun
+  enfilement, la résolution est idempotente par construction) —
+  **best-effort strict**, la boucle ne throw jamais, une ligne en échec ne
+  bloque jamais les suivantes.
+- **`ambiguous` reste explicitement EXCLU** de la SD elle-même (D7,
+  inchangé) : une ambiguïté d'annuaire est **structurelle**, elle nécessite
+  un nettoyage opérateur — re-résoudre sans nettoyage re-échouerait à
+  l'identique.
+- **Anti-famine (amendement M-D7-1)** : le chemin d'erreur **opérationnelle**
+  de `resolveAndRecord` (annuaire/DB indisponible) n'écrit rien —
+  `updated_at` resterait figé et la ligne repasserait **en tête** de la
+  requête `ORDER BY updated_at` à chaque cycle, affamant les suivantes. Le
+  sweep applique donc un **touch** explicite après un échec opérationnel
+  persistant : si le statut est resté `'pending'`, `markRoutingStatus(...,
+  'pending')` est rappelé — écrasement **même-valeur**, seul `updated_at` est
+  bumpé. Ce n'est **pas** un changement d'état, c'est la rotation équitable
+  du batch ; la gate de fraîcheur 15 min sert ensuite d'espacement naturel
+  entre deux tentatives sur la même ligne.
+- **Cadence** : `ROUTING_RETRY_EVERY_MS` (défaut `300000`, 5 min — miroir
+  `ARCHIVE_RETRY_EVERY_MS`), planifiée par `RoutingRetryScheduler`
+  (`upsertJobScheduler`, idempotent) et dispatchée par la branche
+  `ROUTING_RETRY_JOB` de `MaintenanceProcessor` (processor `maintenance`
+  unique, pas un 2ᵉ `@Processor`).
 
-Ce trou (absence de sweep, absence de filtre de liste) est **nommé et
-assumé** — voir § Limites v1 / TODO.
+**2. Filtre de liste** (Task 4, D8) : voir § Filtre de liste `routing_status`
+ci-dessous — **l'ancienne requête SQL directe en base est retirée de cette
+documentation**, devenue obsolète : `GET /invoices?routingStatus=` couvre
+désormais le même besoin d'observabilité sans accès DB direct.
+
+**Ce qui reste différé** (voir § Limites v1 / TODO) : backoff persistant du
+sweep (colonnes `routing_attempts`/`routing_next_retry_at` — la rotation par
+`updated_at` suffit tant qu'aucune churn réelle n'est observée) et filtre de
+liste par `recipient_platform` (raffinement sans demande métier à ce jour).
+
+### Filtre de liste `routing_status` + exposition du routage (3.4, D8)
+
+`GET /invoices?routingStatus=` (query **optionnelle**, `z.enum` dérivé de
+`routingStatus.enumValues` — source unique, jamais une liste recopiée)
+filtre la liste paginée par statut de routage ; absente, elle laisse le
+comportement **inchangé** (toutes les factures). Combinée au **curseur
+keyset existant** via `and(keyset, statusFilter)` (drizzle ignore
+silencieusement un filtre `undefined`) — la pagination micro-précise n'est
+**pas** altérée, y compris lorsqu'un filtre est actif. Un `routingStatus`
+invalide (valeur hors enum, y compris une **chaîne vide** `?routingStatus=`)
+→ **422** ; un `routingStatus` valide sans résultat → page vide, jamais 404
+(c'est une liste). Filtre appliqué **sous RLS**, aucune fuite cross-tenant.
+
+`InvoiceSummary` expose désormais `routingStatus`/`recipientPlatform` — les
+mêmes champs que `GET /invoices/:id`, `InvoiceDetail` en devient un **alias
+sémantique** (§ Persistance ci-dessus). `GET /invoices/:id` reste inchangé.
 
 ### Extraction du helper *Party → Maille* (D5)
 
@@ -1973,9 +2138,11 @@ transformation n'empruntant aucune des formes syntaxiques matchées. Il
 seul objectif est de ralentir une régression silencieuse, pas de la rendre
 impossible. La **vraie** barrière d'exécution — un garde composé
 `DualAuthMutationGuard` encapsulant « clé API OU session ; si session → rôle
-∈ X ET CSRF » — reste **différée** (friction NestJS-idiomatique, touche la
-route qui marche, gain marginal pour une seule route) jusqu'à l'apparition
-d'une **seconde** route dual-auth-mutation.
+∈ X ET CSRF » — reste **différée** (friction NestJS-idiomatique, touche les
+routes qui marchent) malgré l'apparition d'une **seconde** route
+dual-auth-mutation en 3.4 (`POST /ereporting/retransmissions`, même motif
+exact que `POST /payments`) : le critère de déclenchement initial est
+atteint, la factorisation reste un choix différé, pas un oubli.
 
 **+ unification de type** : `apiKeyId?: string` vit désormais en **une
 seule** source (`WithApiKeyId`, `src/auth/auth.types.ts`), réutilisée par
@@ -2179,6 +2346,7 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `ARCHIVE_LOCAL_DIR` | Répertoire local du driver `local` | `./var/archive` |
 | `GENERATION_MAX_ATTEMPTS_CAP` | Cap de ré-enfilements par la réconciliation avant DLQ (`invoice_dead_letters`) — facture « poison » | `5` |
 | `ARCHIVE_RETRY_EVERY_MS` | Périodicité (ms) du balayage de reprise d'archivage (`archive_status='failed'` ou `pending` bloqué > 15 min) | `300000` (5 min) |
+| `ROUTING_RETRY_EVERY_MS` | Périodicité (ms) du balayage de reprise du routage destinataire (`routing_status IN ('pending','unaddressable')` bloqué > 15 min, miroir `ARCHIVE_RETRY_EVERY_MS`, plan 3.4) | `300000` (5 min) |
 | `EREPORTING_TRANSMISSION_DRIVER` | Adaptateur de transmission Flux 10 : `local` (`LocalFilesystemTransmissionStore`, testable) \| `sftp`\|`as2`\|`as4`\|`api` (auth transport réelle, **activés au déploiement**, lèvent une erreur explicite tant que non fournis) | `local` |
 | `EREPORTING_LOCAL_DIR` | Répertoire local du driver `local` | `./var/ereporting` |
 | `EREPORTING_PA_ID` | Matricule émetteur de la Plateforme Agréée (TT-8, TB-1) | `PA00` |
@@ -2253,7 +2421,7 @@ README racine.
 | `GET /health` | Liveness (aucune dépendance externe) | 200 |
 | `GET /health/ready` | Readiness (ping Postgres **et Redis**, `@nestjs/terminus`, chacun borné 2 s) | 200, 503 |
 | `POST /invoices` | Ingestion : validation `invoice-core`, persistance transactionnelle, **enfilement** du job de génération (asynchrone, 2.1 — voir § Nouvelle sémantique) | 201, 401, 409, 422 |
-| `GET /invoices` | Liste paginée (keyset), tenant-scopée | 200, 401 |
+| `GET /invoices` | Liste paginée (keyset), tenant-scopée — `?routingStatus=` filtre optionnel (3.4, D8), expose `routingStatus`/`recipientPlatform` | 200, 401, 422 |
 | `GET /invoices/:id` | Métadonnées d'une facture (`status` de génération, `lifecycleStatus` CDV, `routingStatus`/`recipientPlatform` — routage destinataire résolu à l'émission, 3.3, § Couture annuaire → émission) + formats disponibles | 200, 401, 404 |
 | `GET /invoices/:id/formats/:format` | Contenu d'un format (`ubl`, `cii`, `facturx`, `flux_base`, `flux_full`) avec le bon `Content-Type` (`application/xml` ou `application/pdf` pour `facturx`) — **404 tant que `status ≠ 'generated'`** | 200, 401, 404 |
 | `POST /invoices/:id/status` | Transition de statut CDV (`{ toStatus, reason? }`) — session owner/admin/accountant + CSRF, CAS anti-race | 201, 401, 403, 404, 409, 422 |
@@ -2270,7 +2438,8 @@ README racine.
 | `POST /admin/login` | Authentification super admin plateforme (`platform_admins`, Argon2id), ouvre une session admin | 200, 401, 422 |
 | `POST /admin/logout` | Révoque la session admin courante | 204, 401, 403 |
 | `GET /admin/tenants` | Liste de tous les tenants (vue plateforme : nombre d'utilisateurs, de factures) | 200, 401, 403 |
-| `GET /ereporting/transmissions` | Liste des transmissions e-reporting Flux 10 du tenant (résumés — **sans** le XML), `rejectOrigin` (`local`\|`ppf`\|`null`) dérivé pour les rejets | 200, 401 |
+| `POST /ereporting/retransmissions` | Retransmission RE opérateur (`{ declarantId, fluxKind, periodStart }`, dual-auth, 3.4, § Chemin RE) — régénération complète de la période sur jugement humain, jamais un automatisme | 202, 401, 403, 404, 409, 422 |
+| `GET /ereporting/transmissions` | Liste des transmissions e-reporting Flux 10 du tenant (résumés — **sans** le XML, `IN` **et** `RE`), `rejectOrigin` (`local`\|`ppf`\|`null`) dérivé pour les rejets | 200, 401 |
 | `GET /ereporting/transmissions/:id/xml` | XML de la transmission (`text/xml`) — 404 si absente ou d'un autre tenant | 200, 401, 404 |
 | `GET /ereporting/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
 | `GET /annuaire/lignes` | Recherche dans le miroir de consultation (Flux 14) du tenant, filtrée par SIREN | 200, 401 |
@@ -2328,6 +2497,11 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   passer un appel machine sans cookie/session (§ Runbook — bypass CSRF/rôles
   ci-dessus). `GET /payments` reste `TenantAuthGuard` seul, sans garde de
   rôle (lecture).
+- **`POST /ereporting/retransmissions`** (déclenchement RE, plan 3.4) est la
+  **2ᵉ route** du projet à combiner les mêmes trois guards que
+  `POST /payments`, même motif, même bypass CSRF/rôles sur `req.apiKeyId` —
+  le garde composé `DualAuthMutationGuard` (différé, 3.3 D9) reste donc
+  différé, désormais avec **deux** sites à couvrir plutôt qu'un seul.
 - **`/auth/*`, `/api-keys/*`, `/admin/*`** sont exclusivement pilotés par
   **session serveur httpOnly** (cookie `factelec_session`) + **CSRF
   double-submit** (`X-CSRF-Token` face au cookie lisible `factelec_csrf`) sur
@@ -2479,12 +2653,29 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   contrat ; verrou d'architecture apiKeyId exercé contre les sources réelles
   (`apikeyid-setters.arch.test.ts`) ; teardown du pool prouvé idempotent
   (`onModuleDestroy` appelé deux fois → `pool.end` invoqué une seule fois).
+- **Reprise & retransmission** (plan 3.4) : **chemin RE** — `buildTransmissionRef`
+  RE discriminé vs IN **byte-identique** (oracle indépendant) ; worker
+  bouclé en-process (`ereporting-retransmission.e2e.test.ts`) prouvant la
+  régénération **complète** depuis les données source **actuelles**
+  (modification puis re-RE → nouvelle transmission distincte), la
+  **retry-idempotence** (même job rejoué → `created:false`, aucune ligne
+  dupliquée) et que **l'IN n'est jamais effacé ni muté** ; garde-fous D4
+  testés à l'unité (déclarant inconnu → 404, aucun IN → 409, IN `prepared`
+  → 409 **même corps**, déclarant inactif → **autorisé**, anti-double-clic
+  concurrent → même `jobId`) ; endpoint bout-en-bout (`POST` 202 → le worker
+  produit la transmission RE). **Sweep routage** — `pending`/`unaddressable`
+  résolus (`recipient_platform` prouvé après sweep), `ambiguous` **jamais**
+  balayé (même au-delà de la gate 15 min), gate de fraîcheur prouvée
+  (`pending` frais non repris), isolation multi-tenant du balayage
+  cross-tenant. **Filtre de liste** — filtre + exposition, **pagination
+  cohérente avec filtre actif** (keyset intact, aucun saut/doublon),
+  `routingStatus` invalide → 422, comportement inchangé sans filtre.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`, seuils fusionnés sur l'agrégat des projets `heavy` +
   `light`, § Durcissements transverses), exclusions limitées au bootstrap et
   au câblage DI pur (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`).
-  État actuel : 145 fichiers, **1051 tests**, couverture
-  **97.78 / 94.33 / 95.47 / 98.1 %** (statements/branches/functions/lines).
+  État actuel : 153 fichiers, **1097 tests**, couverture
+  **97.88 / 94.39 / 95.57 / 98.19 %** (statements/branches/functions/lines).
 
 ```sh
 pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docker requis)
@@ -2574,10 +2765,13 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   aucun schematron/contrôle sémantique Annexe 7 implémenté ; un flux
   XSD-valide peut être rejeté 301 par le PPF pour un motif sémantique. Voir
   § Génération et validation XML.
-- **Deadlock du slot A2** (2.3, MEDIUM, fail-safe, non résolu) — une
-  transmission `IN` rejetée localement occupe définitivement son slot ;
-  procédure manuelle documentée, pas d'automatisation de libération de slot
-  à ce jour. Voir § Runbook opérationnel.
+- **Deadlock du slot A2** (2.3, MEDIUM, fail-safe) — le slot `IN` rejeté
+  reste **définitivement** occupé (voulu, ne jamais retirer `rejetee` de
+  l'index). **Débloqué en 3.4** par une voie **parallèle** (le chemin RE,
+  `POST /ereporting/retransmissions`), **conditionnellement** pour le cas
+  `rejectOrigin='local'` (interprétation flaggée, à valider en pilote PPF —
+  voir § Chemin RE / § Runbook ci-dessus). Le cas `rejectOrigin='ppf'` est
+  débloqué **sans réserve**.
 - **`invoiceCount` sur-compte les factures 10.3 à cadre mixte différées**
   (2.3, toujours vrai en 3.2 pour les cadres mixtes **non naturés**) —
   métadonnée indicative uniquement ; les montants déclarés restent exacts.
@@ -2677,22 +2871,31 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   d'architecture sur le footgun `apiKeyId` ; teardown de pool idempotent +
   split Vitest heavy/light. Voir §§ Couture annuaire → émission /
   Durcissements transverses ci-dessus.
-- **Sweep de reprise du routage absent (3.3, MEDIUM, fail-safe, amendement
-  M1 BINDING)** — un `routing_status='pending'` **opérationnel** (annuaire/DB
-  indisponible au moment de la résolution) n'est **jamais** repris
-  automatiquement : `InvoiceReconciliationService.sweep` ne balaie que
-  `received`/`generating`, pas une facture déjà `generated`. Persiste jusqu'à
-  un sweep dédié (3.4+, miroir `ArchiveRetryService`) ou un re-enfilement
-  manuel du job de génération. **Aucun filtre de liste** par `routing_status`
-  n'existe non plus (`GET /invoices` inchangé, D3) — un opérateur doit
-  interroger directement la base (requête SQL au § Couture annuaire →
-  émission, amendement M1). Aucune des deux lacunes n'est masquée.
-- **Garde composé `DualAuthMutationGuard` différé** (3.3, D9) — le verrou
-  d'architecture apiKeyId (`apikeyid-setters.arch.test.ts`) est un
-  **ralentisseur** (grep multi-formes, contournable), pas la barrière
-  d'exécution réelle qu'offrirait un garde composé dédié ; différé jusqu'à
-  l'apparition d'une **seconde** route dual-auth-mutation (`POST /payments`
-  reste la seule à ce jour).
+- **Résolu en 3.4** : sweep de reprise du routage (`RecipientRoutingRetryService`,
+  miroir `ArchiveRetryService`, `pending`+`unaddressable`, `ambiguous` exclu,
+  anti-famine amendement M-D7-1) — **soldé l'amendement M1 BINDING de 3.3**
+  (un `routing_status='pending'` opérationnel n'était jamais repris
+  automatiquement) ; filtre de liste `GET /invoices?routingStatus=` +
+  exposition `routingStatus`/`recipientPlatform` sur `GET /invoices`
+  (**l'ancienne requête SQL opérateur devient inutile**). Voir §§ Couture
+  annuaire → émission (amendement M1) / Filtre de liste ci-dessus pour le
+  détail complet.
+- **Chemin RE (rectificatif)** — `POST /ereporting/retransmissions`,
+  régénération complète sur jugement opérateur, retry-idempotente (défense
+  3 couches, index partiel `0027`). **Débloque le deadlock du slot A2
+  (2.3)**, mais de façon **conditionnelle** : pour un IN né-`rejetee` **local**
+  (`rejectOrigin='local'`, le PPF n'a rien vu de la période), l'admission
+  d'un RE reste une **interprétation projet flaggée, à valider en pilote
+  PPF** — l'extraction primaire est silencieuse sur ce cas précis. Voir §§
+  Chemin RE / Runbook — Deadlock du slot A2 ci-dessus.
+- **Garde composé `DualAuthMutationGuard` différé** (3.3, D9 — critère
+  déclencheur désormais atteint) — le verrou d'architecture apiKeyId
+  (`apikeyid-setters.arch.test.ts`) est un **ralentisseur** (grep
+  multi-formes, contournable), pas la barrière d'exécution réelle
+  qu'offrirait un garde composé dédié ; différé malgré l'apparition d'une
+  **seconde** route dual-auth-mutation en 3.4 (`POST /ereporting/retransmissions`,
+  même motif que `POST /payments`) — deux sites à couvrir plutôt qu'un,
+  toujours pas de garde composé écrit.
 - **Worker-role split toujours différé (3.3, confirme la dette déjà
   tracée)** — 3.3 n'introduit **aucune** nouvelle fonction `SECURITY
   DEFINER` cross-tenant (migration 0026 = colonnes additives seules) ; la
@@ -2702,7 +2905,7 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   `find_stale_annuaire_drafts` 2.4, `find_cdv_transmissions_due`/
   `find_parked_cdv_transmissions` 3.1 ci-dessus).
 
-### Différé explicitement (hors périmètre 2.4/3.1/3.2/3.3)
+### Différé explicitement (hors périmètre 2.4/3.1/3.2/3.3/3.4)
 
 - **E-reporting DGFiP au-delà du 10.1/10.3/TB-3** (Flux 10, plans 2.3/3.2) :
   cadres de facturation mixtes M1/M2/M4 **non naturés** (au moins une ligne
@@ -2713,9 +2916,11 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   auto-seed du statut CDV `212 Encaissée` depuis un paiement capturé
   (**refusé, décision projet**), adaptateurs de transport réels
   (sftp/as2/as4/api), push/acquittement PPF réel (webhook), schematron/
-  contrôles sémantiques Annexe 7, chemin RE/rectificatif, provisioning des
-  déclarants (aucun endpoint/CLI) — voir §§ E-reporting / Paiements pour le
-  détail de chaque point.
+  contrôles sémantiques Annexe 7, provisioning des déclarants (aucun
+  endpoint/CLI) — voir §§ E-reporting / Paiements pour le détail de chaque
+  point. **Chemin RE : RÉSOLU en 3.4** (§ Chemin RE ci-dessus), sous réserve
+  du **RE automatique post-301** (**refusé**, décision projet — un
+  déclenchement reste toujours un jugement opérateur).
 - **Annuaire au-delà du domaine PA** (Flux 13/14, plan 2.4) : adaptateurs de
   transport réels (API PISTE-OAuth2, EDI SFTP/AS2/AS4), feeds
   d'initialisation INSEE/Chorus/DGFiP (lignes par défaut 9998/Chorus non
@@ -2725,11 +2930,14 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   de signature électronique du consentement, endpoint de révocation de
   consentement — voir § Annuaire central pour le détail de chaque point.
   **Câblage de la résolution de routage dans l'émetteur de factures : RÉSOLU
-  en 3.3** (§ Couture annuaire → émission ci-dessus) — restent différés le
-  **sweep de reprise** d'un `routing_status='pending'` opérationnel, le
+  en 3.3, sweep de reprise + filtre de liste : RÉSOLUS en 3.4** (§§ Couture
+  annuaire → émission / Filtre de liste ci-dessus) — restent différés le
   **garde composé** `DualAuthMutationGuard`, le **POST codes-routage**
-  autonome (refusé, décision projet — D6) et la mutation `emise`/transport
-  réel (adaptateurs de transport, items Xavier).
+  autonome (refusé, décision projet — D6), le **filtre de liste par
+  `recipient_platform`** (3.4, raffinement sans demande métier), le
+  **backoff persistant** du sweep de routage (3.4, colonnes non ajoutées
+  tant qu'aucune churn réelle n'est observée) et la mutation `emise`/
+  transport réel (adaptateurs de transport, items Xavier).
 - **Adaptateur S3 object-lock réel** (`S3ObjectLockArchiveStore`, Scaleway
   Object Storage, mode `COMPLIANCE`, rétention 10 ans) — **spécifié** (même
   contrat que `ArchiveStore`) mais **non écrit** en 2.2 : infra à la main de
