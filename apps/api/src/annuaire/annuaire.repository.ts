@@ -189,13 +189,8 @@ export class AnnuaireRepository {
   constructor(private readonly tenant: TenantContextService) {}
 
   // Preuve de consentement (§3.5.5.5, D5) : INSERT seul, la révocation se
-  // fait par `revokedAt` (pas de méthode de mutation ici — hors périmètre
-  // Task 5). Task 8 (Produces/Endpoints) ne liste AUCUN endpoint/méthode de
-  // révocation — DÉLIBÉRÉMENT DIFFÉRÉ (cf. rapport Task 8) : la colonne et
-  // le grant UPDATE (migration 0019) existent déjà et permettent une
-  // révocation par UPDATE direct (identique à
-  // annuaire-persistence.e2e.test.ts) le jour où un endpoint/outillage
-  // ops est spécifié.
+  // fait par `revokedAt` — cf. `revokeConsent` ci-dessous (Task 1, plan 3.6),
+  // l'endpoint/outillage ops annoncé ici comme différé à l'époque.
   async insertConsent(
     tenantId: string,
     input: NewConsent,
@@ -296,6 +291,63 @@ export class AnnuaireRepository {
         .where(eq(annuaireConsents.id, id))
         .limit(1)
       return rows[0] ?? null
+    })
+  }
+
+  // Révocation write-once (Task 1, plan 3.6, D3) : CAS `UPDATE ... WHERE
+  // revoked_at IS NULL RETURNING revoked_at` (motif `markPublished`
+  // ci-dessous — même forme CAS, table différente). 1 ligne affectée ⇒
+  // fraîchement révoqué (retourne le `revokedAt` frais). 0 ligne affectée
+  // est AMBIGU (déjà révoqué OU id inconnu/hors tenant) : une ré-lecture
+  // RLS-scopée lève l'ambiguïté — `revokedAt` déjà non-nul ⇒ idempotent
+  // (retourne l'ORIGINE, jamais réécrite, monotonie) ; ligne absente/RLS ou
+  // `revokedAt` encore nul (course avec un autre appel concurrent résolue
+  // entre-temps — cas limite, traité comme inconnu) ⇒ `null`.
+  async revokeConsent(
+    tenantId: string,
+    id: string,
+  ): Promise<{ revokedAt: Date } | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const [fresh] = await db
+        .update(annuaireConsents)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(eq(annuaireConsents.id, id), isNull(annuaireConsents.revokedAt)),
+        )
+        .returning({ revokedAt: annuaireConsents.revokedAt })
+      if (fresh) return { revokedAt: fresh.revokedAt as Date }
+
+      const rows = await db
+        .select({ revokedAt: annuaireConsents.revokedAt })
+        .from(annuaireConsents)
+        .where(eq(annuaireConsents.id, id))
+        .limit(1)
+      const existing = rows[0]
+      if (!existing || existing.revokedAt === null) return null
+      return { revokedAt: existing.revokedAt }
+    })
+  }
+
+  // Rapport anti-silence (Task 1, plan 3.6, D2/D3) : nombre de lignes
+  // dépendant de ce consentement encore ACTIVES (statuts NON terminaux —
+  // `isTerminal`/`annuaire-lifecycle.ts` : hors `rejetee`/`masked`), sous
+  // RLS. Aucune écriture ici — pure lecture, l'anti-silence de la réponse
+  // de `revokeConsent` (service).
+  async countActiveLignesForConsent(
+    tenantId: string,
+    consentId: string,
+  ): Promise<number> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(annuaireLignes)
+        .where(
+          and(
+            eq(annuaireLignes.consentId, consentId),
+            notInArray(annuaireLignes.status, ['rejetee', 'masked']),
+          ),
+        )
+      return rows[0]?.count ?? 0
     })
   }
 

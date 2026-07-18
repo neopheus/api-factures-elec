@@ -30,6 +30,7 @@ import {
 // biome-ignore lint/style/useImportType: AnnuairePublicationService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import {
   AnnuairePublicationService,
+  ConsentNotFoundError,
   ConsentRequiredError,
   ConsentSignatureError,
   InvalidLignePeriodError,
@@ -222,6 +223,32 @@ export class AnnuaireController {
     }
   }
 
+  // Révocation de consentement (Task 1, plan 3.6, D2/D3/D5) : écrit
+  // `revoked_at` (CAS write-once idempotent, repo) — RÉVOCATION-SEULE,
+  // AUCUNE cascade sur les lignes (D2, gate de publication existant déjà
+  // binding). `@HttpCode(200)` (mutation synchrone directe, motif
+  // `resolveRouting`) ; 404 anti-fuite byte-identique (`:id` malformé OU
+  // consentement inconnu/hors tenant, `notFoundConsent` — NOUVEAU domaine de
+  // ressource, distinct du 404 des lignes `notFound` ci-dessus). Triple
+  // garde dual-auth (verrou M1, `dual-auth-composition.arch.test.ts`,
+  // 7e route conforme) — même motif EXACT que `publish`/`endEffect`/`mask`.
+  @Post('consents/:id/revoke')
+  @HttpCode(200)
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
+  @Roles('owner', 'admin', 'accountant')
+  async revokeConsent(
+    @CurrentTenant() tenantId: string,
+    @Param('id') id: string,
+  ) {
+    if (!isUuid(id)) throw this.notFoundConsent()
+    try {
+      return await this.publication.revokeConsent(tenantId, id)
+    } catch (err) {
+      if (err instanceof ConsentNotFoundError) throw this.notFoundConsent()
+      throw err
+    }
+  }
+
   // Ne mappe QUE les erreurs qu'un endpoint HTTP de ce contrôleur peut
   // effectivement produire (`publishLigne`/`endEffect`/`maskLigne`) —
   // `MotifRequiredError` (levée uniquement par `recordAck`, SANS route HTTP
@@ -268,6 +295,16 @@ export class AnnuaireController {
   private notFound(): NotFoundException {
     return new NotFoundException(
       problem(404, ProblemType.notFound, 'Unknown ligne'),
+    )
+  }
+
+  // 404 anti-fuite byte-identique (D3) — domaine de ressource DISTINCT de
+  // `notFound` ci-dessus (`Unknown ligne`) : un consentement inconnu, hors
+  // tenant (RLS) ou un `:id` malformé sont indiscernables les uns des
+  // autres, motif `notFound`.
+  private notFoundConsent(): NotFoundException {
+    return new NotFoundException(
+      problem(404, ProblemType.notFound, 'Unknown consent'),
     )
   }
 }
