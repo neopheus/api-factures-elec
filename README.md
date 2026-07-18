@@ -189,8 +189,10 @@ API publique pour les systèmes custom.
 > routage `'9999'` (placeholder structurel, aucune valeur positive normée —
 > **à confirmer avec la DGFiP/PPF**), prédicat de couverture du consentement
 > (même SIREN + maille égale ou plus large, §3.5.5.5 non normative), motif de
-> rejet en chaîne libre (aucun code réglementaire annuaire, contraste
-> REJ_* e-reporting), F14 complet authentiquement vide traité en **no-op**
+> rejet en chaîne libre (les motifs normatifs REJ_RG/HAB/COH/VAL_INC du
+> Tableau 7 p.55 EXISTENT — correctif 3.6 : contrainte différée au
+> raccordement des adaptateurs réels ; les statuts 400/401 du Tableau 6
+> portent désormais leur code), F14 complet authentiquement vide traité en **no-op**
 > plutôt qu'en vidage du miroir (défaut sûr délibéré — une désactivation
 > totale authentique côté PPF ne convergerait donc jamais par ce seul
 > chemin). **959 tests** au total (`invoice-core` 129 100 % · `apps/api` 782
