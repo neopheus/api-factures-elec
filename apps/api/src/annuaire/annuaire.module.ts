@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { AuthModule } from '../auth/auth.module.js'
+import { RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { UsersModule } from '../users/users.module.js'
 import { AnnuaireController } from './annuaire.controller.js'
@@ -23,6 +24,10 @@ import { ConsentSignatureModule } from './consent-signature.module.js'
 // même motif : l'importer ICI expose `CONSENT_SIGNATURE` à toute l'app,
 // requis par `AnnuairePublicationService` (Task 2, 3.5) pour le scellement
 // de la preuve de consentement à la création (branche `proof`, D3).
+// `RolesGuard` (Task 4bis, correctif faille 2.4) ne dépend que de
+// `Reflector` (built-in Nest) — fourni en provider local (motif
+// `PaymentsModule`/`InvoicesModule`/`EreportingModule`). `CsrfGuard` N'EST
+// PAS re-déclaré ici : `UsersModule` (déjà importé) l'exporte déjà.
 @Module({
   imports: [
     AuthModule,
@@ -36,6 +41,7 @@ import { ConsentSignatureModule } from './consent-signature.module.js'
     AnnuaireConsultationService,
     AnnuairePublicationService,
     TenantAuthGuard,
+    RolesGuard,
   ],
   exports: [AnnuaireConsultationService, AnnuairePublicationService],
 })

@@ -13,7 +13,9 @@ import {
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common'
+import { CsrfGuard } from '../auth/csrf.guard.js'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
+import { Roles, RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
 import { isUuid } from '../common/uuid.js'
@@ -150,8 +152,16 @@ export class AnnuaireController {
   // localement invalide (born-rejetee, T4-F1) répond quand même 201 — la
   // RESSOURCE (la ligne) a bien été créée, seul SON statut interne est
   // `rejetee` (cf. `status`/`rejectReason` du corps de réponse).
+  // Correctif faille 2.4 (Task 4bis, plan 3.5) : triple garde dual-auth
+  // (`TenantAuthGuard, RolesGuard, CsrfGuard`, motif EXACT
+  // `PaymentsController.capture`/`EreportingController.retransmit`/
+  // `InvoicesController.resolveRouting`) — rôles = interprétation miroir
+  // des mutations comptables (précédent 3.2-T5), publier/modifier/masquer
+  // une ligne d'annuaire impacte le routage réglementaire des factures au
+  // même titre qu'une capture de paiement.
   @Post('lignes')
-  @UseGuards(TenantAuthGuard)
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
+  @Roles('owner', 'admin', 'accountant')
   async publish(@CurrentTenant() tenantId: string, @Body() body: unknown) {
     const parsed = parseBody(publishLigneBodySchema, body)
     try {
@@ -166,8 +176,11 @@ export class AnnuaireController {
   // `resolution`), 422 si `dateFin` ne suit pas strictement la `dateDebut`
   // existante, 409 si la ligne est déjà dans un statut terminal
   // (rejetee/masked — `updateDateFin`, annuaire.repository.ts).
+  // Correctif faille 2.4 (Task 4bis, plan 3.5) — même motif que `publish`
+  // ci-dessus.
   @Put('lignes/:id')
-  @UseGuards(TenantAuthGuard)
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
+  @Roles('owner', 'admin', 'accountant')
   async endEffect(
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,
@@ -189,9 +202,12 @@ export class AnnuaireController {
   // 404 anti-fuite si l'id est inconnu/hors tenant, 409 si la ligne n'est pas
   // dans le statut `deposee` (déjà masquée, encore draft/published, ou née
   // rejetee).
+  // Correctif faille 2.4 (Task 4bis, plan 3.5) — même motif que `publish`
+  // ci-dessus.
   @Delete('lignes/:id')
   @HttpCode(204)
-  @UseGuards(TenantAuthGuard)
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
+  @Roles('owner', 'admin', 'accountant')
   async mask(
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,

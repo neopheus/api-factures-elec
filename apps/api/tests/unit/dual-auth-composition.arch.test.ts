@@ -24,36 +24,19 @@ import { describe, expect, it } from 'vitest'
 // par ce scan car il ne compose jamais `TenantAuthGuard`). Ce test ne
 // prétend détecter QUE le motif `@UseGuards(...)` réel et actuel du projet.
 //
-// DÉCOUVERTE (Task 4, plan 3.5, 2026-07-18 — HORS PÉRIMÈTRE de cette tâche,
-// remontée en détail au contrôleur + task-4-report.md) : `annuaire.controller.ts`
-// (faille PRÉ-EXISTANTE depuis 2.4 Tasks 7/8, AVANT ce plan) compose déjà
-// `TenantAuthGuard` SEUL sur 3 routes de mutation (`POST lignes`,
-// `PUT lignes/:id`, `DELETE lignes/:id`) — SANS `RolesGuard` ni `CsrfGuard`.
-// C'est EXACTEMENT le résidu grave que cette extension vise à empêcher POUR
-// L'AVENIR, sauf qu'il existe déjà aujourd'hui : une session utilisateur de
-// N'IMPORTE QUEL rôle (viewer inclus, aucune restriction de rôle sur ces 3
-// routes) peut publier/modifier/masquer une ligne d'annuaire SANS jeton CSRF
-// (aucun garde CSRF global — vérifié `main.ts`/`app.module.ts`). Corriger
-// `annuaire.controller.ts` changerait un comportement de production hors du
-// brief de cette tâche (scope = `invoices.*`) et pourrait casser des e2e
-// existants qui s'appuient dessus (aucun e2e existant ne teste ce cas —
-// vérifié `annuaire-publication.e2e.test.ts`).
-//
-// DÉCISION CONTRÔLEUR (team lead, 2026-07-18) : correctif DÉDIÉ **Task 4bis**
-// planifié juste après cette tâche (triple guard `TenantAuthGuard, RolesGuard,
-// CsrfGuard` + `@Roles('owner','admin','accountant')` en miroir des 3 routes
-// dual-auth conformes ci-dessous, + e2e négatifs viewer/CSRF sur
-// `annuaire.controller.ts`, + mise à jour des e2e appelants existants). EXCLU
-// ci-dessous par une liste NOMMÉE et bornée (pas un allowlist ouvert) : si une
-// des 3 méthodes listées venait à être corrigée (Task 4bis) ou une 4ᵉ ajoutée
-// par erreur, le test `dette pré-existante` ci-dessous casserait, forçant une
-// mise à jour délibérée de cette liste plutôt qu'un oubli silencieux — à ce
-// moment-là, cette liste devra être vidée (ou réduite) par Task 4bis.
-const KNOWN_PRE_EXISTING_GAPS = new Set([
-  'annuaire/annuaire.controller.ts#publish',
-  'annuaire/annuaire.controller.ts#endEffect',
-  'annuaire/annuaire.controller.ts#mask',
-])
+// DÉCOUVERTE (Task 4, plan 3.5, 2026-07-18) puis CORRECTIF (Task 4bis,
+// 2026-07-18) : `annuaire.controller.ts` (faille PRÉ-EXISTANTE depuis 2.4
+// Tasks 7/8, AVANT ce plan) composait `TenantAuthGuard` SEUL sur 3 routes de
+// mutation (`POST lignes`, `PUT lignes/:id`, `DELETE lignes/:id`) — SANS
+// `RolesGuard` ni `CsrfGuard`. C'était EXACTEMENT le résidu grave que
+// l'extension M1 vise à empêcher — corrigé par Task 4bis (triple garde
+// `TenantAuthGuard, RolesGuard, CsrfGuard` + `@Roles('owner','admin',
+// 'accountant')`, motif EXACT des 3 routes dual-auth ci-dessous). Liste
+// d'exclusion VIDÉE (plus aucune dette documentée) : le verrou couvre
+// désormais ces 3 routes comme toutes les autres — si l'une d'elles perdait
+// un jour un des 3 guards, le test `qualifying` (dernier `it` ci-dessous)
+// casserait immédiatement.
+const KNOWN_PRE_EXISTING_GAPS = new Set<string>([])
 
 const SRC_ROOT = resolve(import.meta.dirname, '../../src')
 const MUTATION_VERBS = ['@Post', '@Put', '@Delete']
@@ -160,12 +143,15 @@ describe('verrou d’architecture : composition dual-auth des routes de mutation
     }
   }
 
-  it('le scan repère les 3 routes dual-auth CONFORMES existantes (preuve que le scan n’est pas vide)', () => {
+  it('le scan repère les 6 routes dual-auth CONFORMES existantes (preuve que le scan n’est pas vide)', () => {
     const compliant = qualifying
       .filter((k) => !KNOWN_PRE_EXISTING_GAPS.has(k))
       .sort()
     expect(compliant).toEqual(
       [
+        'annuaire/annuaire.controller.ts#publish',
+        'annuaire/annuaire.controller.ts#endEffect',
+        'annuaire/annuaire.controller.ts#mask',
         'ereporting/ereporting.controller.ts#retransmit',
         'invoices/invoices.controller.ts#resolveRouting',
         'payments/payments.controller.ts#capture',
@@ -173,12 +159,11 @@ describe('verrou d’architecture : composition dual-auth des routes de mutation
     )
   })
 
-  it('documente la dette PRÉ-EXISTANTE exclue (annuaire.controller.ts, hors périmètre Task 4 — cf. commentaire d’en-tête)', () => {
-    const gaps = qualifying.filter((k) => KNOWN_PRE_EXISTING_GAPS.has(k)).sort()
-    expect(gaps).toEqual([...KNOWN_PRE_EXISTING_GAPS].sort())
+  it('aucune dette pré-existante restante (liste d’exclusion vide, Task 4bis a soldé annuaire.controller.ts)', () => {
+    expect(KNOWN_PRE_EXISTING_GAPS.size).toBe(0)
   })
 
-  it('TOUTE route de mutation composant TenantAuthGuard (hors dette documentée) compose AUSSI RolesGuard ET CsrfGuard, TenantAuthGuard en tête', () => {
+  it('TOUTE route de mutation composant TenantAuthGuard compose AUSSI RolesGuard ET CsrfGuard, TenantAuthGuard en tête', () => {
     expect(offenders).toEqual([])
   })
 })
