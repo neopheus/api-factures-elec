@@ -866,10 +866,10 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       cascade réelle vers le PPF (Flux 13 masquage + clôture + ligne
       fallback plateforme fictive `9998`), raison de révocation stockée
       (aucune colonne), outils d'actualisation post-révocation en masse.
-      **Backlog dédié acté (hors périmètre, non lié à la révocation)** :
-      divergence Tableau 6 — `annuaire-lifecycle.ts` affirme « aucun code
-      officiel DGFiP » alors que §3.5.7 p.54 documente les codes **400
-      Acceptée / 401 Rejetée** pour le cycle de publication annuaire.
+      **Backlog Tableau 6 : SOLDÉ** (correctif post-3.6) — `deposee`/
+      `rejetee` portent désormais les codes **400 Acceptée / 401 Rejetée**
+      (§3.5.7 p.54) ; motifs normatifs Tableau 7 actés, contrainte différée
+      aux adaptateurs réels.
       Détail complet : `apps/api/README.md` § Révocation de consentement —
       3.6.
 

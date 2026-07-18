@@ -1418,11 +1418,15 @@ draft → published → { deposee | rejetee }
 deposee → masked
 ```
 
-- **`draft`/`published`/`deposee`/`rejetee`/`masked`** portent tous
-  `code: null` — **aucun code officiel DGFiP n'est documenté** pour le cycle
-  de publication annuaire (contraste avec les 300/301 e-reporting, Tableau
-  5/6) : un motif de rejet est une **chaîne libre**, pas un énum
-  réglementaire normatif (D6, interprétation go-live).
+- **Codes DGFiP (correctif backlog 3.6, §3.5.7 Tableau 6 p.54)** :
+  `deposee` porte **400 « Acceptée »** et `rejetee` **401 « Rejetée »**
+  (statuts obligatoires documentés) ; les états **internes PA**
+  (`draft`/`published`/`masked`) restent `code: null` (leçon 2.3-A3 — jamais
+  de faux code réglementaire sur un état interne). Le **motif** de rejet
+  reste une **chaîne libre** : les 4 motifs normatifs du **Tableau 7 p.55**
+  (`REJ_RG`/`REJ_HAB`/`REJ_COH`/`REJ_VAL_INC`) existent, leur contrainte est
+  une **dette** liée au raccordement des adaptateurs annuaire réels (le port
+  local ne produit pas d'acquittements réels).
 - **Terminaux = `{rejetee, masked}`** — `deposee` n'**est pas** terminal
   (transition possible vers `masked`, fin d'adressage explicite via une
   ligne Nature `M`). `motifRequired` n'exige un motif que pour `rejetee`.
@@ -2705,16 +2709,13 @@ non nul, historique jamais supprimé — `annuaire_consents` n'a pas de grant
 
 ### Backlog acté (hors périmètre de ce plan)
 
-- **Divergence Tableau 6 — commentaire factuellement faux (PRÉ-EXISTANTE,
-  non corrigée ici)** : `annuaire-lifecycle.ts:9-14` affirme *« aucun code
-  officiel DGFiP n'est documenté pour le cycle de publication annuaire »*
-  (§ Machine à états de publication ci-dessus) alors que **§3.5.7 Tableau 6
-  p.54** documente explicitement deux codes pour les statuts de ligne
-  d'annuaire (**400 Acceptée / 401 Rejetée**). Divergence confirmée réelle
-  en revue du plan 3.6 (ré-extraction primaire indépendante) — **sans lien
-  avec la révocation**, correction **backlog dédié** (mettre à jour le
-  commentaire et, le cas échéant, exposer les codes 400/401 dans les
-  événements de ligne).
+- **Divergence Tableau 6 — SOLDÉE (correctif backlog post-3.6)** :
+  l'ancienne bannière d'`annuaire-lifecycle.ts` affirmait à tort *« aucun
+  code officiel DGFiP »* ; les codes **400 Acceptée / 401 Rejetée** du
+  **§3.5.7 Tableau 6 p.54** sont désormais portés par `deposee`/`rejetee`
+  (`ANNUAIRE_STATUS_META`, oracle main-transcrit au test), et le **Tableau 7
+  p.55** (motifs normatifs `REJ_*`) est acté — contrainte du motif différée
+  au raccordement des adaptateurs réels (§ Machine à états ci-dessus).
 - **Outils d'actualisation post-révocation différés** : clôture `dateFin`
   en masse et création de ligne fallback (plateforme fictive `9998`) — la
   procédure ci-dessus reste **manuelle**, ligne par ligne, via les endpoints
