@@ -89,7 +89,7 @@ describe('archive on generation (e2e)', () => {
   })
 
   it('archives the invoice after generation (archive_status=archived, bundle written)', async () => {
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       archiveStore: new LocalFilesystemArchiveStore(dir),
     })
     try {
@@ -115,7 +115,7 @@ describe('archive on generation (e2e)', () => {
   })
 
   it('marks archive_status=failed when the store throws, WITHOUT failing generation', async () => {
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       archiveStore: failingStore,
     })
     try {
@@ -145,7 +145,7 @@ describe('archive on generation (e2e)', () => {
     // Génère + archive une facture via un premier passage, puis rejoue le service
     // directement : le head détecte la clé, aucun écrasement, statut inchangé.
     const store = new LocalFilesystemArchiveStore(dir)
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       archiveStore: store,
     })
     let id: string

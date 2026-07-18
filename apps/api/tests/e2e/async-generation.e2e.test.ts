@@ -89,7 +89,7 @@ describe('asynchronous generation (e2e)', () => {
       expect(still.rows[0].status).toBe('received')
 
       // (b) On démarre le worker → génération → statut `generated`.
-      const worker = await createTestWorker(db.appUrl, redis)
+      const worker = await createTestWorker(db.workerUrl, redis)
       try {
         await waitFor(async () => {
           const r = await request(app.getHttpServer())
@@ -128,7 +128,7 @@ describe('asynchronous generation (e2e)', () => {
       .send({ ...valid, number: 'FA-ASYNC-REPLAY' })
       .expect(201)
     const id = res.body.id
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const replayQueue = new Queue(INVOICE_GENERATION_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -177,7 +177,7 @@ describe('asynchronous generation (e2e)', () => {
     const id = res.body.id
     // Worker dont le générateur échoue systématiquement → après épuisement
     // des tentatives (GENERATION_JOB_ATTEMPTS, défaut 3, backoff exp) → failed.
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       generator: { generate: () => Promise.reject(new Error('boom')) },
     })
     try {
@@ -225,7 +225,7 @@ describe('asynchronous generation (e2e)', () => {
     )
     const id = ins.rows[0].id
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -298,7 +298,7 @@ describe('asynchronous generation (e2e)', () => {
     const failingQueue = new Queue(INVOICE_GENERATION_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
-    const failingWorker = await createTestWorker(db.appUrl, redis, {
+    const failingWorker = await createTestWorker(db.workerUrl, redis, {
       generator: { generate: () => Promise.reject(new Error('boom')) },
     })
     try {
@@ -325,7 +325,7 @@ describe('asynchronous generation (e2e)', () => {
       [id],
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })

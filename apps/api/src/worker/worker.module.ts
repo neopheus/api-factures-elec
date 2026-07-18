@@ -51,7 +51,7 @@ import { WorkerQueueModule } from './worker-queue.module.js'
 @Module({
   imports: [
     AppConfigModule,
-    DbModule,
+    DbModule.forRoot('DATABASE_URL_WORKER'),
     WorkerQueueModule,
     ArchiveModule,
     EreportingTransmissionModule,

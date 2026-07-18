@@ -204,6 +204,13 @@
       "when": 1784204052276,
       "tag": "0028_routing_retry_sweep",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1784204152276,
+      "tag": "0029_worker_role_grants",
+      "breakpoints": true
     }
   ]
 }

@@ -165,7 +165,7 @@ describe('routage destinataire — couture worker (e2e, Postgres+Redis réels)',
   it('résout le destinataire à la génération : seed ligne annuaire → routing_status="resolved" + recipient_platform', async () => {
     const siren = '511111111'
     await seedDirectoryEntry(ownerPool, tenantId, siren, '0099')
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     try {
       const id = await postInvoice(app, token, {
         number: 'FA-ROUTING-WORKER-RESOLVED',
@@ -187,7 +187,7 @@ describe('routage destinataire — couture worker (e2e, Postgres+Redis réels)',
 
   it('sans ligne d\'annuaire couvrante → routing_status="unaddressable" (génération réussie quand même)', async () => {
     const siren = '522222222' // aucune ligne d'annuaire seedée pour ce SIREN
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     try {
       const id = await postInvoice(app, token, {
         number: 'FA-ROUTING-WORKER-UNADDRESSABLE',
@@ -217,7 +217,7 @@ describe('routage destinataire — couture worker (e2e, Postgres+Redis réels)',
 
   it('non-régression : les formats sont générés et servis indépendamment du routage', async () => {
     const siren = '533333333' // aucune ligne d'annuaire : routage 'unaddressable'
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     try {
       const id = await postInvoice(app, token, {
         number: 'FA-ROUTING-WORKER-FORMATS',

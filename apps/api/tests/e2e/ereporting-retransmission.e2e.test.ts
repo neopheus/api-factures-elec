@@ -139,7 +139,7 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       buildInvoice(b2cInvoice('FA-RE-1-1', siren, '2026-09-05')),
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -219,7 +219,7 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       buildInvoice(b2cInvoice('FA-RE-2-1', siren, '2026-09-05')),
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -295,7 +295,7 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       buildInvoice(b2cInvoice('FA-RE-3-1', siren, '2026-09-05')),
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -367,7 +367,7 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       buildInvoice(b2cInvoice('FA-RE-4-1', siren, '2026-09-05')),
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -428,7 +428,7 @@ describe('ereporting retransmission worker RE (e2e)', () => {
       buildInvoice(b2cInvoice('FA-RE-5-1', siren, '2026-09-05')),
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const app: INestApplication = await createTestApp(db.appUrl, {
       host: redis.host,
       port: redis.port,

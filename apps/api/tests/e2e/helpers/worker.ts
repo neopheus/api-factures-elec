@@ -218,7 +218,7 @@ export { InMemoryCdvTransmissionSink }
 // born-rejetée) n'appelle JAMAIS le port. Par défaut : sink en mémoire
 // hermétique (ci-dessus) → aucun test n'écrit dans ./var/cdv sans le demander.
 export async function createTestWorker(
-  appUrl: string,
+  workerUrl: string,
   redis: { host: string; port: number },
   opts?: {
     generator?: InvoiceFormatGenerator
@@ -228,11 +228,18 @@ export async function createTestWorker(
     cdvTransmissionPort?: CdvTransmissionPort
   },
 ): Promise<INestApplicationContext> {
-  process.env.DATABASE_URL = appUrl
+  // AMENDEMENT B1 (plan 3.5, Task 3) : le worker se connecte désormais en
+  // `factelec_worker` (moindre privilège, D4/D5) — `DATABASE_URL_WORKER` est
+  // la clé lue par `DbModule.forRoot('DATABASE_URL_WORKER')` (worker.module.ts).
+  // `DATABASE_URL` reste posée (schéma env requis, ConfigModule eager) mais
+  // n'est plus le pool réellement utilisé par ce process de test — voir
+  // l'override APP_POOL ci-dessous, qui construit le pool directement depuis
+  // `workerUrl` (factelec_worker), pas depuis `DATABASE_URL`.
+  process.env.DATABASE_URL_WORKER = workerUrl
   process.env.LOG_LEVEL = 'silent'
   const builder = Test.createTestingModule({ imports: [WorkerModule] })
     .overrideProvider(APP_POOL)
-    .useFactory({ factory: () => createPool(appUrl) })
+    .useFactory({ factory: () => createPool(workerUrl) })
     .overrideProvider(REDIS_CONNECTION)
     .useValue({ host: redis.host, port: redis.port })
     .overrideProvider(ARCHIVE_STORE)

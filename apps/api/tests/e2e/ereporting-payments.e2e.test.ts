@@ -161,7 +161,7 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
       subtotals: [{ taxPercent: '20.00', amount: '1200.00' }],
     })
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -227,7 +227,7 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
       subtotals: [{ taxPercent: '20.00', amount: '600.00' }],
     })
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -281,7 +281,7 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
     // Aucun encaissement capturé pour ce déclarant/période.
 
     const { port, calls } = neverCalledPort()
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       transmissionPort: port,
     })
     const queue = new Queue<EreportingGenerationJob>(
@@ -325,7 +325,7 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
       subtotals: [{ taxPercent: '20.00', amount: '1200.00' }],
     })
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -404,7 +404,7 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
     })
 
     const { port, calls } = neverCalledPort()
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       transmissionPort: port,
     })
     const queue = new Queue<EreportingGenerationJob>(
@@ -471,7 +471,7 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
       subtotals: [{ taxPercent: '20.00', amount: '1200.00' }],
     })
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -539,7 +539,7 @@ describe('ereporting payments worker (e2e, Task 8 plan 3.2)', () => {
       subtotals: [{ taxPercent: '20.00', amount: '1200.00' }],
     })
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })

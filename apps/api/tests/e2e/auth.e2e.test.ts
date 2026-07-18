@@ -40,7 +40,7 @@ class WhoamiController {
 // l'override ait un provider existant à remplacer — même mécanique que
 // `createTestApp` pour l'app complète (Task 5).
 @Module({
-  imports: [AppConfigModule, DbModule],
+  imports: [AppConfigModule, DbModule.forRoot('DATABASE_URL')],
   controllers: [WhoamiController],
   providers: [ApiKeyService, ApiKeyGuard],
 })
@@ -167,7 +167,7 @@ describe('ApiKeyGuard — no secret leak in logs (e2e)', () => {
     const mod = await Test.createTestingModule({
       imports: [
         AppConfigModule,
-        DbModule,
+        DbModule.forRoot('DATABASE_URL'),
         LoggerModule.forRoot({
           pinoHttp: { ...buildPinoHttpOptions('info'), stream },
         }),

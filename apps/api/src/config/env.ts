@@ -21,6 +21,12 @@ export const envSchema = z.object({
   // Rôle applicatif UNIQUEMENT (soumis à la RLS). L'URL du rôle owner n'est
   // jamais chargée par le process API (elle sert aux scripts migration/provision).
   DATABASE_URL: z.url(),
+  // Rôle worker de moindre privilège (D4/D5, plan 3.5, Task 3) — consommée
+  // UNIQUEMENT par le bootstrap worker (worker-main.ts → WorkerModule →
+  // DbModule.forRoot('DATABASE_URL_WORKER')). Optionnelle : le process API
+  // n'a pas besoin du secret worker (`DbModule.forRoot` throw explicitement
+  // si absente au bootstrap worker).
+  DATABASE_URL_WORKER: z.url().optional(),
   CORS_ALLOWED_ORIGINS: csv,
   RATE_LIMIT_TTL: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(120),

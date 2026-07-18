@@ -134,7 +134,7 @@ async function mirrorRows(
 
 describe('AnnuaireScheduler + AnnuaireSweepService (Task 9 Step 1)', () => {
   it('enregistre les TROIS planificateurs répétables (diff/full/republish-sweep, bootstrap idempotent)', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -152,7 +152,7 @@ describe('AnnuaireScheduler + AnnuaireSweepService (Task 9 Step 1)', () => {
 
   it('un sweep annuaire-sync-diff enfile un job annuaire-sync (TypeFlux=D) pour un tenant', async () => {
     const tenantId = await makeTenant('ANN-SYNC-SWEEP-D')
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -207,7 +207,7 @@ describe('AnnuaireScheduler + AnnuaireSweepService (Task 9 Step 1)', () => {
       [agedId],
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -255,7 +255,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -292,7 +292,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -340,7 +340,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -395,7 +395,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -439,7 +439,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
 
   it('un F14 vide (aucune fixture déposée) : no-op — aucune ligne, job complété sans erreur', async () => {
     const tenantId = await makeTenant('ANN-SYNC-EMPTY')
-    const worker = await createTestWorker(db.appUrl, redis) // port par défaut : aucune fixture
+    const worker = await createTestWorker(db.workerUrl, redis) // port par défaut : aucune fixture
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -471,7 +471,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -506,7 +506,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -557,7 +557,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -603,7 +603,7 @@ describe('AnnuaireSyncProcessor — ingestion F14 (job annuaire-sync)', () => {
         },
       ]),
     )
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const queue = new Queue(ANNUAIRE_SYNC_QUEUE, {
@@ -681,7 +681,7 @@ describe('AnnuaireSyncProcessor — reprise de draft figé (job annuaire-republi
       [agedId],
     )
 
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       annuairePort: port,
     })
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {

@@ -19,7 +19,7 @@ import { UsersModule } from './users/users.module.js'
   imports: [
     AppConfigModule,
     AppLoggerModule,
-    DbModule,
+    DbModule.forRoot('DATABASE_URL'),
     QueueModule,
     AuthModule,
     HealthModule,

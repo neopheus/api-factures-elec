@@ -1,9 +1,9 @@
 import { buildInvoice, type InvoiceInput } from '@factelec/invoice-core'
-import type { INestApplicationContext } from '@nestjs/common'
 import { Queue } from 'bullmq'
 import pg from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { AnnuaireRepository } from '../../src/annuaire/annuaire.repository.js'
+import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import { InvoicesRepository } from '../../src/invoices/invoices.repository.js'
 import {
   CDV_STUCK_RETRY_JOB,
@@ -31,6 +31,7 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   let redis: TestRedis
   let ownerPool: pg.Pool
   let appPool: pg.Pool
+  let appRepo: InvoicesRepository
 
   beforeAll(async () => {
     ;[db, redis] = await Promise.all([startTestDb(), startTestRedis()])
@@ -38,6 +39,11 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
     appPool = new pg.Pool({ connectionString: db.appUrl })
     ownerPool.on('error', () => {})
     appPool.on('error', () => {})
+    // Seed via un InvoicesRepository lié à factelec_app (INSERT requis pour
+    // `insertReceived` — le worker n'a JAMAIS ce grant, D4, motif
+    // archive-generation.e2e.test.ts) : distinct du repository interne des
+    // workers sous test (factelec_worker) créés par chaque `it()`.
+    appRepo = new InvoicesRepository(new TenantContextService(appPool))
   })
 
   afterAll(async () => {
@@ -91,13 +97,11 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   }
 
   async function seedInvoice(
-    worker: INestApplicationContext,
     tenantId: string,
     number: string,
     buyerSiren: string,
   ): Promise<string> {
-    const invoicesRepo = worker.get(InvoicesRepository)
-    const { id } = await invoicesRepo.insertReceived(
+    const { id } = await appRepo.insertReceived(
       tenantId,
       buildInvoice(invoiceInput(number, buyerSiren)),
     )
@@ -147,7 +151,7 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   }
 
   it('the scheduler registers the repeatable cdv-transmission-sweep and cdv-stuck-retry job schedulers (idempotent bootstrap)', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -172,7 +176,7 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   })
 
   it('transmet les statuts obligatoires dus vers PPF (1 event obligatoire → 1 transmission PPF), enfile aussi la cible recipient', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -182,7 +186,6 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
     try {
       const tenantId = await seedTenant('CDV-SWEEP-PPF')
       const invoiceId = await seedInvoice(
-        worker,
         tenantId,
         'CDV-SWEEP-PPF-1',
         '900000101', // pas d'entrée annuaire -> recipient parkera
@@ -222,7 +225,7 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   })
 
   it("n'enfile PAS les statuts facultatifs (204/205… hors périmètre, D7)", async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -261,7 +264,7 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   })
 
   it('est idempotent : un second sweep ne duplique pas les jobs/lignes (created:false + jobId + unique DB, 3 couches D8)', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -271,7 +274,6 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
     try {
       const tenantId = await seedTenant('CDV-SWEEP-IDEM')
       const invoiceId = await seedInvoice(
-        worker,
         tenantId,
         'CDV-SWEEP-IDEM-1',
         '900000102',
@@ -326,7 +328,7 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   })
 
   it("respecte la fenêtre bornée (un event hors CDV_TRANSMISSION_LOOKBACK_MS n'est pas ré-enfilé, D8)", async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -363,7 +365,7 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
   })
 
   it('reprend une transmission parked quand l’annuaire devient adressable (parked→transmitted) — PROUVE xml+recipient_matricule persistés (injection revue T6 F1/F2)', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -371,7 +373,6 @@ describe('ordonnanceur CDV borné (24h) + worker + reprise des parked (e2e)', ()
       const tenantId = await seedTenant('CDV-STUCK-RETRY')
       const buyerSiren = '900000103'
       const invoiceId = await seedInvoice(
-        worker,
         tenantId,
         'CDV-STUCK-RETRY-1',
         buyerSiren, // aucune entrée annuaire -> non adressable
