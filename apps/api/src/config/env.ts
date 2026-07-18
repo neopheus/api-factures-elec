@@ -178,6 +178,12 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(300_000),
+  // ── Consentement annuaire — scellement de signature (D1/D3, plan 3.5) ────
+  // 'local' = LocalFilesystemConsentStore (scellement STRUCTUREL write-once,
+  // dev/test — AUCUNE vérification cryptographique) ; 'eidas' = fournisseur
+  // de signature qualifiée réel ACTIVÉ AU DÉPLOIEMENT (non fourni en 3.5).
+  CONSENT_DRIVER: z.enum(['local', 'eidas']).default('local'),
+  CONSENT_LOCAL_DIR: z.string().default('./var/consent'),
   // ── CDV Flux 6 / CDAR — transmission (D1/D4/D7) ──────────────────────────
   // 'local' = LocalFilesystemCdvStore (write-once, dev/test) ;
   // sftp/as2/as4/as4-peppol/api = adaptateurs réels (auth transport, D1/D7)
