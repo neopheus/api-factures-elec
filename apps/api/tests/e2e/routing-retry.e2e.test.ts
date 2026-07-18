@@ -2,6 +2,7 @@ import { buildInvoice, type InvoiceInput } from '@factelec/invoice-core'
 import type { INestApplicationContext } from '@nestjs/common'
 import pg from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import { InvoicesRepository } from '../../src/invoices/invoices.repository.js'
 import { RecipientRoutingRetryService } from '../../src/worker/recipient-routing-retry.service.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
@@ -40,6 +41,7 @@ describe('sweep de reprise du routage destinataire — pending/unaddressable, am
   let db: TestDb
   let redis: TestRedis
   let ownerPool: pg.Pool
+  let appPool: pg.Pool
   let worker: INestApplicationContext
   let repo: InvoicesRepository
   let retry: RecipientRoutingRetryService
@@ -90,16 +92,23 @@ describe('sweep de reprise du routage destinataire — pending/unaddressable, am
   beforeAll(async () => {
     ;[db, redis] = await Promise.all([startTestDb(), startTestRedis()])
     ownerPool = new pg.Pool({ connectionString: db.ownerUrl })
-    worker = await createTestWorker(db.appUrl, {
+    appPool = new pg.Pool({ connectionString: db.appUrl })
+    worker = await createTestWorker(db.workerUrl, {
       host: redis.host,
       port: redis.port,
     })
-    repo = worker.get(InvoicesRepository)
+    // Seed/assertions via un InvoicesRepository DÉDIÉ, lié au pool
+    // factelec_app (INSERT requis pour `insertReceived` — le worker n'a
+    // JAMAIS ce grant, D4, motif archive-generation.e2e.test.ts) : distinct
+    // du repository interne du worker (factelec_worker, sous test via
+    // `retry.sweepPendingRouting()`).
+    repo = new InvoicesRepository(new TenantContextService(appPool))
     retry = worker.get(RecipientRoutingRetryService)
     tenantId = await seedTenant('ROUTING-RETRY')
   })
   afterAll(async () => {
     await worker.close()
+    await appPool.end()
     await ownerPool.end()
     await Promise.all([db.stop(), redis.stop()])
   })

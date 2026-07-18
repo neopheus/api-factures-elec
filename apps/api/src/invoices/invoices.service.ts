@@ -18,6 +18,8 @@ import type { FormatKind } from './format-generator.port.js'
 import type { InvoiceDetail, RoutingStatus } from './invoices.repository.js'
 // biome-ignore lint/style/useImportType: InvoicesRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { InvoicesRepository } from './invoices.repository.js'
+// biome-ignore lint/style/useImportType: RecipientRoutingService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
+import { RecipientRoutingService } from './recipient-routing.service.js'
 
 interface ZodIssueLike {
   path: PropertyKey[]
@@ -77,6 +79,7 @@ export class InvoicesService {
   constructor(
     private readonly repo: InvoicesRepository,
     private readonly queue: InvoiceGenerationQueue,
+    private readonly routing: RecipientRoutingService,
   ) {}
 
   async ingest(
@@ -161,6 +164,48 @@ export class InvoicesService {
     const format = await this.repo.findFormat(tenantId, id, kind)
     if (!format) throw this.notFound()
     return format
+  }
+
+  // Re-résolution opérateur d'un routage `ambiguous` (Task 4, plan 3.5, D6) :
+  // garde `ambiguous`-ONLY (409 sinon, miroir exact du 409
+  // `noRectifiableInitialTransmission` de `EreportingRetransmissionService`),
+  // 404 anti-fuite byte-identique (inconnue/cross-tenant/`:id` malformé
+  // indiscernables, motif `notFound()` ci-dessous), `resolveAndRecord`
+  // réutilisé VERBATIM (best-effort strict, D2 — ne relève jamais). Le 200
+  // rapporte l'état RELU (`findRoutingState` après l'appel) — JAMAIS une
+  // promesse fabriquée : si l'annuaire n'a pas été nettoyé (ou panne
+  // opérationnelle pendant le best-effort), la réponse reporte fidèlement
+  // l'état obtenu (`ambiguous`/`unaddressable`), pas un succès inventé.
+  async resolveRouting(
+    tenantId: string,
+    id: string,
+  ): Promise<{
+    invoiceId: string
+    routingStatus: string
+    recipientPlatform: string | null
+  }> {
+    if (!isUuid(id)) throw this.notFound()
+    const state = await this.repo.findRoutingState(tenantId, id)
+    if (!state) throw this.notFound()
+    if (state.status !== 'ambiguous') {
+      throw new ConflictException(
+        problem(409, ProblemType.conflict, 'Routing not in ambiguous state'),
+      )
+    }
+    const invoice = await this.repo.loadCanonical(tenantId, id)
+    if (!invoice) throw this.notFound()
+    await this.routing.resolveAndRecord(tenantId, id, invoice)
+    // Relecture défensive (motif `loadCanonical` ci-dessus) : la facture
+    // pourrait en théorie disparaître entre la garde et cette relecture —
+    // jamais un cas réel observé, mais un 404 explicite reste plus honnête
+    // qu'un throw non-géré sur un `next` qui serait `null`.
+    const next = await this.repo.findRoutingState(tenantId, id)
+    if (!next) throw this.notFound()
+    return {
+      invoiceId: id,
+      routingStatus: next.status,
+      recipientPlatform: next.platform,
+    }
   }
 
   private notFound(): NotFoundException {

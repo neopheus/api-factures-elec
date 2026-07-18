@@ -4,6 +4,7 @@ import { AnnuaireConsultationService } from '../annuaire/annuaire-consultation.s
 import { AnnuairePublicationService } from '../annuaire/annuaire-publication.service.js'
 import { AnnuaireSyncService } from '../annuaire/annuaire-sync.service.js'
 import { AnnuaireTransportModule } from '../annuaire/annuaire-transport.module.js'
+import { ConsentSignatureModule } from '../annuaire/consent-signature.module.js'
 import { ArchiveModule } from '../archive/archive.module.js'
 import { ArchiveService } from '../archive/archive.service.js'
 import { CdvTransmissionModule } from '../cdv/cdv-transmission.module.js'
@@ -50,7 +51,7 @@ import { WorkerQueueModule } from './worker-queue.module.js'
 @Module({
   imports: [
     AppConfigModule,
-    DbModule,
+    DbModule.forRoot('DATABASE_URL_WORKER'),
     WorkerQueueModule,
     ArchiveModule,
     EreportingTransmissionModule,
@@ -61,6 +62,15 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     // deux `NestFactory` distincts : AppModule (HTTP) et WorkerModule sont
     // deux contextes séparés, chacun doit l'importer lui-même).
     AnnuaireTransportModule,
+    // `@Global()` (consent-signature.module.ts, Task 1, plan 3.5) : requis
+    // par `AnnuairePublicationService` (ci-dessous, `republishDraft` — le
+    // sweep de reprise), qui dépend maintenant de `CONSENT_SIGNATURE` dans
+    // son constructeur (Task 2, plan 3.5) même si `republishDraft` ne
+    // l'appelle jamais (seule la branche `proof` de `resolveConsent` le
+    // fait, jamais exercée par le worker) — la résolution DI de Nest est
+    // par CONSTRUCTEUR, pas par méthode : le token doit être disponible dans
+    // CE process worker, même motif que les deux imports ci-dessus.
+    ConsentSignatureModule,
     // `@Global()` (cdv-transmission.module.ts, Task 5) : importer ICI expose
     // `CDV_TRANSMISSION` à ce process worker (Task 7) — même motif que les
     // deux imports ci-dessus.

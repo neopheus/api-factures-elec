@@ -143,7 +143,7 @@ describe('ereporting generation worker (e2e)', () => {
       buildInvoice(b2cInvoice('FA-GEN-2', siren, '2026-09-05')),
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -208,7 +208,7 @@ describe('ereporting generation worker (e2e)', () => {
     // Aucune facture insérée pour ce déclarant/période.
 
     const { port, calls } = neverCalledPort()
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       transmissionPort: port,
     })
     const queue = new Queue<EreportingGenerationJob>(
@@ -250,7 +250,7 @@ describe('ereporting generation worker (e2e)', () => {
       buildInvoice(b2cInvoice('FA-GEN-RLS-1', siren, '2026-07-05')),
     )
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -327,7 +327,7 @@ describe('ereporting generation worker (e2e)', () => {
       periodEnd: '20260610',
     })
 
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue<EreportingGenerationJob>(
       EREPORTING_GENERATION_QUEUE,
       { connection: { host: redis.host, port: redis.port } },
@@ -406,7 +406,7 @@ describe('ereporting generation worker (e2e)', () => {
     )
 
     const { port, calls } = neverCalledPort()
-    const worker = await createTestWorker(db.appUrl, redis, {
+    const worker = await createTestWorker(db.workerUrl, redis, {
       transmissionPort: port,
     })
     const queue = new Queue<EreportingGenerationJob>(

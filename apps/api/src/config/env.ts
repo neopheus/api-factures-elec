@@ -21,6 +21,12 @@ export const envSchema = z.object({
   // Rôle applicatif UNIQUEMENT (soumis à la RLS). L'URL du rôle owner n'est
   // jamais chargée par le process API (elle sert aux scripts migration/provision).
   DATABASE_URL: z.url(),
+  // Rôle worker de moindre privilège (D4/D5, plan 3.5, Task 3) — consommée
+  // UNIQUEMENT par le bootstrap worker (worker-main.ts → WorkerModule →
+  // DbModule.forRoot('DATABASE_URL_WORKER')). Optionnelle : le process API
+  // n'a pas besoin du secret worker (`DbModule.forRoot` throw explicitement
+  // si absente au bootstrap worker).
+  DATABASE_URL_WORKER: z.url().optional(),
   CORS_ALLOWED_ORIGINS: csv,
   RATE_LIMIT_TTL: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(120),
@@ -178,6 +184,12 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(300_000),
+  // ── Consentement annuaire — scellement de signature (D1/D3, plan 3.5) ────
+  // 'local' = LocalFilesystemConsentStore (scellement STRUCTUREL write-once,
+  // dev/test — AUCUNE vérification cryptographique) ; 'eidas' = fournisseur
+  // de signature qualifiée réel ACTIVÉ AU DÉPLOIEMENT (non fourni en 3.5).
+  CONSENT_DRIVER: z.enum(['local', 'eidas']).default('local'),
+  CONSENT_LOCAL_DIR: z.string().default('./var/consent'),
   // ── CDV Flux 6 / CDAR — transmission (D1/D4/D7) ──────────────────────────
   // 'local' = LocalFilesystemCdvStore (write-once, dev/test) ;
   // sftp/as2/as4/as4-peppol/api = adaptateurs réels (auth transport, D1/D7)

@@ -68,7 +68,21 @@ harmonisée en 404 anti-fuite byte-identique sur 8 routes, erreurs CAS
 typées `CasStaleError`, verrou d'architecture — un **ralentisseur**, pas une
 barrière — sur le footgun `apiKeyId`, stabilisation e2e par split Vitest
 `heavy`/`light`) — voir §§ Couture annuaire → émission / Durcissements
-transverses ci-dessous. Consomme
+transverses ci-dessous, puis en **3.4** avec la **reprise & retransmission**
+(chemin RE opérateur `POST /ereporting/retransmissions`, dual-auth,
+retry-idempotent 3 couches, débloquant **conditionnellement** le deadlock du
+slot IN né-`rejetee` de 2.3 ; sweep de reprise du routage destinataire
+`pending`/`unaddressable`, `ambiguous` exclu ; filtre de liste
+`routingStatus`), puis en **3.5** avec le **scellement structurel du
+consentement annuaire** (`ConsentSignaturePort`, 5ᵉ instance du motif port —
+intégrité sha256 + horodatage + write-once WORM, **aucune** signature
+qualifiée, fournisseurs eIDAS réels différés), le rôle Postgres
+**`factelec_worker`** de moindre privilège (grants dérivés de l'inventaire
+réel du process worker, pool/env dédiés `DATABASE_URL_WORKER`, provisioning
+prod différé) et l'**endpoint de re-résolution manuelle d'un routage
+`ambiguous`** (`POST /invoices/:id/routing/resolve`, dual-auth, solde
+F-2/3.4) — voir § Consentement scellé, rôle worker & re-résolution
+ambiguous — 3.5 ci-dessous. Consomme
 `@factelec/invoice-core` (validation, calculs, génération des formats du socle)
 et expose l'ensemble derrière une couche d'authentification et d'isolation
 multi-tenant Postgres.
@@ -211,9 +225,15 @@ par défaut), jamais indéfiniment, mais pas instantanée. Aucune stratégie de
 verrou distribué n'a été mise en place pour fermer cette fenêtre à zéro
 (compromis assumé : complexité vs. gain sur un cas déjà borné et rare).
 
-**Rôle Postgres du worker : `factelec_app`** (D6, comme l'API) — le worker
-n'a besoin d'aucun privilège supplémentaire (mêmes tables, même RLS) ; il
-partage `DATABASE_URL` avec le process API, jamais `factelec_owner`.
+**Rôle Postgres du worker (D6 → révisé 3.5).** Jusqu'en 3.4, le worker
+partageait `factelec_app` (`DATABASE_URL`) avec le process API — aucun
+privilège différencié. **Depuis 3.5**, `WorkerModule` importe
+inconditionnellement `DbModule.forRoot('DATABASE_URL_WORKER')`
+(`src/worker/worker.module.ts`) : le worker tourne sous le rôle dédié de
+moindre privilège **`factelec_worker`**, jamais `factelec_owner` ni
+`factelec_app`. Voir § Consentement scellé, rôle worker & re-résolution
+ambiguous — 3.5 pour le détail des grants, la preuve d'isolation et le
+runbook de provisioning.
 
 ## Nouvelle sémantique `POST /invoices`
 
@@ -1150,16 +1170,25 @@ surprendre : si un re-POST semble sans effet, consulter la file (job existant
 même id) ou attendre l'expiration de rétention. Le cas courant (RE rejeté
 `REJ_SEMAN` → ligne committée → `reSeq` avancé) n'est **pas** concerné.
 
-**Edge connu — sortie d'`ambiguous` (revue finale 3.4, F-2)** : le sweep de
-reprise du routage **exclut** `ambiguous` à dessein (l'ambiguïté exige un
-nettoyage humain de l'annuaire, pas un rejeu aveugle). Mais après ce
-nettoyage, **aucun chemin automatique** ne re-résout la facture : ni le sweep
-(exclusion SQL), ni un endpoint dédié (différé 3.5+). Procédure actuelle :
-corriger l'annuaire (masquer/republier la ligne en trop), puis re-déclencher
-la résolution **indirectement** — l'écriture d'une correction annuaire ne
-touche pas la facture ; à ce jour la seule voie est d'attendre un futur
-endpoint de re-résolution manuelle (différé, listé) ou une re-génération de
-la facture. Limite héritée 3.3, non aggravée, désormais explicite.
+**Edge — sortie d'`ambiguous` (revue finale 3.4, F-2) — SOLDÉ en 3.5.** Le
+sweep de reprise du routage **exclut** `ambiguous` à dessein (l'ambiguïté
+exige un nettoyage humain de l'annuaire, pas un rejeu aveugle). Depuis 3.5,
+`POST /invoices/:id/routing/resolve` (dual-auth, § Consentement scellé, rôle
+worker & re-résolution ambiguous — 3.5) ferme le trou qui restait après ce
+nettoyage : **procédure** — (1) corriger l'annuaire (masquer/republier la
+ligne en trop) ; (2) appeler l'endpoint sur la facture concernée ; (3) lire
+l'état retourné.
+
+⚠️ **Honnêteté (L1, à lire avant d'exploiter)** : `resolveAndRecord` est
+best-effort strict, il ne relève jamais — un `200` dont le corps reste
+`routingStatus: 'ambiguous'` est **indistinguable** entre « l'annuaire n'a pas
+(suffisamment) été nettoyé » et « une panne opérationnelle (annuaire/DB) est
+survenue pendant la re-résolution ». Procédure en cas de persistance :
+re-vérifier le nettoyage annuaire, **re-tenter** l'appel (idempotent — aucun
+effet de bord à le rejouer), ou consulter les logs applicatifs pour trancher
+— aucune télémétrie dédiée ne distingue aujourd'hui ces deux causes.
+`unaddressable`/`pending` restent, eux, repris automatiquement par le sweep
+3.4 sans intervention.
    Un nouveau rejet local (données encore invalides) est visible de la même
    façon (`rejectOrigin: 'local'` sur **cette** ligne RE) — corriger à
    nouveau et re-POST (`reSeq` s'incrémente automatiquement, `…-RE-1`).
@@ -2175,6 +2204,15 @@ projet, l'inverse de l'objectif), une interface **étroite** explicitement
 importée par les seuls guards concernés. Zéro changement de comportement
 runtime.
 
+**Second verrou, sibling (3.5, amendement M1)** : ce verrou couvre le footgun
+`apiKeyId` (bypass illégitime) mais n'assertait **rien** sur la
+**composition** des guards d'une route — un guard entier peut être **omis**
+sans que ce test ne le voie. Voir § Verrou d'architecture — composition
+dual-auth (M1) dans la section Consentement scellé, rôle worker &
+re-résolution ambiguous — 3.5 ci-dessous : c'est exactement ce résidu que
+l'extension M1 a mis au jour, sur une faille **réelle** (annuaire, héritée de
+2.4).
+
 ### Stabilisation e2e — teardown idempotent + split Vitest heavy/light (D10/D11)
 
 **Teardown idempotent du pool** (`DbModule.onModuleDestroy`) : `pg-pool`
@@ -2217,6 +2255,302 @@ surveillés) **et 2 autres suites `light`** ont échoué simultanément sur
 (headroom sous le plafond Docker), plutôt que de conclure « vert » sur un
 run simplement plus chanceux.
 
+## Consentement scellé, rôle worker de moindre privilège & re-résolution ambiguous — 3.5
+
+Trois axes **strictement internes au code**, aucune extraction réglementaire
+nouvelle (le consentement annuaire a déjà ses références 2.4, §3.5.5.5) : (1)
+scellement structurel du consentement annuaire, (2) séparation du rôle
+Postgres du worker, (3) endpoint de re-résolution manuelle d'un routage
+`ambiguous` (solde F-2/3.4, § Runbook opérationnel — E-reporting ci-dessus).
+Un **épisode sécurité non planifié** (faille héritée de 2.4, révélée en
+cours de Task 4, close en Task 4bis) est documenté séparément ci-dessous.
+
+### Scellement structurel du consentement annuaire (D1-D3)
+
+**Ce que c'est — lire avant tout.** `ConsentSignaturePort`
+(`src/annuaire/consent-signature.port.ts`, 5ᵉ instance du motif port du
+projet, réplique exacte du gabarit CDV 3.1/Annuaire 2.4/Flux10 2.3/Archive
+2.2) scelle la preuve de consentement déclarée par le client à la
+publication d'une ligne d'annuaire (`POST /annuaire/lignes`) : intégrité
+**SHA-256** de la forme canonique de la preuve, **horodatage** (`sealedAt`,
+`AAAAMMJJHHMMSS` UTC) et **écriture write-once**
+(`LocalFilesystemConsentStore`, `flag: 'wx'` + `chmod 0o444`). `verify(sealRef)`
+relit le fichier et recalcule le SHA-256 : une altération du contenu scellé
+est détectée (`ConsentSignatureRejectedError`), une clé inconnue aussi
+(`ConsentSealNotFoundError`).
+
+**⚠️ Ce que ce n'est PAS.** **Aucune vérification cryptographique de
+signature. Aucune valeur probante. Aucune signature électronique qualifiée
+eIDAS.** Le driver `local` scelle une preuve **déclarée** — il n'authentifie
+ni le signataire, ni le contenu métier de la preuve, ni son origine. Les
+**fournisseurs eIDAS réels** (signature qualifiée) sont des **drivers
+différés** : `CONSENT_DRIVER=eidas` lève une erreur explicite et testée tant
+qu'aucun adaptateur n'est fourni (`ConsentSignatureModule`, motif
+`AnnuaireTransportModule`/`CdvTransmissionModule`) — **item Xavier**,
+activation au déploiement.
+
+**Point d'insertion — à la CRÉATION du consentement (D3).** Le scellement
+s'insère dans l'**unique** frontière client→DB déjà identifiée par le
+projet : la branche `proof` de `resolveConsent`, appelée par
+`AnnuairePublicationService.publishLigne` **avant** `insertConsent`. Les
+chemins `consentId` (référence à un consentement déjà persisté) et
+l'auto-découverte n'apportent **aucune** preuve fraîche — rien à sceller,
+seules la couverture (`coversTarget`) et la non-révocation
+(`revokedAt IS NULL`) sont vérifiées, **inchangé**. Une preuve non scellable
+(driver eIDAS différé sélectionné, ou intégrité rejetée) fait échouer la
+publication — `ConsentSignatureError`, mappée au **même 422** que
+`ConsentRequiredError` (`AnnuaireController.mapPublicationError`), la ligne
+d'annuaire n'est **pas** créée.
+
+**`evidence_ref` = sceau, pas la preuve brute.** La colonne
+`annuaire_consents.evidence_ref` (déjà `notNull`, placeholder non lu par
+aucune logique avant 3.5) est **repurposée** en pointeur vers le sceau
+(`sealRef`, SHA-256 vérifiable) — **aucune nouvelle colonne ni migration de
+schéma**. L'`evidenceRef` client d'origine n'est pas perdu : il fait partie
+de la forme canonique scellée (WORM), relisible via `verify`.
+
+**Idempotence du scellement (revue T1 → correctif BLOQUANT F1, fixé).**
+`sealRef = sha256(forme canonique de la PREUVE MÉTIER SEULE)` — `sealedAt`
+**n'entre PAS** dans ce hash. Rejouer la même preuve (ex. republication après
+nettoyage annuaire) produit le **même** `sealRef`, y compris à horloge
+différente : `seal()` retombe sur la clé write-once existante et renvoie le
+`sealedAt` du **premier** scellement (fait constaté, jamais recalculé). Sans
+cette séparation, deux scellements de la même preuve à des secondes
+différentes auraient produit deux sceaux distincts — aucune déduplication
+possible.
+
+**Observation consciente — `sealedAt` hors enveloppe d'intégrité (revue T1,
+documentée volontairement).** `sealedAt` est une **métadonnée
+opérationnelle** écrite à côté du contenu scellé, mais **hors** de ce qui est
+vérifié par `verify()` : une altération du seul `sealedAt` (sans toucher la
+preuve canonique) ne serait pas détectée. Arbitrage assumé : `obtainedAt`
+(l'horodatage juridiquement signifiant, déclaré par le client) **est**, lui,
+dans l'enveloppe scellée ; `sealedAt` (l'instant technique de scellement côté
+plateforme) ne l'est pas, protégé seulement par l'immuabilité WORM
+(`chmod 0o444`) — pas par le hash. Réévaluable si un besoin futur l'exige.
+
+**Stock legacy — consentements pré-3.5 NON scellés (L2, honnêteté).** Les
+consentements créés **avant** ce plan portent un `evidence_ref` **libre**,
+jamais scellé (l'ancien comportement — écriture verbatim de la chaîne
+client, sans vérification). **Aucune migration rétroactive** ne les scelle :
+un `evidence_ref` non-hash-vérifiable dans le stock existant est **normal**,
+pas une anomalie. Seuls les consentements créés **depuis** 3.5 portent un
+sceau vérifiable.
+
+### Rôle `factelec_worker` de moindre privilège (D4/D5)
+
+Le rôle applicatif `factelec_app` était jusqu'ici **partagé** par le process
+API et le process worker (§ Rôles Postgres) — un accès offert au worker
+(génération, sweeps) était donc aussi offert à la surface HTTP, et
+réciproquement. 3.5 introduit **`factelec_worker`**, un rôle Postgres dédié
+de moindre privilège, **dérivé de l'inventaire RÉEL** des accès effectivement
+exercés par le worker (5 processors + sweeps câblés dans `WorkerModule`,
+`worker-main.ts:10`) — **aucun** grant par anticipation, **aucune**
+table/colonne/policy nouvelle.
+
+**Grants — migration `0029_worker_role_grants.sql` (hand-written, motif
+`0001`/`0019`, PAS dérivée du schéma) :**
+
+| Table | Grants worker | Jamais |
+| --- | --- | --- |
+| `invoices` | `SELECT`, `UPDATE` | `INSERT`, `DELETE` |
+| `invoice_formats` | `SELECT`, `INSERT`, `DELETE` | — |
+| `invoice_status_events` | `SELECT` seul | `INSERT` (le trigger de scellement ne s'exécute jamais côté worker) |
+| `invoice_dead_letters` | `INSERT` seul | — |
+| `ereporting_declarants` | `SELECT` seul | — |
+| `ereporting_transmissions` | `SELECT`, `INSERT`, `UPDATE` | — |
+| `ereporting_status_events` | `INSERT` seul | — |
+| `annuaire_lignes` | `SELECT`, `UPDATE` | `INSERT` |
+| `annuaire_ligne_events` | `INSERT` seul | — |
+| `annuaire_directory_entries` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | — |
+| `cdv_transmissions` | `SELECT`, `INSERT`, `UPDATE` | — |
+| `cdv_transmission_events` | `INSERT` seul | — |
+| `payments`, `payment_subtotals` | `SELECT` seul | — |
+| `tenants`, `api_keys`, `users`, `platform_admins`, `sessions`, `annuaire_consents` | **AUCUN** | tout |
+
+Plus `EXECUTE` sur les **9 seules** fonctions `SECURITY DEFINER` réellement
+appelées par le worker (`find_stuck_generation_invoices`,
+`purge_expired_sessions`, `find_failed_archives`,
+`find_ereporting_declarants_due`, `find_annuaire_sync_targets`,
+`find_stale_annuaire_drafts`, `find_cdv_transmissions_due`,
+`find_parked_cdv_transmissions`, `find_pending_routing_invoices`) — **jamais**
+les 8 SD auth/session/admin (`authenticate_api_key` compris : refus `42501`
+prouvé en e2e), **jamais** `find_stuck_received_invoices` (superseded).
+
+**RLS active sous le nouveau rôle — sans policy nouvelle.** Toutes les
+policies RLS du projet sont créées **sans clause `TO`** (donc implicitement
+`TO PUBLIC`) — elles s'appliquent automatiquement à `factelec_worker`, qui
+est `NOBYPASSRLS` (comme `factelec_app`) et donc soumis à
+`FORCE ROW LEVEL SECURITY`. **Preuve empirique, pas seulement documentaire** :
+un négatif cross-tenant dédié tourne sous `factelec_worker` (revue T3, NIT-1)
+— l'isolation RLS **du rôle** est démontrée, pas seulement héritée par
+construction.
+
+**Split pool/env (D5).** `DbModule.forRoot('DATABASE_URL' | 'DATABASE_URL_WORKER')`
+sélectionne la clé env **à la construction du module** — l'API
+(`AppModule`/`main.ts`) et le worker (`WorkerModule`/`worker-main.ts`)
+démarrent chacun leur **propre** arbre Nest, jamais les deux dans le même
+process, donc jamais de conflit. `DATABASE_URL_WORKER` est **optionnelle** au
+schéma zod (`env.ts`) — l'API n'en a pas besoin — mais `WorkerModule`
+l'importe **inconditionnellement** : le worker throw explicitement si elle
+est absente à son bootstrap.
+
+**⚠️ `factelec_app` conserve tous ses grants historiques (honnêteté).** La
+migration `0029` n'effectue **aucun** `REVOKE` sur `factelec_app` — elle
+n'ajoute que des `GRANT` sur le nouveau rôle worker. Concrètement,
+`factelec_app` garde aujourd'hui `EXECUTE` sur les 9 fonctions `SECURITY
+DEFINER` cross-tenant ci-dessus, alors même que le worker (le seul appelant
+réel) ne s'exécute plus sous ce rôle depuis cette version. La séparation des
+privilèges **bénéficie au worker** (surface d'attaque du process worker
+réduite à l'inventaire réel) ; elle **ne réduit pas encore** celle de
+`factelec_app` — un `REVOKE` de suivi sur `factelec_app` serait un
+durcissement supplémentaire légitime, non fait ici (hors périmètre D8 : une
+seule migration, grants additifs seuls).
+
+**Provisioning — ordre requis, item Xavier.** Le rôle `factelec_worker` est
+créé par `scripts/db-init/00-roles.sql` en dev/test (et inline par le
+harnais e2e, `tests/e2e/helpers/postgres.ts`, **avant** `migrate()` —
+amendement B1 de la revue du plan : sans cette création préalable, la
+migration `0029` échouerait dans **chaque** e2e, la migration ne faisant que
+des `GRANT` sur un rôle supposé exister). **En production, ce rôle n'existe
+pas par défaut** : avant de déployer cette version, il faut provisionner
+`factelec_worker` (création du rôle + secret + `DATABASE_URL_WORKER`),
+**exactement comme `factelec_app`** l'a été au déploiement initial — sinon
+(a) la migration `0029` échoue à l'application, **et** (b) le process
+worker refuse de démarrer (`DATABASE_URL_WORKER requis pour le process
+worker`). **Runbook : créer le rôle `factelec_worker` AVANT d'appliquer la
+migration `0029`.** Le **déploiement effectif** (bascule confirmée du
+process worker, rotation du secret) reste un **item Xavier**, non livré par
+ce plan.
+
+### Re-résolution manuelle d'un routage `ambiguous` (D6)
+
+`POST /invoices/:id/routing/resolve` (dual-auth, `TenantAuthGuard` +
+`RolesGuard` + `CsrfGuard`, `@Roles('owner','admin','accountant')` — **triple
+verbatim**, motif exact `PaymentsController.capture`/
+`EreportingController.retransmit`) solde la limite F-2/3.4 (§ Runbook
+opérationnel — E-reporting) : jusqu'ici, un routage `ambiguous` (annuaire
+portant plusieurs plateformes candidates pour la même maille) n'avait
+**aucune** voie de sortie automatique après nettoyage humain de l'annuaire.
+
+**Logique (`InvoicesService.resolveRouting`) :** (1) `:id` invalide ou
+facture inconnue/hors tenant → **404 byte-identique** ; (2)
+`routing_status !== 'ambiguous'` → **409** (« Routing not in ambiguous state »
+— n'admet **que** l'état `ambiguous`, `pending`/`unaddressable` restent
+couverts par le sweep automatique 3.4) ; (3) réutilisation **verbatim** de
+`RecipientRoutingService.resolveAndRecord` (même fonction que le worker de
+génération 3.3 et le sweep 3.4 — aucune logique de résolution dupliquée) ;
+(4) relecture de l'état et retour **synchrone, `200`** — divergence assumée
+du `202` de `retransmit` : c'est un appel **direct** (une lecture annuaire +
+un `UPDATE`), sans file, jamais un job lourd enfilé.
+
+**⚠️ Honnêteté (L1, amendement BINDING revue du plan) — lire avant
+d'exploiter.** `resolveAndRecord` est **best-effort strict**, il ne relève
+**jamais**. L'endpoint rapporte donc l'état **obtenu**, pas une garantie de
+succès : un `200` dont le corps reste `routingStatus: 'ambiguous'` est
+**indistinguable** entre (a) l'annuaire n'a **pas** (suffisamment) été
+nettoyé, et (b) une panne opérationnelle **pendant** la re-résolution
+(annuaire/DB transitoirement indisponible). **Procédure recommandée** en cas
+de `ambiguous` persistant après appel : re-vérifier le nettoyage annuaire,
+**re-tenter** l'appel (idempotent), ou consulter les logs applicatifs pour
+distinguer les deux cas — aucune télémétrie dédiée ne les distingue
+aujourd'hui.
+
+**Procédure de sortie d'`ambiguous`** (remplace le F-2 du runbook 3.4) : (1)
+nettoyer l'annuaire — masquer/republier la ligne en trop, lever l'ambiguïté
+structurelle ; (2) appeler `POST /invoices/:id/routing/resolve` ; (3) lire
+l'état retourné : `resolved` = nettoyage effectif, `ambiguous` = relire §
+honnêteté L1 ci-dessus, `unaddressable`/`pending` = repris automatiquement
+par le sweep 3.4 dès le prochain cycle.
+
+### ÉPISODE SÉCURITÉ — faille annuaire héritée de 2.4, close en Task 4bis (lecture obligatoire)
+
+**Découverte, pas fabrication.** L'amendement M1 de la revue du plan
+(extension du verrou d'architecture à la **composition** des guards, voir §
+Verrou d'architecture — composition dual-auth ci-dessous) a révélé, **avant
+même sa propre livraison**, que les 3 mutations d'`AnnuaireController`
+(`POST lignes` / `PUT lignes/:id` / `DELETE lignes/:id`, héritées de 2.4
+Tasks 7/8) composaient **`TenantAuthGuard` SEUL** — sans `RolesGuard` ni
+`CsrfGuard`. Concrètement : **une session utilisateur de N'IMPORTE QUEL
+rôle, `viewer` inclus, pouvait publier/modifier/masquer une ligne d'annuaire
+sans jeton CSRF**, aucun garde CSRF global n'existant par ailleurs (vérifié
+`main.ts`/`app.module.ts`). Faille **pré-existante depuis 2.4**, pas
+introduite par ce plan — révélée par l'extension du verrou, pas créée par
+elle.
+
+**Fermée par Task 4bis, TDD RED prouvé.** Les 3 routes composent désormais
+le **même triple** que toutes les autres mutations dual-auth du projet :
+`@UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)` +
+`@Roles('owner', 'admin', 'accountant')`. La preuve RED est **exemplaire** :
+les 6 e2e négatifs (viewer authentifié, et owner/admin/accountant **sans**
+jeton CSRF, sur les 3 routes) ont **réellement exécuté** les mutations
+**avant** le correctif (la faille était démontrée, pas supposée) — **403**
+après. Le verrou d'architecture étendu passe désormais **sans aucune
+exclusion** (liste `KNOWN_PRE_EXISTING_GAPS` vidée).
+
+**Aucun appelant existant affecté.** Tous les appels de production/tests aux
+mutations annuaire transitaient par **clé API** — la faille n'était
+exploitable **qu'en session utilisateur**, un vecteur non exercé par les
+intégrations existantes.
+
+**Ce qui change pour un intégrateur.** `POST/PUT/DELETE /annuaire/lignes*`
+restent **dual-auth** (clé API **ou** session) — une clé API continue de
+fonctionner sans changement. Une session utilisateur doit désormais fournir
+un rôle `owner`/`admin`/`accountant` (un `viewer` est **refusé, 403**) **et**
+un jeton CSRF valide (`X-CSRF-Token`) — auparavant accepté sans l'un ni
+l'autre.
+
+### Verrou d'architecture — composition dual-auth (M1) : un second RALENTISSEUR, pas une barrière
+
+`apps/api/tests/unit/dual-auth-composition.arch.test.ts` (fichier **frère**
+d'`apikeyid-setters.arch.test.ts`, même famille de motif) asserte que
+**toute** route de mutation (`@Post`/`@Put`/`@Delete`) composant
+`TenantAuthGuard` compose **aussi** `RolesGuard` **et** `CsrfGuard`,
+`TenantAuthGuard` **en tête** — le résidu qu'`apikeyid-setters.arch.test.ts`
+(§ ci-dessus) ne couvre pas : celui-ci verrouille le **footgun `apiKeyId`**
+(bypass illégitime), pas l'**omission pure et simple** d'un guard entier.
+
+**⚠️ Honnêteté (même motif M3 que le verrou apiKeyId, NIT-1 revue T4).** Scan
+**textuel** du bloc de décorateurs immédiatement au-dessus de chaque méthode
+de contrôleur (un seul `@UseGuards(...)` par méthode, formes réelles et
+actuelles du projet) — **contournable** par un guard posé autrement (garde
+composée custom, `APP_GUARD` global, `@UseGuards` reconstruit dynamiquement,
+guards de classe combinés à des guards de méthode — cf.
+`api-keys.controller.ts`, hors scope car il ne compose jamais
+`TenantAuthGuard`). Ce test ne prétend détecter **que** le motif
+`@UseGuards(...)` réel du projet, pas une preuve d'impossibilité
+structurelle — un **tripwire** immédiat sur régression textuelle, pas un
+verrou d'exécution.
+
+**Preuve indépendante (revue groupée T4+T4bis, Opus).** Grep indépendant du
+relecteur = **6** mutations `TenantAuthGuard` toutes conformes, **0** faux
+positif ; snapshot figé des 6 routes qualifiantes (3 annuaire + `retransmit`
++ `resolveRouting` + `capture`) — toute route future ajoutée ou modifiée sans
+les 3 guards casse le test **immédiatement**.
+
+### Différés 3.6+ (D9)
+
+- **Fournisseurs eIDAS réels** (`CONSENT_DRIVER=eidas`) — item Xavier, throw
+  testé tant que non fourni.
+- **Déploiement du rôle worker** — provisioning prod de `factelec_worker`
+  (secret + `DATABASE_URL_WORKER`), puis un `REVOKE` de suivi sur
+  `factelec_app` (§ ci-dessus, honnêteté) — item Xavier.
+- **Révocation de consentement** (endpoint/service) — la colonne
+  `revoked_at` existe et est respectée à la lecture (héritée 2.4), aucune
+  écriture applicative n'est exposée.
+- **Garde composé `DualAuthMutationGuard`** — refusé **à nouveau** ce plan
+  (D7, ratifié en **voie médiane** par l'amendement M1 ci-dessus) : le
+  résidu **grave** que ce garde composé aurait pu prévenir (omission pure
+  d'un guard, pas seulement le footgun `apiKeyId`) est désormais couvert par
+  le second verrou d'architecture (§ ci-dessus). Le seuil « 4ᵉ+ route »
+  évoqué en 3.3/3.4 est **largement dépassé** (6 routes qualifiantes
+  aujourd'hui : 3 mutations annuaire + `retransmit` + `resolveRouting` +
+  `capture`) sans que la répétition du triple manuel se soit révélée
+  coûteuse en pratique — réexaminable si elle le devenait.
+- **Transition `emise`/transport réel**, **backoff persistant du sweep
+  routage**, **`POST /annuaire/codes-routage` autonome** — inchangés depuis
+  3.3/3.4, voir §§ correspondantes.
+
 ## Sécurité / multi-tenant
 
 Cette section documente les mécanismes de sécurité destinés à figurer au
@@ -2224,23 +2558,45 @@ dossier d'immatriculation DGFiP (PA/PDP).
 
 ### Rôles Postgres
 
-Deux rôles, jamais confondus :
+**Trois rôles depuis 3.5** (deux jusqu'en 3.4), jamais confondus :
 
 - **`factelec_owner`** — `BYPASSRLS`, `CREATEDB`. Utilisé **uniquement** par
   les migrations (`pnpm db:migrate`) et le provisioning CLI
   (`pnpm provision:tenant`). Propriétaire du schéma `public` et de la
   fonction `authenticate_api_key`. **Jamais utilisé par le process API.**
 - **`factelec_app`** — `NOSUPERUSER NOBYPASSRLS NOCREATEDB`. Rôle applicatif
-  (runtime), seul rôle dont dispose `DATABASE_URL` — **y compris pour le
-  worker** (`src/worker-main.ts`, 2.1), qui partage exactement le même rôle
-  et les mêmes politiques RLS que le process API (aucun privilège
-  supplémentaire). N'a que `USAGE` sur le schéma, `SELECT/INSERT/UPDATE` sur
-  les tables `tenants`/`api_keys`/`invoices`/`invoice_formats`, `SELECT/
-  INSERT` **uniquement** (jamais `UPDATE`/`DELETE`) sur `invoice_status_events`
+  du process **API**, seul rôle dont dispose `DATABASE_URL`. N'a que `USAGE`
+  sur le schéma, `SELECT/INSERT/UPDATE` sur les tables
+  `tenants`/`api_keys`/`invoices`/`invoice_formats`, `SELECT/INSERT`
+  **uniquement** (jamais `UPDATE`/`DELETE`) sur `invoice_status_events`
   (append-only, 2.1 — cf. § Cycle de vie CDV), et `EXECUTE` sur
   `authenticate_api_key`/`purge_expired_sessions` — jamais `BYPASSRLS`. (Les
   tables `users`/`sessions`/`platform_admins`, introduites en 1.4, ont leurs
-  propres politiques RLS documentées dans `docs/superpowers/`.)
+  propres politiques RLS documentées dans `docs/superpowers/`.) **Jusqu'en
+  3.4**, ce rôle était **aussi** celui du process worker (`src/worker-main.ts`,
+  2.1, partagé, aucun privilège différencié). ⚠️ **`factelec_app` conserve
+  aujourd'hui la totalité de ses grants historiques**, y compris `EXECUTE`
+  sur les fonctions `SECURITY DEFINER` cross-tenant listées § Différé
+  explicitement ci-dessous — la migration `0029` (3.5) n'effectue **aucun**
+  `REVOKE` sur ce rôle, seulement des `GRANT` sur le nouveau rôle worker
+  ci-dessous (honnêteté : la séparation des privilèges bénéficie au worker,
+  pas encore à `factelec_app`).
+- **`factelec_worker`** (3.5, D4/D5) — `NOSUPERUSER NOBYPASSRLS NOCREATEDB`,
+  comme `factelec_app`. Rôle applicatif **dédié** du process **worker**
+  (`WorkerModule` importe désormais inconditionnellement
+  `DbModule.forRoot('DATABASE_URL_WORKER')`) — grants de **moindre
+  privilège**, dérivés de l'inventaire **réel** des accès exercés par les 5
+  processors + sweeps du worker (migration `0029_worker_role_grants.sql`,
+  détail table par table en § Consentement scellé, rôle worker &
+  re-résolution ambiguous — 3.5 ci-dessous). **AUCUN** accès à
+  `tenants`/`api_keys`/`users`/`platform_admins`/`sessions`/
+  `annuaire_consents`, **AUCUN** `INSERT` sur `invoices`/`annuaire_lignes`,
+  **AUCUNE** des 8 fonctions `SECURITY DEFINER` auth/session/admin — soumis à
+  la RLS `FORCE` comme `factelec_app` (policies existantes créées **sans**
+  clause `TO`, donc `TO PUBLIC` : aucune policy nouvelle n'a été nécessaire).
+  ⚠️ **Doit exister avant tout déploiement de cette version** : le worker
+  throw explicitement au bootstrap si `DATABASE_URL_WORKER` est absente —
+  provisioning prod (création du rôle + secret) = **item Xavier**.
 
 ### Row-Level Security : `ENABLE` + `FORCE`
 
@@ -2347,7 +2703,8 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `NODE_ENV` | `development` \| `test` \| `production` | `development` |
 | `PORT` | Port d'écoute HTTP | `3000` |
 | `LOG_LEVEL` | Niveau pino (`fatal`…`silent`) | `info` |
-| `DATABASE_URL` | URL Postgres du rôle **applicatif** (`factelec_app`, soumis à la RLS) | — (requis) |
+| `DATABASE_URL` | URL Postgres du rôle **applicatif API** (`factelec_app`, soumis à la RLS) | — (requis) |
+| `DATABASE_URL_WORKER` | URL Postgres du rôle **applicatif worker** (`factelec_worker`, moindre privilège, 3.5) — **requise au bootstrap du process worker uniquement** (`WorkerModule`, throw explicite si absente) ; non lue par le process API | — (requis pour `pnpm start:worker`/`worker:dev`) |
 | `DATABASE_OWNER_URL` | URL Postgres du rôle **owner** (`factelec_owner`, `BYPASSRLS`) | — (requis par les scripts uniquement) |
 | `CORS_ALLOWED_ORIGINS` | Liste d'origines autorisées, séparées par virgule | `''` (aucune) |
 | `RATE_LIMIT_TTL` | Fenêtre du rate limit (secondes) | `60` |
@@ -2392,6 +2749,8 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `CDV_TRANSMISSION_JOB_ATTEMPTS` | Tentatives max d'un job de transmission CDV avant `failed` — distingue une erreur **opérationnelle** (port transitoire) d'un rejet fonctionnel (601 / F6 invalide, qui ne throw jamais et n'est donc jamais rejoué) | `3` |
 | `CDV_STUCK_RETRY_EVERY_MS` | Périodicité (ms) de la reprise des transmissions CDV `parked` (`CdvStuckRetryService`) | `300000` (5 min) |
 | `CDV_PA_MATRICULE` | Matricule ICD 0238 du PA émetteur du F6 (`senderMatricule`) — **item Xavier au déploiement** | `'0000'` (placeholder dev/test) |
+| `CONSENT_DRIVER` | Fournisseur de scellement de la preuve de consentement annuaire (3.5) : `local` (`LocalFilesystemConsentStore`, scellement **structurel** testable) \| `eidas` (fournisseur de signature qualifiée réel, **activé au déploiement**, lève une erreur explicite tant que non fourni) | `local` |
+| `CONSENT_LOCAL_DIR` | Répertoire local du driver `local` | `./var/consent` |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -2451,6 +2810,7 @@ README racine.
 | `GET /invoices/:id/status` | Statut CDV courant + historique complet (journal `invoice_status_events`) | 200, 401, 404 |
 | `GET /invoices/:id/ledger` | Journal scellé de la facture + vérifications d'intégrité (`integrity` self-check, `chainIntegrity` chaîne complète du tenant) | 200, 401, 404 |
 | `GET /invoices/:id/paf` | Piste d'Audit Fiable (`?format=json` défaut \| `?format=csv`, `Content-Disposition: attachment` en CSV) — conception projet, non normalisée DGFiP | 200, 401, 404 |
+| `POST /invoices/:id/routing/resolve` | Re-résolution manuelle d'un routage `ambiguous` (dual-auth, 3.5, § Consentement scellé / re-résolution ambiguous) — `ambiguous`-only, 200 synchrone, honnêteté L1 (un 200 encore `ambiguous` ne distingue pas annuaire non nettoyé / panne opérationnelle) | 200, 401, 403, 404, 409 |
 | `POST /auth/signup` | Inscription self-service : crée le tenant **et** l'utilisateur `owner` de façon atomique (fonction `SECURITY DEFINER` `signup_tenant`), ouvre une session | 201, 409, 422 |
 | `POST /auth/login` | Authentification utilisateur (email + mot de passe Argon2id), ouvre une session | 200, 401, 422 |
 | `POST /auth/logout` | Révoque la session courante (cookie `factelec_session`) | 204, 401 |
@@ -2468,9 +2828,9 @@ README racine.
 | `GET /annuaire/lignes` | Recherche dans le miroir de consultation (Flux 14) du tenant, filtrée par SIREN | 200, 401 |
 | `GET /annuaire/codes-routage?siren=` | Énumération de gestion des codes-routage **publiés par le tenant** (`annuaire_lignes`, tous statuts, 3.3 D6) — tableau vide si aucun (pas 404) ; POST autonome refusé (composant de maille, créé via `POST /annuaire/lignes`) | 200, 401, 422 |
 | `GET /annuaire/resolution` | Résolution du matricule de plateforme destinataire pour une maille à une date donnée (`?siren&siret?&routageId?&suffixe?&date`) — 404 anti-fuite (inconnu/hors période/hors tenant), 409 si résolution ambiguë | 200, 401, 404, 409 |
-| `POST /annuaire/lignes` | Publication d'une ligne d'adressage (D/M) — gate consentement (422), F13 XSD-validé et transmis via le port ; succès partiel au grain ligne (201 même si le statut interne devient `rejetee`) | 201, 401, 422 |
-| `PUT /annuaire/lignes/:id` | Fin d'effet : positionne `dateFin` sur une ligne existante du tenant | 200, 401, 404, 409, 422 |
-| `DELETE /annuaire/lignes/:id` | Masquage d'une ligne déposée (`deposee → masked`) | 204, 401, 404, 409 |
+| `POST /annuaire/lignes` | Publication d'une ligne d'adressage (D/M) — dual-auth **+ rôles owner/admin/accountant + CSRF en session** (3.5, Task 4bis), gate consentement **scellé** (422, § Consentement scellé), F13 XSD-validé et transmis via le port ; succès partiel au grain ligne (201 même si le statut interne devient `rejetee`) | 201, 401, 403, 422 |
+| `PUT /annuaire/lignes/:id` | Fin d'effet : positionne `dateFin` sur une ligne existante du tenant — dual-auth **+ rôles owner/admin/accountant + CSRF en session** (3.5, Task 4bis) | 200, 401, 403, 404, 409, 422 |
+| `DELETE /annuaire/lignes/:id` | Masquage d'une ligne déposée (`deposee → masked`) — dual-auth **+ rôles owner/admin/accountant + CSRF en session** (3.5, Task 4bis) | 204, 401, 403, 404, 409 |
 | `GET /cdv/transmissions?invoiceId=…` | Liste des transmissions CDV (Flux 6) d'une facture (résumés — **sans** le XML), `dgfipCode`/`statusLabel` dérivés | 200, 401 |
 | `GET /cdv/transmissions/:id/xml` | XML `text/xml` de la transmission (absent si `parked`) — 404 anti-fuite (inconnue ou d'un autre tenant) | 200, 401, 404 |
 | `GET /cdv/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
@@ -2498,14 +2858,19 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   `Authorization: Bearer` présent est **toujours** résolu en priorité (même
   invalide) : un client machine ne retombe jamais silencieusement sur un
   cookie de session qui traînerait dans la même requête.
-- **`/annuaire/*`** (consultation **et** publication/fin d'effet/masquage,
-  Task 7/8 plan 2.4) est **entièrement dual-auth** (`TenantAuthGuard`), y
-  compris les mutations `POST`/`PUT`/`DELETE` — contrairement à
-  `POST /invoices/:id/status` ci-dessous, une clé API machine peut donc
-  publier/masquer une ligne d'annuaire au même titre qu'une session
-  utilisateur : ce domaine ne porte **aucune** garde CSRF, la publication
-  annuaire n'étant pas modélisée comme une mutation pilotée exclusivement
-  depuis le dashboard.
+- **`/annuaire/*`** — la **consultation** (`GET`) reste dual-auth simple
+  (`TenantAuthGuard` seul). Les **mutations** `POST /annuaire/lignes`,
+  `PUT /annuaire/lignes/:id`, `DELETE /annuaire/lignes/:id` (Task 7/8 plan
+  2.4) restent **dual-auth** (clé API **ou** session, une clé API machine
+  publie/modifie/masque sans changement) mais composent **désormais**
+  `RolesGuard`/`CsrfGuard` en plus — même motif que `POST /payments`/
+  `POST /ereporting/retransmissions` ci-dessous : bypass sur `req.apiKeyId`
+  (clé API), rôle `owner`/`admin`/`accountant` **et** CSRF **exigés en
+  session**. ⚠️ **Ce n'était PAS le cas avant Task 4bis (plan 3.5)** : ces 3
+  routes composaient `TenantAuthGuard` **seul**, une faille **héritée de
+  2.4** (une session de n'importe quel rôle, `viewer` inclus, pouvait muter
+  l'annuaire sans jeton CSRF) — voir § ÉPISODE SÉCURITÉ ci-dessous pour le
+  détail complet, la preuve RED et le correctif.
 - **`POST /invoices/:id/status`** (transition CDV) est une **mutation
   métier** : exclusivement session **owner/admin/accountant** + CSRF
   (`SessionGuard`/`RolesGuard`/`CsrfGuard`) — un `viewer` est refusé (403),
@@ -2548,6 +2913,12 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   `PROVISION_ADMIN_PASSWORD`, ou saisi de façon interactive sur stdin si la
   variable est absente. Un email déjà provisionné (23505) renvoie un message
   d'erreur clair, sans stack trace.
+- **Rôle `factelec_worker`** (3.5) : créé par `scripts/db-init/00-roles.sql`
+  en dev/test — **en production, à provisionner manuellement AVANT
+  d'appliquer la migration `0029`** (création du rôle + secret +
+  `DATABASE_URL_WORKER`), au même titre que `factelec_app` au déploiement
+  initial. Aucun script de provisioning dédié fourni (item Xavier). Voir §
+  Consentement scellé, rôle worker & re-résolution ambiguous — 3.5.
 
 ## Tests
 
@@ -2693,12 +3064,35 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   cross-tenant. **Filtre de liste** — filtre + exposition, **pagination
   cohérente avec filtre actif** (keyset intact, aucun saut/doublon),
   `routingStatus` invalide → 422, comportement inchangé sans filtre.
+- **Consentement scellé, rôle worker & re-résolution ambiguous** (plan 3.5) :
+  **scellement** — vecteur canonique **littéral** re-vérifié par un outil
+  tiers indépendant (`python3 hashlib`, pas seulement le code du projet) ;
+  paire d'injection frontière (deux preuves distinctes ne collisionnant
+  jamais) **et** absent-vs-vide (`siret`/`routageId`/`suffixe` non fournis vs
+  chaîne vide) réellement testées ; rejeu de la **même** preuve à horloge
+  **dérivante** → même `sealRef` **et** `sealedAt` du premier scellement
+  (l'horloge n'est jamais appelée sur un stat-hit) ; `ENOENT` mappé en erreur
+  typée au contrat `verify`. **Rôle worker** — matrice de grants vérifiée
+  **grant par grant** contre les migrations d'origine (14 tables + 9
+  fonctions `SECURITY DEFINER`) ; **suffisance** prouvée empiriquement (les
+  suites `heavy` tournent intégralement sous `factelec_worker`, refus
+  `42501` sur `authenticate_api_key` et sur les tables hors inventaire) ;
+  négatif RLS cross-tenant **sous le rôle worker** (isolation active, pas
+  seulement héritée). **Re-résolution ambiguous** — les 4 branches de
+  `resolveRouting` (404 UUID invalide, 404 inconnue/cross-tenant, 409
+  non-`ambiguous`, 200 `resolveAndRecord` verbatim) ; e2e bout-en-bout sans
+  worker (suite `light`). **Épisode sécurité (Task 4bis)** — les 6 e2e
+  négatifs annuaire (viewer + CSRF manquant ×3 rôles, sur les 3 routes) ont
+  **réellement exécuté** les mutations avant correctif (faille démontrée,
+  pas supposée), `403` après ; verrou d'architecture composition dual-auth
+  (`dual-auth-composition.arch.test.ts`) passant **sans exclusion**, grep
+  indépendant du relecteur = 6/6 routes conformes.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`, seuils fusionnés sur l'agrégat des projets `heavy` +
   `light`, § Durcissements transverses), exclusions limitées au bootstrap et
   au câblage DI pur (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`).
-  État actuel : 153 fichiers, **1097 tests**, couverture
-  **97.88 / 94.39 / 95.57 / 98.19 %** (statements/branches/functions/lines).
+  État actuel : 163 fichiers, **1155 tests**, couverture
+  **97.88 / 94.37 / 95.72 / 98.17 %** (statements/branches/functions/lines).
 
 ```sh
 pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docker requis)
@@ -2911,24 +3305,47 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   d'un RE reste une **interprétation projet flaggée, à valider en pilote
   PPF** — l'extraction primaire est silencieuse sur ce cas précis. Voir §§
   Chemin RE / Runbook — Deadlock du slot A2 ci-dessus.
-- **Garde composé `DualAuthMutationGuard` différé** (3.3, D9 — critère
-  déclencheur désormais atteint) — le verrou d'architecture apiKeyId
-  (`apikeyid-setters.arch.test.ts`) est un **ralentisseur** (grep
-  multi-formes, contournable), pas la barrière d'exécution réelle
-  qu'offrirait un garde composé dédié ; différé malgré l'apparition d'une
-  **seconde** route dual-auth-mutation en 3.4 (`POST /ereporting/retransmissions`,
-  même motif que `POST /payments`) — deux sites à couvrir plutôt qu'un,
-  toujours pas de garde composé écrit.
-- **Worker-role split toujours différé (3.3, confirme la dette déjà
-  tracée)** — 3.3 n'introduit **aucune** nouvelle fonction `SECURITY
-  DEFINER` cross-tenant (migration 0026 = colonnes additives seules) ; la
-  séparation des privilèges du process worker reste l'unique remède
-  structurel aux dettes de rôle SD cross-tenant déjà documentées
-  (`find_ereporting_declarants_due` 2.3, `find_annuaire_sync_targets`/
-  `find_stale_annuaire_drafts` 2.4, `find_cdv_transmissions_due`/
-  `find_parked_cdv_transmissions` 3.1 ci-dessus).
+- **Garde composé `DualAuthMutationGuard` — REFUSÉ à nouveau (3.5, D7 amendé
+  en voie médiane par M1)** — le seuil « 4ᵉ+ route » évoqué en 3.3/3.4 est
+  désormais **largement dépassé** (6 routes qualifiantes : 3 mutations
+  annuaire + `retransmit` + `resolveRouting` + `capture`, § Consentement
+  scellé, rôle worker & re-résolution ambiguous — 3.5). Le refus reste
+  **ratifié**, mais le résidu **grave** que ce garde composé aurait pu
+  prévenir (omission pure d'un guard entier, pas seulement le footgun
+  `apiKeyId`) est désormais couvert par un **second** verrou d'architecture
+  (`dual-auth-composition.arch.test.ts`, § Verrou d'architecture —
+  composition dual-auth ci-dessus) — lui-même un **ralentisseur** (scan
+  textuel mono-ligne `@UseGuards`), pas une barrière d'exécution.
+- **Worker-role split — RÉSOLU CÔTÉ CODE en 3.5, déploiement différé** —
+  `factelec_worker` existe (grants dérivés de l'inventaire réel, § ci-dessus)
+  et le worker s'exécute **exclusivement** sous ce rôle depuis cette version
+  (`WorkerModule`/`DATABASE_URL_WORKER`, plus de partage `factelec_app`).
+  ⚠️ **Reste ouvert** : (a) le provisioning prod du rôle (secret +
+  `DATABASE_URL_WORKER`) — **item Xavier**, bloquant au déploiement (le
+  worker refuse de démarrer sans) ; (b) `factelec_app` conserve **tous** ses
+  grants historiques, y compris `EXECUTE` sur les fonctions `SECURITY
+  DEFINER` cross-tenant (`find_ereporting_declarants_due` 2.3,
+  `find_annuaire_sync_targets`/`find_stale_annuaire_drafts` 2.4,
+  `find_cdv_transmissions_due`/`find_parked_cdv_transmissions` 3.1,
+  `find_pending_routing_invoices` 3.4) — la migration `0029` n'effectue
+  **aucun** `REVOKE` sur ce rôle ; un durcissement de suivi (`REVOKE` sur
+  `factelec_app` une fois la bascule prod confirmée) reste à faire.
+- **Résolu en 3.5** : scellement structurel du consentement annuaire
+  (`ConsentSignaturePort`, intégrité sha256 + horodatage + write-once WORM,
+  **aucune** signature qualifiée — fournisseurs eIDAS réels différés) ;
+  rôle Postgres `factelec_worker` de moindre privilège (grants dérivés de
+  l'inventaire réel, isolation RLS prouvée sous le rôle, déploiement
+  différé — voir ci-dessus) ; endpoint de re-résolution manuelle d'un
+  routage `ambiguous` (`POST /invoices/:id/routing/resolve`, solde F-2/3.4,
+  honnêteté L1 sur le `200` encore `ambiguous`). **Épisode sécurité non
+  planifié** : faille annuaire héritée de 2.4 (3 mutations sans
+  `RolesGuard`/`CsrfGuard`, exploitable en session de n'importe quel rôle)
+  révélée par l'extension M1 du verrou d'architecture, close par Task 4bis
+  (triple garde, preuve RED réelle). Voir § Consentement scellé, rôle
+  worker & re-résolution ambiguous — 3.5 ci-dessus pour le détail complet et
+  les différés.
 
-### Différé explicitement (hors périmètre 2.4/3.1/3.2/3.3/3.4)
+### Différé explicitement (hors périmètre 2.4/3.1/3.2/3.3/3.4/3.5)
 
 - **E-reporting DGFiP au-delà du 10.1/10.3/TB-3** (Flux 10, plans 2.3/3.2) :
   cadres de facturation mixtes M1/M2/M4 **non naturés** (au moins une ligne
@@ -3001,3 +3418,12 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
 - **Migration Factur-X D22B / 1.09** (héritée d'`invoice-core`, plan
   1.2bis) — différée dans l'attente d'un Schematron D22B publié par
   ConnectingEurope.
+- **Consentement, rôle worker & re-résolution au-delà du socle 3.5** :
+  fournisseurs eIDAS réels de signature qualifiée (`CONSENT_DRIVER=eidas`,
+  item Xavier, throw testé tant que non fourni), déploiement effectif du
+  rôle `factelec_worker` (provisioning prod + `REVOKE` de suivi sur
+  `factelec_app`, item Xavier), révocation de consentement (endpoint/service
+  — colonne `revoked_at` déjà respectée en lecture depuis 2.4), garde
+  composé `DualAuthMutationGuard` (**refusé à nouveau**, D7 amendé en voie
+  médiane par M1) — voir § Consentement scellé, rôle worker & re-résolution
+  ambiguous — 3.5 pour le détail de chaque point.

@@ -66,7 +66,7 @@ describe('ereporting sweep — jobId dedup empirique + un job par déclarant×p�
   })
 
   it('the scheduler registers the repeatable ereporting-sweep job scheduler (idempotent bootstrap)', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -85,7 +85,7 @@ describe('ereporting sweep — jobId dedup empirique + un job par déclarant×p�
   })
 
   it('a sweep enqueues exactly MAX_DUE_PERIODS ereporting-generation jobs PER cadence for the active declarant, none for the inactive one', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
@@ -144,7 +144,7 @@ describe('ereporting sweep — jobId dedup empirique + un job par déclarant×p�
   })
 
   it('a SECOND sweep does NOT duplicate jobs — BullMQ dedups by deterministic jobId (amendement A5, vérifié empiriquement)', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })

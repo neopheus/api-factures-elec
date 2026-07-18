@@ -88,11 +88,38 @@ function fakePort(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function build(repoOverrides = {}, portOverrides = {}) {
+// Scellement du consentement (D3, plan 3.5) : couvert en détail par
+// annuaire-publication.consent-seal.test.ts (ordre seal→insertConsent,
+// evidence_ref=sealRef, throw→insert jamais appelé, chemins
+// consentId/auto-découverte sans seal). Ici, un mock par défaut résolu
+// suffit — seule la branche `proof` ci-dessous en dépend.
+function fakeConsentSignature(overrides: Record<string, unknown> = {}) {
+  return {
+    seal: vi.fn().mockResolvedValue({
+      sealRef: 'b'.repeat(64),
+      location: '/var/consent/tenant-1/bbbb.seal',
+      sealedAt: '20260101000000',
+      alreadyExisted: false,
+    }),
+    verify: vi.fn(),
+    ...overrides,
+  }
+}
+
+function build(
+  repoOverrides = {},
+  portOverrides = {},
+  consentSignatureOverrides = {},
+) {
   const repo = fakeRepo(repoOverrides)
   const port = fakePort(portOverrides)
-  const service = new AnnuairePublicationService(repo as never, port as never)
-  return { service, repo, port }
+  const consentSignature = fakeConsentSignature(consentSignatureOverrides)
+  const service = new AnnuairePublicationService(
+    repo as never,
+    port as never,
+    consentSignature as never,
+  )
+  return { service, repo, port, consentSignature }
 }
 
 describe('AnnuairePublicationService.publishLigne', () => {
@@ -112,8 +139,8 @@ describe('AnnuairePublicationService.publishLigne', () => {
     expect(port.publish).not.toHaveBeenCalled()
   })
 
-  it('crée le consentement inline quand `proof` est fourni, puis publie', async () => {
-    const { service, repo } = build()
+  it('crée le consentement inline quand `proof` est fourni (scellée, evidence_ref = sceau), puis publie', async () => {
+    const { service, repo, consentSignature } = build()
     const proof = {
       consentType: 'mandat',
       signerIdentity: 'Sign',
@@ -121,9 +148,22 @@ describe('AnnuairePublicationService.publishLigne', () => {
       obtainedAt: new Date('2026-01-01T00:00:00Z'),
     }
     await service.publishLigne(TENANT, { ...ligneInput, proof })
+    expect(consentSignature.seal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: TENANT,
+        siren: '111111111',
+        ...proof,
+      }),
+    )
     expect(repo.insertConsent).toHaveBeenCalledWith(
       TENANT,
-      expect.objectContaining({ siren: '111111111', ...proof }),
+      expect.objectContaining({
+        siren: '111111111',
+        consentType: proof.consentType,
+        signerIdentity: proof.signerIdentity,
+        obtainedAt: proof.obtainedAt,
+        evidenceRef: 'b'.repeat(64),
+      }),
     )
     expect(repo.findActiveConsent).toHaveBeenCalledTimes(1)
   })

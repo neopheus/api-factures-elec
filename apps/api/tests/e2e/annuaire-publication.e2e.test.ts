@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { AnnuairePort } from '../../src/annuaire/annuaire.port.js'
 import { AnnuaireRepository } from '../../src/annuaire/annuaire.repository.js'
 import { AnnuairePublicationService } from '../../src/annuaire/annuaire-publication.service.js'
+import type { ConsentSignaturePort } from '../../src/annuaire/consent-signature.port.js'
 import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
@@ -38,6 +39,15 @@ function noopPort(): AnnuairePort {
   }
 }
 
+function noopConsentSignature(): ConsentSignaturePort {
+  const boom = (method: string) => () => {
+    throw new Error(
+      `consentSignature.${method} ne doit jamais être appelé par recordAck`,
+    )
+  }
+  return { seal: boom('seal'), verify: boom('verify') }
+}
+
 describe('annuaire publication consent-gated + F13 + acquittements (e2e)', () => {
   let db: TestDb
   let app: INestApplication
@@ -56,7 +66,11 @@ describe('annuaire publication consent-gated + F13 + acquittements (e2e)', () =>
     ownerPool.on('error', () => {})
     appPool.on('error', () => {})
     repo = new AnnuaireRepository(new TenantContextService(appPool))
-    directService = new AnnuairePublicationService(repo, noopPort())
+    directService = new AnnuairePublicationService(
+      repo,
+      noopPort(),
+      noopConsentSignature(),
+    )
     ;({ tenantId, token } = await seedTenantWithKey(ownerPool, 'ANN-PUBLISH'))
   })
 

@@ -9,6 +9,7 @@ import pg from 'pg'
 export interface TestDb {
   container: StartedPostgreSqlContainer
   appUrl: string
+  workerUrl: string
   ownerUrl: string
   stop(): Promise<void>
 }
@@ -38,12 +39,20 @@ export async function startTestDb(): Promise<TestDb> {
   await su.query(
     `CREATE ROLE factelec_app LOGIN PASSWORD 'app_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB`,
   )
+  // AMENDEMENT B1 (revue plan 3.5, BLOCKER corrigé) : la migration 0029
+  // (GRANT … TO factelec_worker) échouerait dans CHAQUE e2e si ce rôle
+  // n'existe pas AVANT `migrate()` — les conteneurs de test n'appliquent PAS
+  // scripts/db-init/00-roles.sql (motif exact factelec_app ci-dessus).
+  await su.query(
+    `CREATE ROLE factelec_worker LOGIN PASSWORD 'worker_pw' NOSUPERUSER NOBYPASSRLS NOCREATEDB`,
+  )
   await su.query(`GRANT ALL ON DATABASE factelec TO factelec_owner`)
   await su.query(`ALTER SCHEMA public OWNER TO factelec_owner`)
   await su.end()
 
   const ownerUrl = `postgres://factelec_owner:owner_pw@${host}:${port}/factelec`
   const appUrl = `postgres://factelec_app:app_pw@${host}:${port}/factelec`
+  const workerUrl = `postgres://factelec_worker:worker_pw@${host}:${port}/factelec`
 
   // Migrations en owner (DDL + RLS + fonction SECURITY DEFINER).
   const ownerPool = new pg.Pool({ connectionString: ownerUrl })
@@ -53,6 +62,7 @@ export async function startTestDb(): Promise<TestDb> {
   return {
     container,
     appUrl,
+    workerUrl,
     ownerUrl,
     stop: async () => {
       await container.stop()

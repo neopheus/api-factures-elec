@@ -58,7 +58,7 @@ describe('expired session purge (e2e)', () => {
   })
 
   it('the maintenance worker deletes expired sessions but keeps valid ones', async () => {
-    const worker = await createTestWorker(db.appUrl, redis)
+    const worker = await createTestWorker(db.workerUrl, redis)
     const queue = new Queue(MAINTENANCE_QUEUE, {
       connection: { host: redis.host, port: redis.port },
     })
