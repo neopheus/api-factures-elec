@@ -284,6 +284,12 @@ describe('annuaire consentement : révocation opérateur (e2e, Postgres réel, L
   it('NON-RÉGRESSION gate — auto-découverte : après révocation du SEUL consentement couvrant, publier sans consentId/proof → 422', async () => {
     const siren = '930000402'
     const { id: consentId } = await seedConsent(siren)
+    // CONTRÔLE POSITIF in-file (revue T2, NIT-1) : AVANT révocation, la même
+    // maille publie en auto-découverte (201) — c'est la causalité complète :
+    // seul le passage par /revoke fait basculer 201 → 422.
+    const before = await publishOk({ siren, dateDebut: '20260401' })
+    expect(before.status).toBe('published')
+
     await request(app.getHttpServer())
       .post(`/annuaire/consents/${consentId}/revoke`)
       .set('Authorization', `Bearer ${token}`)
@@ -296,8 +302,13 @@ describe('annuaire consentement : révocation opérateur (e2e, Postgres réel, L
       .expect(422)
     expect(res.body.type).toBe('urn:factelec:problem:business-rule-violation')
 
-    const lignes = await repo.listLignes(tenantId)
-    expect(lignes.some((l) => l.siren === siren)).toBe(false)
+    // Seule la ligne du contrôle positif (pré-révocation, 20260401) existe —
+    // la tentative post-révocation (20260402) n'a RIEN créé.
+    const lignes = (await repo.listLignes(tenantId)).filter(
+      (l) => l.siren === siren,
+    )
+    expect(lignes).toHaveLength(1)
+    expect(lignes[0]?.dateDebut).toBe('20260401')
   })
 
   it('dependentActiveLignes reflète les lignes non terminales dépendantes (published/deposee comptées, masked/rejetee non)', async () => {
