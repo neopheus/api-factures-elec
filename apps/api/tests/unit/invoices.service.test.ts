@@ -31,6 +31,12 @@ function fakeRepo() {
 function fakeQueue() {
   return { enqueue: vi.fn().mockResolvedValue(undefined) }
 }
+// `resolveRouting` (Task 4, plan 3.5) n'est exercée par aucun test de ce
+// fichier (dédiés à `ingest`) — fake non-fonctionnel, requis uniquement pour
+// l'arité du constructeur.
+function fakeRouting() {
+  return { resolveAndRecord: vi.fn() }
+}
 
 describe('InvoicesService.ingest', () => {
   beforeEach(() => {
@@ -50,6 +56,7 @@ describe('InvoicesService.ingest', () => {
     const service = new InvoicesService(
       fakeRepo() as never,
       fakeQueue() as never,
+      fakeRouting() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
@@ -72,6 +79,7 @@ describe('InvoicesService.ingest', () => {
     const service = new InvoicesService(
       fakeRepo() as never,
       fakeQueue() as never,
+      fakeRouting() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toBe(
@@ -86,6 +94,7 @@ describe('InvoicesService.ingest', () => {
     const service = new InvoicesService(
       fakeRepo() as never,
       fakeQueue() as never,
+      fakeRouting() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toThrow('boom')
@@ -98,6 +107,7 @@ describe('InvoicesService.ingest', () => {
     const service = new InvoicesService(
       fakeRepo() as never,
       fakeQueue() as never,
+      fakeRouting() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toEqual({
@@ -115,6 +125,7 @@ describe('InvoicesService.ingest', () => {
     const service = new InvoicesService(
       fakeRepo() as never,
       fakeQueue() as never,
+      fakeRouting() as never,
     )
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
@@ -136,7 +147,11 @@ describe('InvoicesService.ingest', () => {
     const repo = fakeRepo()
     repo.insertReceived.mockResolvedValue({ id: 'invoice-1' })
     const queue = fakeQueue()
-    const service = new InvoicesService(repo as never, queue as never)
+    const service = new InvoicesService(
+      repo as never,
+      queue as never,
+      fakeRouting() as never,
+    )
 
     const result = await service.ingest('tenant-1', { number: 'FA-1' })
 
@@ -155,7 +170,11 @@ describe('InvoicesService.ingest', () => {
       constraint: 'invoices_tenant_number_unique',
     })
     const queue = fakeQueue()
-    const service = new InvoicesService(repo as never, queue as never)
+    const service = new InvoicesService(
+      repo as never,
+      queue as never,
+      fakeRouting() as never,
+    )
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
       new ConflictException(
         expect.objectContaining({
@@ -176,7 +195,11 @@ describe('InvoicesService.ingest', () => {
       code: '23505',
       constraint: 'invoices_tenant_number_unique',
     })
-    const service = new InvoicesService(repo as never, fakeQueue() as never)
+    const service = new InvoicesService(
+      repo as never,
+      fakeQueue() as never,
+      fakeRouting() as never,
+    )
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
       new ConflictException(
@@ -202,7 +225,11 @@ describe('InvoicesService.ingest', () => {
       constraint: 'invoices_tenant_number_unique',
     }
     repo.insertReceived.mockRejectedValue(wrapped)
-    const service = new InvoicesService(repo as never, fakeQueue() as never)
+    const service = new InvoicesService(
+      repo as never,
+      fakeQueue() as never,
+      fakeRouting() as never,
+    )
 
     await expect(service.ingest('tenant-1', {})).rejects.toMatchObject(
       new ConflictException(
@@ -227,7 +254,11 @@ describe('InvoicesService.ingest', () => {
       constraint: 'invoice_formats_invoice_kind_unique',
     }
     repo.insertReceived.mockRejectedValue(otherConstraintError)
-    const service = new InvoicesService(repo as never, fakeQueue() as never)
+    const service = new InvoicesService(
+      repo as never,
+      fakeQueue() as never,
+      fakeRouting() as never,
+    )
 
     await expect(service.ingest('tenant-1', {})).rejects.toBe(
       otherConstraintError,
@@ -241,7 +272,11 @@ describe('InvoicesService.ingest', () => {
     const repo = fakeRepo()
     const dbError = new Error('connection reset')
     repo.insertReceived.mockRejectedValue(dbError)
-    const service = new InvoicesService(repo as never, fakeQueue() as never)
+    const service = new InvoicesService(
+      repo as never,
+      fakeQueue() as never,
+      fakeRouting() as never,
+    )
 
     await expect(service.ingest('tenant-1', {})).rejects.toBe(dbError)
   })

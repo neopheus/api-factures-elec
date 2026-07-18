@@ -136,4 +136,19 @@ export class InvoicesController {
   getStatus(@CurrentTenant() tenantId: string, @Param('id') id: string) {
     return this.lifecycle.history(tenantId, id)
   }
+
+  // Re-résolution opérateur d'un routage `ambiguous` (Task 4, plan 3.5, D6) —
+  // miroir dual-auth EXACT de `PaymentsController.capture` /
+  // `EreportingController.retransmit` : `TenantAuthGuard` (clé API OU
+  // session) + `RolesGuard`/`CsrfGuard` (s'appliquent SEULEMENT à la
+  // session, bypass explicite sur `apiKeyId`). 200 SYNCHRONE (divergence
+  // volontaire du 202 `retransmit` — appel direct léger, best-effort, sans
+  // enfilement, cf. `InvoicesService.resolveRouting`).
+  @Post(':id/routing/resolve')
+  @HttpCode(200)
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
+  @Roles('owner', 'admin', 'accountant')
+  resolveRouting(@CurrentTenant() tenantId: string, @Param('id') id: string) {
+    return this.invoices.resolveRouting(tenantId, id)
+  }
 }
