@@ -143,7 +143,7 @@ describe('verrou d’architecture : composition dual-auth des routes de mutation
     }
   }
 
-  it('le scan repère les 6 routes dual-auth CONFORMES existantes (preuve que le scan n’est pas vide)', () => {
+  it('le scan repère les 7 routes dual-auth CONFORMES existantes (preuve que le scan n’est pas vide)', () => {
     const compliant = qualifying
       .filter((k) => !KNOWN_PRE_EXISTING_GAPS.has(k))
       .sort()
@@ -152,6 +152,9 @@ describe('verrou d’architecture : composition dual-auth des routes de mutation
         'annuaire/annuaire.controller.ts#publish',
         'annuaire/annuaire.controller.ts#endEffect',
         'annuaire/annuaire.controller.ts#mask',
+        // Task 1, plan 3.6 (amendement B1) : 7e route — révocation de
+        // consentement, triple garde sans exclusion.
+        'annuaire/annuaire.controller.ts#revokeConsent',
         'ereporting/ereporting.controller.ts#retransmit',
         'invoices/invoices.controller.ts#resolveRouting',
         'payments/payments.controller.ts#capture',

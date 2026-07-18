@@ -94,6 +94,17 @@ export class StaleLigneTransitionError extends Error {
   }
 }
 
+// Consentement inconnu/cross-tenant (Task 1, plan 3.6, D3) — levée quand
+// `AnnuaireRepository.revokeConsent` renvoie `null` (ambiguïté résolue par
+// la ré-lecture RLS-scopée du repo). Motif `StaleLigneTransitionError`
+// ci-dessus : classe pure, `super`+`this.name`, sans `Object.setPrototypeOf`.
+export class ConsentNotFoundError extends Error {
+  constructor(readonly consentId: string) {
+    super(`consentement ${consentId} introuvable (inconnu ou hors tenant)`)
+    this.name = 'ConsentNotFoundError'
+  }
+}
+
 export interface ConsentProofInput {
   consentType: string
   signerIdentity: string
@@ -119,6 +130,12 @@ export interface PublishLigneResult {
   status: AnnuaireLigneStatus
   trackingRef: string | null
   rejectReason: string | null
+}
+
+export interface RevokeConsentResult {
+  consentId: string
+  revokedAt: string
+  dependentActiveLignes: number
 }
 
 function toMaille(input: {
@@ -281,6 +298,30 @@ export class AnnuairePublicationService {
       status: 'published',
       trackingRef: result.trackingRef,
       rejectReason: null,
+    }
+  }
+
+  // Révocation de consentement (Task 1, plan 3.6, D2/D3) : révocation-SEULE
+  // (AUCUNE cascade sur les lignes, D2) — écrit `revoked_at` write-once via
+  // le CAS du repo, puis rapporte `dependentActiveLignes` (anti-silence :
+  // l'opérateur voit explicitement ce qui reste adossé, cf. procédure
+  // §3.5.5.5 note 85 documentée en Task 3). Le gate de publication existant
+  // (`resolveConsent` ci-dessus/`findActiveConsent`) est la garantie
+  // « jamais prétendre à neuf » — inchangée ici.
+  async revokeConsent(
+    tenantId: string,
+    id: string,
+  ): Promise<RevokeConsentResult> {
+    const res = await this.repo.revokeConsent(tenantId, id)
+    if (!res) throw new ConsentNotFoundError(id)
+    const dependentActiveLignes = await this.repo.countActiveLignesForConsent(
+      tenantId,
+      id,
+    )
+    return {
+      consentId: id,
+      revokedAt: res.revokedAt.toISOString(),
+      dependentActiveLignes,
     }
   }
 

@@ -206,8 +206,8 @@ Expected: PASS ; révocation écrite write-once ; aucune cascade ; 404 byte-iden
 ### Task 2 : e2e LIGHT + non-régression du gate (l'énumération M1 6→7 est FAITE en Task 1 — amendement B1)
 
 **Files:**
-- Modify: `apps/api/tests/unit/dual-auth-composition.arch.test.ts` (énumération 6→7)
 - Create: `apps/api/tests/e2e/annuaire-consent-revoke.e2e.test.ts` (LIGHT)
+  (l'énumération du verrou `dual-auth-composition.arch.test.ts` 6→7 est faite en **Task 1** — amendement B1)
 
 **Interfaces:**
 - Consumes : Task 1 (endpoint), harnais e2e annuaire existant (`annuaire-consent-seal.e2e.test.ts`/`annuaire-publication.e2e.test.ts`/`annuaire-mutation-guards.e2e.test.ts` comme modèles), `createTestApp` (`factelec_app`).

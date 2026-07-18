@@ -82,7 +82,19 @@ réel du process worker, pool/env dédiés `DATABASE_URL_WORKER`, provisioning
 prod différé) et l'**endpoint de re-résolution manuelle d'un routage
 `ambiguous`** (`POST /invoices/:id/routing/resolve`, dual-auth, solde
 F-2/3.4) — voir § Consentement scellé, rôle worker & re-résolution
-ambiguous — 3.5 ci-dessous. Consomme
+ambiguous — 3.5 ci-dessous, puis en **3.6** avec la **révocation de
+consentement annuaire** (`POST /annuaire/consents/:id/revoke`, 7ᵉ mutation
+dual-auth, écriture `revoked_at` CAS write-once idempotente, 404
+anti-fuite, rapport anti-silence `dependentActiveLignes`) : **révocation-
+seule**, ancrée à la source primaire (§3.5.5.5 note 85) — bloque **toute
+publication neuve** adossée au consentement révoqué (gate existant, non
+régression prouvée sur les deux chemins) mais **ne rétracte pas**
+automatiquement l'adressage déjà publié (`maskLigne` ne transmet rien au
+PPF/miroir — une cascade aurait fabriqué une rétractation), le miroir de
+consultation **continuant de router** les tiers vers la plateforme pour les
+mailles déjà consolidées jusqu'à l'actualisation opérateur (procédure
+§3.5.5.5 note 85, transmission Flux 13 réelle différée) — voir §
+Révocation de consentement — 3.6 ci-dessous. Consomme
 `@factelec/invoice-core` (validation, calculs, génération des formats du socle)
 et expose l'ensemble derrière une couche d'authentification et d'isolation
 multi-tenant Postgres.
@@ -1384,11 +1396,12 @@ persistance (`annuaire.repository.ts`), port de transport
   pipeline de génération/émission des formats du socle (Flux 1-9) n'appelle
   encore la résolution de routage annuaire** : c'est la brique dont dépendra
   un futur câblage (phase 3, transmission Peppol), pas un oubli de ce plan.
-- **Révocation de consentement** — la colonne `annuaire_consents.revoked_at`
-  existe et `findConsentById` la respecte déjà (un consentement révoqué ne
-  couvre plus aucune publication), mais **aucun endpoint ni méthode
-  applicative ne l'écrit** à ce jour : la base supporte la révocation, rien
-  ne la déclenche encore.
+- **Révocation de consentement — LIVRÉE en 3.6** — la colonne
+  `annuaire_consents.revoked_at` existe et `findConsentById` la respecte
+  déjà (un consentement révoqué ne couvre plus aucune publication) ;
+  `POST /annuaire/consents/:id/revoke` écrit désormais ce champ. Voir §
+  Révocation de consentement — 3.6 ci-dessous (révocation-seule, aucune
+  cascade sur l'adressage déjà publié — honnêteté du miroir).
 
 **Aucun scellement/signature au niveau message** (même motif que
 l'e-reporting, D6/cohérent 2.3) : le journal `annuaire_ligne_events` est
@@ -1531,7 +1544,8 @@ ré-enfilement — même discipline que 2.3). `AnnuaireSyncService.sync` :
 
 Quatre tables tenant-scopées sous RLS **`ENABLE`+`FORCE`** (migrations `0018`
 Drizzle / `0019`+`0020` hand) : `annuaire_consents` (preuves de consentement,
-`SELECT`/`INSERT`/`UPDATE` — la révocation future s'écrirait ici),
+`SELECT`/`INSERT`/`UPDATE` — porte `revoked_at`, écrit par l'endpoint de
+révocation depuis 3.6, § Révocation de consentement — 3.6),
 `annuaire_lignes` (lignes publiées par ce tenant, `SELECT`/`INSERT`/`UPDATE`,
 porteuses de l'index de slot A-DEADLOCK ci-dessus), `annuaire_ligne_events`
 (journal **append-only**, `SELECT`+`INSERT` seulement) et
@@ -2528,6 +2542,11 @@ positif ; snapshot figé des 6 routes qualifiantes (3 annuaire + `retransmit`
 + `resolveRouting` + `capture`) — toute route future ajoutée ou modifiée sans
 les 3 guards casse le test **immédiatement**.
 
+**Étendu 6→7 en 3.6** : `revokeConsent` (4ᵉ mutation annuaire, § Révocation
+de consentement — 3.6) ajoutée à l'énumération, RED de morsure constaté
+avant l'ajout (la route non énumérée faisait échouer `it('le scan repère
+…')`), puis GREEN.
+
 ### Différés 3.6+ (D9)
 
 - **Fournisseurs eIDAS réels** (`CONSENT_DRIVER=eidas`) — item Xavier, throw
@@ -2536,8 +2555,9 @@ les 3 guards casse le test **immédiatement**.
   (secret + `DATABASE_URL_WORKER`), puis un `REVOKE` de suivi sur
   `factelec_app` (§ ci-dessus, honnêteté) — item Xavier.
 - **Révocation de consentement** (endpoint/service) — la colonne
-  `revoked_at` existe et est respectée à la lecture (héritée 2.4), aucune
-  écriture applicative n'est exposée.
+  `revoked_at` existe et est respectée à la lecture (héritée 2.4). **Livrée
+  en 3.6** (`POST /annuaire/consents/:id/revoke`) — voir § Révocation de
+  consentement — 3.6 ci-dessous.
 - **Garde composé `DualAuthMutationGuard`** — refusé **à nouveau** ce plan
   (D7, ratifié en **voie médiane** par l'amendement M1 ci-dessus) : le
   résidu **grave** que ce garde composé aurait pu prévenir (omission pure
@@ -2550,6 +2570,174 @@ les 3 guards casse le test **immédiatement**.
 - **Transition `emise`/transport réel**, **backoff persistant du sweep
   routage**, **`POST /annuaire/codes-routage` autonome** — inchangés depuis
   3.3/3.4, voir §§ correspondantes.
+
+## Révocation de consentement — 3.6
+
+Écrit le seul axe encore manquant du cycle de vie du consentement annuaire
+(2.4/3.5) : la colonne `annuaire_consents.revoked_at` existait déjà
+(migration `0018`) et était déjà **lue** par le gate de publication
+(`resolveConsent`, chemin `consentId` et auto-découverte), mais **aucun**
+endpoint ni méthode applicative ne l'écrivait — la révocation était
+« délibérément différée » (commentaire historique
+`annuaire.repository.ts:191-198`). Ce plan livre l'écriture.
+
+### Décision — révocation-seule, cascade automatique REJETÉE (D1-D2)
+
+`POST /annuaire/consents/:id/revoke` écrit `revoked_at` et **ne cascade
+aucun masquage automatique** sur les lignes d'adressage déjà publiées sous
+ce consentement. Ancrage réglementaire ré-extrait (sources primaires,
+`docs/reglementaire/specifications-externes-v3.2/0- Dossier de
+specifications externes FE - Dossier général_v3.2.pdf`, lecture seule) :
+
+- **§3.5.3 p.40 + note 79 p.41** — le masquage sert à *« annuler la prise
+  d'effet d'une ligne d'annuaire »* ; les évènements exogènes raccourcissent
+  une ligne **en vigueur** via une **date de fin effective**, pas via un
+  masquage.
+- **§3.5.5.2-4 p.45-47** — l'actualisation automatique sur évènement de
+  registre (perte d'assujettissement, perte d'immatriculation) est décrite
+  **côté PPF**, pas côté PA.
+- **§3.5.5.5 p.48-50 + note 85 p.50** — l'analogue exact de la révocation de
+  consentement (rupture PA↔client) : *« il est alors conseillé à la PA de
+  clôturer les lignes d'annuaire en vigueur (...), de masquer les lignes
+  dont la date d'entrée en vigueur n'était pas encore échue, puis de créer
+  une ligne d'annuaire (...) attribuée au matricule de la plateforme
+  fictive »* — une **actualisation opérateur, ligne par ligne**, transmise
+  par Flux 13, **jamais** une cascade automatique uniforme.
+
+**Sémantique réelle de `maskLigne` (le fait décisif).**
+`AnnuairePublicationService.maskLigne` appelle uniquement
+`repo.appendLigneEvent(tenantId, ligneId, 'deposee', 'masked', 'platform')`
+— une transition **locale** (`deposee`-only, CAS `WHERE status='deposee'`),
+sans `port.publish`, sans émission Flux 13, sans écriture du miroir
+`annuaire_directory_entries` que lit `resolveRecipient`. Une cascade
+automatique via `maskLigne` aurait donc été **triplement défaillante** :
+incomplète (ne peut pas toucher `draft`/`published`, seulement `deposee`),
+non-propagée (le routage réel resterait inchangé, le miroir n'étant jamais
+écrit) et infidèle au modèle (la spec distingue clôturer/masquer/créer un
+fallback, qu'un masquage uniforme confond). Elle aurait **fabriqué**
+l'apparence d'une rétractation qui n'a pas eu lieu — la révocation-seule
+évite cette fabrication.
+
+### Endpoint, idempotence et 404 anti-fuite (D3-D4)
+
+`POST /annuaire/consents/:id/revoke` (`@HttpCode(200)`, dual-auth triple
+garde `TenantAuthGuard`+`RolesGuard`+`CsrfGuard`,
+`@Roles('owner','admin','accountant')` — même motif exact que les 6 autres
+mutations dual-auth du projet) :
+
+- **Écriture CAS write-once** (motif `markPublished`) :
+  `UPDATE annuaire_consents SET revoked_at = now() WHERE id = $1 AND
+  revoked_at IS NULL RETURNING revoked_at`. Si **0 ligne**, ré-lecture
+  RLS-scopée (`SELECT revoked_at WHERE id = $1`) : `null` → consentement
+  inconnu/cross-tenant (404) ; trouvé → **déjà révoqué**, réponse
+  **idempotente 200** avec le `revoked_at` **d'origine** (jamais réécrit,
+  monotone).
+- **404 anti-fuite byte-identique** (`:id` malformé, consentement inconnu,
+  consentement d'un autre tenant — les trois cas indiscernables, motif
+  `endEffect`/`maskLigne`).
+- **Aucune migration** : `revoked_at` (`0018`) et le grant `UPDATE`
+  (`0019:14`) existent déjà. **Aucune colonne `revoke_reason`** n'est
+  ajoutée — le corps de requête est vide/ignoré ; stocker un motif inventé
+  serait une fabrication.
+- **Réponse** : `{ consentId, revokedAt, dependentActiveLignes }` —
+  `dependentActiveLignes` = nombre de lignes `annuaire_lignes` de ce
+  consentement encore **actives** (`draft`/`published`/`deposee`, hors
+  terminaux `rejetee`/`masked`) : l'**anti-silence** de la posture « jamais
+  prétendre » (amendement M1-DOC ci-dessous).
+- **Verrou d'architecture M1 étendu 6→7** — la 7ᵉ mutation dual-auth du
+  projet (`annuaire/annuaire.controller.ts#revokeConsent`), énumérée dans
+  `dual-auth-composition.arch.test.ts`. RED de morsure constaté (le scan
+  a nommé la route non conforme avant son ajout à l'énumération), puis
+  GREEN. Voir § Verrou d'architecture — composition dual-auth (M1) ci-dessus.
+
+### AMENDEMENT M1-DOC — honnêteté du miroir de consultation (lecture obligatoire)
+
+**La révocation bloque le NEUF, elle ne rétracte PAS l'existant — sans
+euphémisme.** `POST /annuaire/consents/:id/revoke` garantit que **plus
+aucune publication neuve** ne peut s'adosser au consentement révoqué (gate
+existant `resolveConsent`, chemin `consentId` **et** auto-découverte,
+prouvé par non-régression e2e sur les **deux** chemins). Il **ne fait rien
+d'autre** sur l'adressage déjà publié :
+
+- Le **miroir de consultation** (`annuaire_directory_entries`, Flux 14) —
+  la source **réelle** que lit `resolveRecipient` pour router une facture —
+  **n'est pas modifié** par la révocation. Un tiers qui consulte l'annuaire
+  après la révocation **continue d'être routé** vers la plateforme, pour
+  toute maille déjà consolidée, **jusqu'à** l'actualisation opérateur
+  décrite ci-dessous.
+- Les lignes `annuaire_lignes` déjà `published`/`deposee` sous ce
+  consentement **restent en l'état** — elles ne sont ni clôturées, ni
+  masquées, ni retirées automatiquement par la révocation elle-même.
+- La **transmission Flux 13 réelle** de l'actualisation (masquage +
+  clôture + ligne fallback plateforme fictive `9998`, §3.5.5.5 note 85) est
+  **DIFFÉRÉE** — elle exige l'émission Flux 13 réelle (transport différé
+  depuis 2.4/3.1, item Xavier) et la propagation au miroir, aucune des deux
+  n'étant fournie par ce plan.
+
+Aucune formulation de ce projet ne doit laisser croire à une rétractation
+effective de l'adressage existant : la révocation **écrit un fait
+horodaté** (« publiée sous le consentement X, révoqué le T ») et **bloque le
+neuf** — elle ne « débranche » pas silencieusement les tiers du routage
+déjà en place.
+
+### Runbook opérateur — actualisation post-révocation
+
+Procédure recommandée immédiatement après un `200` de révocation dont
+`dependentActiveLignes > 0` (§3.5.5.5 note 85, appliquée ligne par ligne) :
+
+1. **Consulter** les lignes actives dépendantes (`GET /annuaire/lignes`,
+   filtré par SIREN) — le champ `dependentActiveLignes` de la réponse de
+   révocation donne le **compte**, pas la liste ; l'opérateur doit
+   retrouver les lignes lui-même.
+2. **Clôturer** les lignes en vigueur : `PUT /annuaire/lignes/:id` (fin
+   d'effet, `dateFin`).
+3. **Masquer** les lignes `deposee` dont la date d'entrée en vigueur
+   n'est pas encore échue : `DELETE /annuaire/lignes/:id`.
+4. **Créer une ligne fallback** vers la plateforme fictive (`9998`) — **outil
+   non livré** : aucun endpoint ne crée aujourd'hui une ligne fallback en
+   masse ni n'émet le Flux 13 de masquage/clôture réel vers le PPF ; cette
+   étape reste **manuelle et hors outillage** tant que le transport Flux 13
+   réel n'est pas fourni (item Xavier).
+
+**Stock** : les consentements révoqués restent **lisibles** (`revoked_at`
+non nul, historique jamais supprimé — `annuaire_consents` n'a pas de grant
+`DELETE`) ; la révocation est un fait additif, jamais une purge.
+
+### Backlog acté (hors périmètre de ce plan)
+
+- **Divergence Tableau 6 — commentaire factuellement faux (PRÉ-EXISTANTE,
+  non corrigée ici)** : `annuaire-lifecycle.ts:9-14` affirme *« aucun code
+  officiel DGFiP n'est documenté pour le cycle de publication annuaire »*
+  (§ Machine à états de publication ci-dessus) alors que **§3.5.7 Tableau 6
+  p.54** documente explicitement deux codes pour les statuts de ligne
+  d'annuaire (**400 Acceptée / 401 Rejetée**). Divergence confirmée réelle
+  en revue du plan 3.6 (ré-extraction primaire indépendante) — **sans lien
+  avec la révocation**, correction **backlog dédié** (mettre à jour le
+  commentaire et, le cas échéant, exposer les codes 400/401 dans les
+  événements de ligne).
+- **Outils d'actualisation post-révocation différés** : clôture `dateFin`
+  en masse et création de ligne fallback (plateforme fictive `9998`) — la
+  procédure ci-dessus reste **manuelle**, ligne par ligne, via les endpoints
+  existants (`PUT`/`DELETE /annuaire/lignes/:id`) ; aucun endpoint dédié
+  « actualiser toutes les lignes d'un consentement révoqué » n'est livré.
+- **Cascade réelle vers le PPF (Flux 13)** : masquage + clôture + ligne
+  fallback transmis réellement au PPF — exige l'émission Flux 13 réelle
+  (transport différé depuis 2.4/3.1, item Xavier) et la propagation au
+  miroir de consultation.
+- **Raison de révocation stockée** : aucune colonne `revoke_reason`
+  n'existe ; en ajouter une exigerait une migration justifiée par un besoin
+  métier réel, non fabriquée ici.
+- **Blocage dur de la révocation tant que des lignes actives dépendent**
+  (gate bloquante stricte) — **refusé** : les lignes `published` ne peuvent
+  pas être masquées (machine `deposee`-only) et l'acquittement PPF
+  (`published→deposee`) est différé (push PPF réel absent) — un blocage dur
+  serait insatisfaisable (deadlock). Remplacé par le rapport honnête
+  `dependentActiveLignes`.
+- **Couverture de test — content-type asserté sur 1 des 3 cas 404** (revue
+  T2, NIT-2 accepté) : `annuaire-consent-revoke.e2e.test.ts` vérifie le
+  corps 404 byte-identique sur les 3 chemins (inconnu/cross-tenant/malformé)
+  mais n'asserte le `Content-Type` que sur un seul — indiscernabilité
+  transitive jugée suffisante (les 3 corps sont `toEqual`).
 
 ## Sécurité / multi-tenant
 
@@ -2831,6 +3019,7 @@ README racine.
 | `POST /annuaire/lignes` | Publication d'une ligne d'adressage (D/M) — dual-auth **+ rôles owner/admin/accountant + CSRF en session** (3.5, Task 4bis), gate consentement **scellé** (422, § Consentement scellé), F13 XSD-validé et transmis via le port ; succès partiel au grain ligne (201 même si le statut interne devient `rejetee`) | 201, 401, 403, 422 |
 | `PUT /annuaire/lignes/:id` | Fin d'effet : positionne `dateFin` sur une ligne existante du tenant — dual-auth **+ rôles owner/admin/accountant + CSRF en session** (3.5, Task 4bis) | 200, 401, 403, 404, 409, 422 |
 | `DELETE /annuaire/lignes/:id` | Masquage d'une ligne déposée (`deposee → masked`) — dual-auth **+ rôles owner/admin/accountant + CSRF en session** (3.5, Task 4bis) | 204, 401, 403, 404, 409 |
+| `POST /annuaire/consents/:id/revoke` | Révocation d'un consentement (3.6, § Révocation de consentement) — dual-auth **+ rôles owner/admin/accountant + CSRF en session**, écrit `revoked_at` **CAS write-once idempotent** (rejeu → même `revokedAt` d'origine), 404 anti-fuite byte-identique (inconnu/cross-tenant/`:id` malformé), rapporte `dependentActiveLignes` (lignes actives dépendantes non retirées automatiquement — **aucune cascade**, § AMENDEMENT M1-DOC) | 200, 401, 403, 404 |
 | `GET /cdv/transmissions?invoiceId=…` | Liste des transmissions CDV (Flux 6) d'une facture (résumés — **sans** le XML), `dgfipCode`/`statusLabel` dérivés | 200, 401 |
 | `GET /cdv/transmissions/:id/xml` | XML `text/xml` de la transmission (absent si `parked`) — 404 anti-fuite (inconnue ou d'un autre tenant) | 200, 401, 404 |
 | `GET /cdv/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
@@ -2870,7 +3059,11 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   routes composaient `TenantAuthGuard` **seul**, une faille **héritée de
   2.4** (une session de n'importe quel rôle, `viewer` inclus, pouvait muter
   l'annuaire sans jeton CSRF) — voir § ÉPISODE SÉCURITÉ ci-dessous pour le
-  détail complet, la preuve RED et le correctif.
+  détail complet, la preuve RED et le correctif. **`POST
+  /annuaire/consents/:id/revoke`** (3.6) compose le même triple garde
+  **dès sa création** (7ᵉ route dual-auth du projet, § Révocation de
+  consentement — 3.6) — aucun épisode de sécurité analogue cette fois, le
+  motif exact des mutations existantes a été repris d'emblée.
 - **`POST /invoices/:id/status`** (transition CDV) est une **mutation
   métier** : exclusivement session **owner/admin/accountant** + CSRF
   (`SessionGuard`/`RolesGuard`/`CsrfGuard`) — un `viewer` est refusé (403),
@@ -3087,12 +3280,25 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   pas supposée), `403` après ; verrou d'architecture composition dual-auth
   (`dual-auth-composition.arch.test.ts`) passant **sans exclusion**, grep
   indépendant du relecteur = 6/6 routes conformes.
+- **Révocation de consentement** (plan 3.6) : idempotence prouvée **par
+  valeurs** (2ᵉ révocation → même `revokedAt`, relecture SQL indépendante,
+  pas une confiance dans l'implémentation) ; 404 byte-identique sur les 3
+  chemins convergents (inconnu, cross-tenant RLS, `:id` malformé) ; **non-
+  régression réelle du gate de publication** exercée sur les **deux**
+  chemins (`consentId` révoqué → 422 ; auto-découverte après révocation du
+  seul consentement couvrant → 422), y compris un **contrôle positif
+  in-file** (`publishOk` 201 **avant** révocation, causalité complète
+  201→422) ; `dependentActiveLignes` semé par des transitions machine
+  **valides** (oracle `findLigne` ×4 statuts) ; isolation multi-tenant de la
+  révocation (RLS). Verrou M1 étendu 6→7, sans exclusion. Suite **LIGHT**
+  (aucun `createTestWorker`) — `heavy-suites.arch`/`apikeyid-setters.arch`
+  inchangés sans modification.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`, seuils fusionnés sur l'agrégat des projets `heavy` +
   `light`, § Durcissements transverses), exclusions limitées au bootstrap et
   au câblage DI pur (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`).
-  État actuel : 163 fichiers, **1155 tests**, couverture
-  **97.88 / 94.37 / 95.72 / 98.17 %** (statements/branches/functions/lines).
+  État actuel : 165 fichiers, **1167 tests**, couverture
+  **97.86 / 94.27 / 95.77 / 98.15 %** (statements/branches/functions/lines).
 
 ```sh
 pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docker requis)
@@ -3218,8 +3424,10 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   **d'origine** (write-once voulu), jamais recalculé sur un état muté entre
   temps. Voir § Runbook opérationnel — Annuaire.
 - **Révocation de consentement annuaire non exposée** (2.4) — la colonne
-  `annuaire_consents.revoked_at` existe et est respectée à la lecture, mais
-  aucun endpoint/méthode applicative ne l'écrit à ce jour.
+  `annuaire_consents.revoked_at` existe et est respectée à la lecture.
+  **Résolu en 3.6** (`POST /annuaire/consents/:id/revoke`, révocation-seule,
+  aucune cascade sur l'adressage déjà publié) — voir § Révocation de
+  consentement — 3.6 ci-dessus.
 - **Rôle SD `find_annuaire_sync_targets`/`find_stale_annuaire_drafts`
   cross-tenant** (2.4, même dette que `find_ereporting_declarants_due`
   2.3) — exposent des identifiants de tenants au rôle applicatif partagé
@@ -3344,8 +3552,19 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   (triple garde, preuve RED réelle). Voir § Consentement scellé, rôle
   worker & re-résolution ambiguous — 3.5 ci-dessus pour le détail complet et
   les différés.
+- **Résolu en 3.6** : révocation de consentement annuaire (`POST
+  /annuaire/consents/:id/revoke`, 7ᵉ mutation dual-auth) — écriture
+  `revoked_at` **CAS write-once idempotente** (rejeu → `revokedAt`
+  d'origine, monotone), 404 anti-fuite byte-identique, rapport
+  `dependentActiveLignes` (anti-silence). **Révocation-seule** (D2,
+  ancrage §3.5.5.5 note 85 + sémantique locale de `maskLigne`) : **aucune**
+  cascade automatique sur l'adressage déjà publié — le miroir de
+  consultation continue de router les tiers vers la plateforme jusqu'à
+  l'actualisation opérateur (procédure runbook, transmission Flux 13 réelle
+  différée). Verrou M1 étendu 6→7. Voir § Révocation de consentement — 3.6
+  ci-dessus pour le détail complet et les différés.
 
-### Différé explicitement (hors périmètre 2.4/3.1/3.2/3.3/3.4/3.5)
+### Différé explicitement (hors périmètre 2.4/3.1/3.2/3.3/3.4/3.5/3.6)
 
 - **E-reporting DGFiP au-delà du 10.1/10.3/TB-3** (Flux 10, plans 2.3/3.2) :
   cadres de facturation mixtes M1/M2/M4 **non naturés** (au moins une ligne
@@ -3367,11 +3586,13 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   chargées), habilitations réelles, codes routage standalone (6 endpoints
   Swagger différés, `RoutageID` inline seulement — l'**énumération** de
   gestion, elle, est livrée en 3.3, `GET /annuaire/codes-routage`), connecteur
-  de signature électronique du consentement, endpoint de révocation de
-  consentement — voir § Annuaire central pour le détail de chaque point.
+  de signature électronique du consentement — voir § Annuaire central pour
+  le détail de chaque point.
   **Câblage de la résolution de routage dans l'émetteur de factures : RÉSOLU
-  en 3.3, sweep de reprise + filtre de liste : RÉSOLUS en 3.4** (§§ Couture
-  annuaire → émission / Filtre de liste ci-dessus) — restent différés le
+  en 3.3, sweep de reprise + filtre de liste : RÉSOLUS en 3.4, endpoint de
+  révocation de consentement : RÉSOLU en 3.6** (§§ Couture annuaire →
+  émission / Filtre de liste / Révocation de consentement — 3.6 ci-dessus)
+  — restent différés le
   **garde composé** `DualAuthMutationGuard`, le **POST codes-routage**
   autonome (refusé, décision projet — D6), le **filtre de liste par
   `recipient_platform`** (3.4, raffinement sans demande métier), le
@@ -3422,8 +3643,11 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
   fournisseurs eIDAS réels de signature qualifiée (`CONSENT_DRIVER=eidas`,
   item Xavier, throw testé tant que non fourni), déploiement effectif du
   rôle `factelec_worker` (provisioning prod + `REVOKE` de suivi sur
-  `factelec_app`, item Xavier), révocation de consentement (endpoint/service
-  — colonne `revoked_at` déjà respectée en lecture depuis 2.4), garde
-  composé `DualAuthMutationGuard` (**refusé à nouveau**, D7 amendé en voie
-  médiane par M1) — voir § Consentement scellé, rôle worker & re-résolution
-  ambiguous — 3.5 pour le détail de chaque point.
+  `factelec_app`, item Xavier), garde composé `DualAuthMutationGuard`
+  (**refusé à nouveau**, D7 amendé en voie médiane par M1) — voir §
+  Consentement scellé, rôle worker & re-résolution ambiguous — 3.5 pour le
+  détail de chaque point. **Révocation de consentement (endpoint/service) :
+  RÉSOLUE en 3.6** (§ Révocation de consentement — 3.6 ci-dessus) — restent
+  différés côté révocation : la cascade réelle vers le PPF (Flux 13
+  masquage + clôture + ligne fallback), la raison de révocation stockée
+  (aucune colonne), et les outils d'actualisation post-révocation en masse.
