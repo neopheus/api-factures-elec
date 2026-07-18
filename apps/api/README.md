@@ -1137,6 +1137,29 @@ conformité :
 5. Suivre la progression via `GET /ereporting/transmissions` (filtrer
    `type='RE'`) : la nouvelle transmission passe
    `prepared → transmitted → { deposee | rejetee }` exactement comme un IN.
+
+**Edge connu — `reSeq` figé et dédup silencieuse (revue finale 3.4, F-1)** :
+`reSeq` n'avance que lorsqu'une ligne `RE` est réellement **committée**. Si un
+job RE se termine **sans** écrire de ligne (période devenue à-blanc, déclarant
+disparu) ou reste en échec retenu (`XsdToolingError`, rétention BullMQ 7 j),
+un re-`POST /ereporting/retransmissions` recalcule le **même** `reSeq` → même
+`jobId` → **dédup BullMQ = no-op silencieux** tant que le job précédent est
+dans la fenêtre de rétention (le 202 renvoyé référence le job existant). Ce
+comportement est **sans danger** (aucun doublon PPF possible) mais peut
+surprendre : si un re-POST semble sans effet, consulter la file (job existant
+même id) ou attendre l'expiration de rétention. Le cas courant (RE rejeté
+`REJ_SEMAN` → ligne committée → `reSeq` avancé) n'est **pas** concerné.
+
+**Edge connu — sortie d'`ambiguous` (revue finale 3.4, F-2)** : le sweep de
+reprise du routage **exclut** `ambiguous` à dessein (l'ambiguïté exige un
+nettoyage humain de l'annuaire, pas un rejeu aveugle). Mais après ce
+nettoyage, **aucun chemin automatique** ne re-résout la facture : ni le sweep
+(exclusion SQL), ni un endpoint dédié (différé 3.5+). Procédure actuelle :
+corriger l'annuaire (masquer/republier la ligne en trop), puis re-déclencher
+la résolution **indirectement** — l'écriture d'une correction annuaire ne
+touche pas la facture ; à ce jour la seule voie est d'attendre un futur
+endpoint de re-résolution manuelle (différé, listé) ou une re-génération de
+la facture. Limite héritée 3.3, non aggravée, désormais explicite.
    Un nouveau rejet local (données encore invalides) est visible de la même
    façon (`rejectOrigin: 'local'` sur **cette** ligne RE) — corriger à
    nouveau et re-POST (`reSeq` s'incrémente automatiquement, `…-RE-1`).
