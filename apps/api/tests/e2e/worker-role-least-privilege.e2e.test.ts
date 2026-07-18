@@ -69,6 +69,35 @@ describe('factelec_worker : moindre privilège (DB level)', () => {
     }
   })
 
+  it('le pool worker est RÉELLEMENT connecté en factelec_worker (revue T3, NIT-2 — fige la liaison)', async () => {
+    const r = await workerPool.query('SELECT current_user AS u')
+    expect(r.rows[0].u).toBe('factelec_worker')
+  })
+
+  it('négatif RLS : sous le contexte d’un AUTRE tenant, factelec_worker ne voit PAS la facture (revue T3, NIT-1 — RLS active, pas bypassée)', async () => {
+    // Le positif seul ne distingue pas « RLS active » de « RLS bypassée » :
+    // seul le négatif cross-tenant le prouve (NOBYPASSRLS + FORCE + policy
+    // TO PUBLIC s'appliquent bien au rôle worker).
+    const b = await ownerPool.query(
+      "INSERT INTO tenants (name) VALUES ('Tenant Worker B') RETURNING id",
+    )
+    const client = await workerPool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query("SELECT set_config('app.tenant_id', $1, true)", [
+        b.rows[0].id,
+      ])
+      const select = await client.query(
+        'SELECT id FROM invoices WHERE id = $1',
+        [invoiceA],
+      )
+      expect(select.rowCount).toBe(0)
+      await client.query('COMMIT')
+    } finally {
+      client.release()
+    }
+  })
+
   it('positif : EXECUTE find_pending_routing_invoices($1) réussit', async () => {
     const r = await workerPool.query(
       'SELECT * FROM find_pending_routing_invoices($1)',
