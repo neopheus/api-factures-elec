@@ -24,23 +24,31 @@ import { describe, expect, it } from 'vitest'
 // par ce scan car il ne compose jamais `TenantAuthGuard`). Ce test ne
 // prétend détecter QUE le motif `@UseGuards(...)` réel et actuel du projet.
 //
-// DÉCOUVERTE (Task 4, HORS PÉRIMÈTRE de cette tâche — remontée en détail au
-// contrôleur, task-4-report.md) : `annuaire.controller.ts` (2.4 Tasks 7/8,
-// AVANT ce plan) compose déjà `TenantAuthGuard` SEUL sur 3 routes de
-// mutation (`POST lignes`, `PUT lignes/:id`, `DELETE lignes/:id`) — SANS
-// `RolesGuard` ni `CsrfGuard`. C'est EXACTEMENT le résidu grave que cette
-// extension vise à empêcher POUR L'AVENIR, sauf qu'il existe déjà
-// aujourd'hui : une session utilisateur de N'IMPORTE QUEL rôle peut
-// publier/modifier/masquer une ligne d'annuaire sans jeton CSRF (aucun
-// garde CSRF global — vérifié `main.ts`/`app.module.ts`). Corriger
+// DÉCOUVERTE (Task 4, plan 3.5, 2026-07-18 — HORS PÉRIMÈTRE de cette tâche,
+// remontée en détail au contrôleur + task-4-report.md) : `annuaire.controller.ts`
+// (faille PRÉ-EXISTANTE depuis 2.4 Tasks 7/8, AVANT ce plan) compose déjà
+// `TenantAuthGuard` SEUL sur 3 routes de mutation (`POST lignes`,
+// `PUT lignes/:id`, `DELETE lignes/:id`) — SANS `RolesGuard` ni `CsrfGuard`.
+// C'est EXACTEMENT le résidu grave que cette extension vise à empêcher POUR
+// L'AVENIR, sauf qu'il existe déjà aujourd'hui : une session utilisateur de
+// N'IMPORTE QUEL rôle (viewer inclus, aucune restriction de rôle sur ces 3
+// routes) peut publier/modifier/masquer une ligne d'annuaire SANS jeton CSRF
+// (aucun garde CSRF global — vérifié `main.ts`/`app.module.ts`). Corriger
 // `annuaire.controller.ts` changerait un comportement de production hors du
 // brief de cette tâche (scope = `invoices.*`) et pourrait casser des e2e
 // existants qui s'appuient dessus (aucun e2e existant ne teste ce cas —
-// vérifié `annuaire-publication.e2e.test.ts`). EXCLU ci-dessous par une
-// liste NOMMÉE et bornée (pas un allowlist ouvert) : si une des 3 méthodes
-// listées venait à être corrigée (ou une 4ᵉ ajoutée par erreur), le test
-// `dette pré-existante` ci-dessous casserait, forçant une mise à jour
-// délibérée de cette liste plutôt qu'un oubli silencieux.
+// vérifié `annuaire-publication.e2e.test.ts`).
+//
+// DÉCISION CONTRÔLEUR (team lead, 2026-07-18) : correctif DÉDIÉ **Task 4bis**
+// planifié juste après cette tâche (triple guard `TenantAuthGuard, RolesGuard,
+// CsrfGuard` + `@Roles('owner','admin','accountant')` en miroir des 3 routes
+// dual-auth conformes ci-dessous, + e2e négatifs viewer/CSRF sur
+// `annuaire.controller.ts`, + mise à jour des e2e appelants existants). EXCLU
+// ci-dessous par une liste NOMMÉE et bornée (pas un allowlist ouvert) : si une
+// des 3 méthodes listées venait à être corrigée (Task 4bis) ou une 4ᵉ ajoutée
+// par erreur, le test `dette pré-existante` ci-dessous casserait, forçant une
+// mise à jour délibérée de cette liste plutôt qu'un oubli silencieux — à ce
+// moment-là, cette liste devra être vidée (ou réduite) par Task 4bis.
 const KNOWN_PRE_EXISTING_GAPS = new Set([
   'annuaire/annuaire.controller.ts#publish',
   'annuaire/annuaire.controller.ts#endEffect',
