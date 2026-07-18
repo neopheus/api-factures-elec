@@ -60,3 +60,11 @@ export const CDV_TRANSMISSION_SWEEP_JOB = 'cdv-transmission-sweep'
 // MaintenanceProcessor (branche dédiée), planifié par
 // CdvTransmissionScheduler.
 export const CDV_STUCK_RETRY_JOB = 'cdv-stuck-retry'
+// ROUTING_RETRY_JOB : reprise du routage destinataire best-effort (Task 3,
+// plan 3.4, D7) — rejoue `resolveAndRecord` sur les factures dont le routage
+// est resté `pending` (échec opérationnel) ou `unaddressable` (retriable),
+// miroir ARCHIVE_RETRY_JOB ci-dessus (rejeu DIRECT, pas d'enfilement).
+// `ambiguous` (nettoyage opérateur requis) n'est jamais balayé. Dispatché par
+// MaintenanceProcessor (branche dédiée), planifié par RoutingRetryScheduler
+// (worker/routing-retry.scheduler.ts).
+export const ROUTING_RETRY_JOB = 'routing-retry'

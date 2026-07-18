@@ -75,6 +75,15 @@ export interface TransmissionSummary {
   updatedAt: Date
 }
 
+// Résumé de l'IN d'un slot (plan 3.4, Task 2 : garde-fous D4 — l'existence
+// conditionne le 409, `status` porte le garde M-D4-1 « ≠ prepared »,
+// `periodEnd` est REPRIS pour le job RE, jamais fait confiance au client).
+export interface InitialTransmissionSummary {
+  id: string
+  status: EreportingStatus
+  periodEnd: string
+}
+
 export interface EreportingStatusEventRow {
   fromStatus: EreportingStatus | null
   toStatus: EreportingStatus
@@ -166,11 +175,19 @@ export class EreportingRepository {
   // Amendement A2 (MUST-FIX, anti double-envoi) : IDEMPOTENT pour type='IN' —
   // l'index unique partiel (migration 0016) arbitre le conflit
   // (declarant_id, flux_kind, period_start) UNIQUEMENT pour les lignes
-  // type='IN' ; un 'RE' n'entre jamais en conflit (rectificatifs libres,
-  // `rejetee` étant TERMINAL — Task 4). Sur conflit : recharge la ligne
-  // existante et renvoie `created: false` — le worker (Task 8) s'en sert pour
-  // sauter une période déjà transmise au lieu de la ré-émettre au PPF.
-  // Écrit AUSSI l'événement journal initial `prepared` (from=NULL,
+  // type='IN'. Sur conflit : recharge la ligne existante et renvoie
+  // `created: false` — le worker (Task 8) s'en sert pour sauter une période
+  // déjà transmise au lieu de la ré-émettre au PPF.
+  //
+  // Plan 3.4 (D3, D5) : le conflit est désormais arbitré PAR `row.type`. Le
+  // chemin IN ci-dessus est INCHANGÉ (même target 3 colonnes, même where,
+  // même recharge) — un RE n'y entre JAMAIS. Le chemin RE cible le NOUVEL
+  // index partiel (declarant_id, flux_kind, period_start, transmission_ref)
+  // WHERE type='RE' (migration 0027) : deux RE de refs DIFFÉRENTS (reSeq
+  // distincts) restent tous deux `created:true` (rectificatifs libres, note
+  // 127) ; seul un REJEU du MÊME job RE (même ref) conflicte et reprend
+  // (created:false → resume verbatim via persistAndTransmit, inchangé).
+  // Écrit AUSSI l'événement journal initial `prepared`/`rejetee` (from=NULL,
   // actor='platform') dans la MÊME transaction — miroir de
   // InvoicesRepository.insertReceived (2.1).
   async insertTransmission(
@@ -195,14 +212,26 @@ export class EreportingRepository {
           xml: row.xml,
           status: initialStatus,
         })
-        .onConflictDoNothing({
-          target: [
-            ereportingTransmissions.declarantId,
-            ereportingTransmissions.fluxKind,
-            ereportingTransmissions.periodStart,
-          ],
-          where: sql`${ereportingTransmissions.type} = 'IN'`,
-        })
+        .onConflictDoNothing(
+          row.type === 'RE'
+            ? {
+                target: [
+                  ereportingTransmissions.declarantId,
+                  ereportingTransmissions.fluxKind,
+                  ereportingTransmissions.periodStart,
+                  ereportingTransmissions.transmissionRef,
+                ],
+                where: sql`${ereportingTransmissions.type} = 'RE'`,
+              }
+            : {
+                target: [
+                  ereportingTransmissions.declarantId,
+                  ereportingTransmissions.fluxKind,
+                  ereportingTransmissions.periodStart,
+                ],
+                where: sql`${ereportingTransmissions.type} = 'IN'`,
+              },
+        )
         .returning({ id: ereportingTransmissions.id })
 
       const createdRow = inserted[0]
@@ -218,18 +247,30 @@ export class EreportingRepository {
         return { id: createdRow.id, created: true }
       }
 
-      // Conflit : une transmission 'IN' existe déjà pour (déclarant, flux,
-      // période) — la recharger plutôt que d'en émettre une seconde.
+      // Conflit : une transmission du MÊME type existe déjà pour ce slot (IN :
+      // déclarant×flux×période ; RE : déclarant×flux×période×ref) — la
+      // recharger plutôt que d'en émettre une seconde.
       const existing = await db
         .select({ id: ereportingTransmissions.id })
         .from(ereportingTransmissions)
         .where(
-          and(
-            eq(ereportingTransmissions.declarantId, row.declarantId),
-            eq(ereportingTransmissions.fluxKind, row.fluxKind),
-            eq(ereportingTransmissions.periodStart, row.periodStart),
-            eq(ereportingTransmissions.type, 'IN'),
-          ),
+          row.type === 'RE'
+            ? and(
+                eq(ereportingTransmissions.declarantId, row.declarantId),
+                eq(ereportingTransmissions.fluxKind, row.fluxKind),
+                eq(ereportingTransmissions.periodStart, row.periodStart),
+                eq(
+                  ereportingTransmissions.transmissionRef,
+                  row.transmissionRef,
+                ),
+                eq(ereportingTransmissions.type, 'RE'),
+              )
+            : and(
+                eq(ereportingTransmissions.declarantId, row.declarantId),
+                eq(ereportingTransmissions.fluxKind, row.fluxKind),
+                eq(ereportingTransmissions.periodStart, row.periodStart),
+                eq(ereportingTransmissions.type, 'IN'),
+              ),
         )
         .limit(1)
       const existingRow = existing[0]
@@ -398,6 +439,65 @@ export class EreportingRepository {
         .from(ereportingStatusEvents)
         .where(eq(ereportingStatusEvents.transmissionId, id))
         .orderBy(asc(ereportingStatusEvents.createdAt))
+    })
+  }
+
+  // Nombre de RE déjà committés pour ce slot (plan 3.4, D3 — Task 2 s'en sert
+  // pour dériver `reSeq = countRetransmissions(...)` à l'enfilement : DEUX
+  // déclenchements concurrents lisent le même compte → même reSeq → collapse
+  // voulu, anti-double-clic ; un RE ultérieur lit un compte incrémenté →
+  // émission distincte). RLS via tenant.run.
+  async countRetransmissions(
+    tenantId: string,
+    declarantId: string,
+    fluxKind: FluxKind,
+    periodStart: string,
+  ): Promise<number> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(ereportingTransmissions)
+        .where(
+          and(
+            eq(ereportingTransmissions.declarantId, declarantId),
+            eq(ereportingTransmissions.fluxKind, fluxKind),
+            eq(ereportingTransmissions.periodStart, periodStart),
+            eq(ereportingTransmissions.type, 'RE'),
+          ),
+        )
+      return rows[0]?.count ?? 0
+    })
+  }
+
+  // L'IN du slot (plan 3.4, D4 : Task 2 l'EXIGE avant tout RE — « erreur sur
+  // des données TRANSMISES » implique qu'un IN existe ; `null` ⇒ 409).
+  // Accepté quel que soit son statut (prepared/transmitted/deposee/rejetee) —
+  // le garde `status ≠ 'prepared'` (amendement M-D4-1) est appliqué par
+  // l'APPELANT (Task 2), pas ici (lecture pure). RLS via tenant.run.
+  async findInitialTransmission(
+    tenantId: string,
+    declarantId: string,
+    fluxKind: FluxKind,
+    periodStart: string,
+  ): Promise<InitialTransmissionSummary | null> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({
+          id: ereportingTransmissions.id,
+          status: ereportingTransmissions.status,
+          periodEnd: ereportingTransmissions.periodEnd,
+        })
+        .from(ereportingTransmissions)
+        .where(
+          and(
+            eq(ereportingTransmissions.declarantId, declarantId),
+            eq(ereportingTransmissions.fluxKind, fluxKind),
+            eq(ereportingTransmissions.periodStart, periodStart),
+            eq(ereportingTransmissions.type, 'IN'),
+          ),
+        )
+        .limit(1)
+      return rows[0] ?? null
     })
   }
 

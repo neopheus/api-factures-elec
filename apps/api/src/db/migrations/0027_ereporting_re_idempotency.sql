@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "ereporting_transmissions_declarant_flux_period_re_ref_unique" ON "ereporting_transmissions" USING btree ("declarant_id","flux_kind","period_start","transmission_ref") WHERE "ereporting_transmissions"."type" = 'RE';

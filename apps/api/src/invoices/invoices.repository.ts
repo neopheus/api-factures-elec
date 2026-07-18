@@ -27,15 +27,18 @@ export interface InvoiceSummary {
   status: string
   lifecycleStatus: string
   createdAt: Date
-}
-
-// Détail d'UNE facture (GET /invoices/:id, Task 1) : étend le résumé de liste
-// avec le routage destinataire (métadonnée mutable, D3) — volontairement PAS
-// ajouté à `InvoiceSummary`/`list()` (on ne widen pas le DTO de liste).
-export interface InvoiceDetail extends InvoiceSummary {
   routingStatus: string
   recipientPlatform: string | null
 }
+
+// Alias sémantique de `InvoiceSummary` (Task 4, plan 3.4, D8 — revert
+// JUSTIFIÉ de D3/3.3) : la restriction « ne pas widen le DTO de liste »
+// était motivée par l'absence de consommateur ; le filtre
+// `GET /invoices?routingStatus=` EST ce consommateur, et `list()` expose
+// désormais `routingStatus`/`recipientPlatform` au même titre que
+// `findById()` — la distinction InvoiceDetail/InvoiceSummary n'a plus de
+// raison d'être (GET /invoices/:id reste inchangé côté forme de réponse).
+export type InvoiceDetail = InvoiceSummary
 
 export interface StatusEvent {
   fromStatus: string | null
@@ -342,10 +345,18 @@ export class InvoicesRepository {
   // (castée `::timestamptz`, jamais reconvertie en Date JS). `createdAt`
   // (Date, précision ms) reste inchangé côté API publique — seule la
   // mécanique interne du curseur est micro-précise.
+  //
+  // Filtre `routingStatus` (Task 4, plan 3.4, D8) : combiné au keyset via
+  // `and(keyset, statusFilter)` — drizzle ignore les conditions `undefined`
+  // (voir `and()`/`or()`, drizzle-orm/sql/expressions/conditions), donc sans
+  // paramètre `and(undefined, undefined) === undefined` ⇒ `.where(undefined)`,
+  // comportement byte-identique à l'existant. Le keyset micro-précis
+  // lui-même n'est JAMAIS altéré par ce filtre.
   async list(
     tenantId: string,
     limit: number,
     cursor?: string,
+    routingStatus?: RoutingStatus,
   ): Promise<{ items: InvoiceSummary[]; nextCursor: string | null }> {
     return this.tenant.run(tenantId, async (db) => {
       const decoded = cursor ? decodeCursor(cursor) : null
@@ -360,6 +371,9 @@ export class InvoicesRepository {
               ),
             )
           : undefined
+      const statusFilter = routingStatus
+        ? eq(invoices.routingStatus, routingStatus)
+        : undefined
       const createdAtRaw = sql<string>`to_char(${invoices.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
       const rows = await db
         .select({
@@ -371,10 +385,12 @@ export class InvoicesRepository {
           status: invoices.status,
           lifecycleStatus: invoices.lifecycleStatus,
           createdAt: invoices.createdAt,
+          routingStatus: invoices.routingStatus,
+          recipientPlatform: invoices.recipientPlatform,
           createdAtRaw,
         })
         .from(invoices)
-        .where(keyset)
+        .where(and(keyset, statusFilter))
         .orderBy(desc(invoices.createdAt), desc(invoices.id))
         .limit(limit + 1)
       const hasMore = rows.length > limit

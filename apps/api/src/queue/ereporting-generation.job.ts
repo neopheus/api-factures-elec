@@ -21,4 +21,9 @@ export interface EreportingGenerationJob {
   periodStart: string
   periodEnd: string
   type: TransmissionType
+  // Discriminant du rectificatif (plan 3.4, D3) : nombre de RE déjà committés
+  // pour ce slot, lu à l'enfilement (countRetransmissions, Task 2) — OMIS par
+  // le sweep pour un IN (payload minimal préservé). Traverse tel quel
+  // jusqu'à buildTransmissionRef (ignoré si type='IN').
+  reSeq?: number
 }

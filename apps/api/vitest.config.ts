@@ -12,6 +12,7 @@ import { defineConfig } from 'vitest/config'
 const HEAVY_TESTS = [
   'tests/e2e/ereporting-generation.e2e.test.ts',
   'tests/e2e/ereporting-payments.e2e.test.ts',
+  'tests/e2e/ereporting-retransmission.e2e.test.ts',
   'tests/e2e/annuaire-sync.e2e.test.ts',
   'tests/e2e/cdv-transmission-sweep.e2e.test.ts',
   'tests/e2e/async-generation.e2e.test.ts',
@@ -19,6 +20,7 @@ const HEAVY_TESTS = [
   'tests/e2e/ereporting-sweep.e2e.test.ts',
   'tests/e2e/session-purge.e2e.test.ts',
   'tests/e2e/invoice-routing.e2e.test.ts',
+  'tests/e2e/routing-retry.e2e.test.ts',
 ]
 
 export default defineConfig({

@@ -362,6 +362,14 @@ export const ereportingTransmissions = pgTable(
     uniqueIndex('ereporting_transmissions_declarant_flux_period_in_unique')
       .on(t.declarantId, t.fluxKind, t.periodStart)
       .where(sql`${t.type} = 'IN'`),
+    // Idempotence RE (plan 3.4, D3, migration 0027) : miroir de la partielle
+    // IN ci-dessus, mais sur `transmission_ref` en plus (declarant×flux×
+    // période reste LIBRE — plusieurs RE coexistent, note 127). Le ref RE
+    // encode un discriminant `reSeq` (buildTransmissionRef) — seul un REJEU
+    // du MÊME job (même ref) entre en conflit ici, jamais deux RE distincts.
+    uniqueIndex('ereporting_transmissions_declarant_flux_period_re_ref_unique')
+      .on(t.declarantId, t.fluxKind, t.periodStart, t.transmissionRef)
+      .where(sql`${t.type} = 'RE'`),
   ],
 )
 

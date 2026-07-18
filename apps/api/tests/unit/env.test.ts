@@ -178,6 +178,22 @@ describe('validateEnv', () => {
     ).toThrow(/ARCHIVE_RETRY_EVERY_MS/)
   })
 
+  it('applies the routing retry cadence default (5 min)', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    })
+    expect(env.ROUTING_RETRY_EVERY_MS).toBe(300_000)
+  })
+
+  it('rejects a non-positive ROUTING_RETRY_EVERY_MS', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+        ROUTING_RETRY_EVERY_MS: '0',
+      }),
+    ).toThrow(/ROUTING_RETRY_EVERY_MS/)
+  })
+
   it('applies e-reporting Flux 10 defaults', () => {
     const env = validateEnv({
       DATABASE_URL: 'postgres://u:p@localhost:5432/db',
