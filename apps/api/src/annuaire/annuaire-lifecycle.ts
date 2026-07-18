@@ -1,17 +1,26 @@
 // Cycle de vie de PUBLICATION annuaire — DISTINCT du CDV facture (200-213) et
 // du CDV e-reporting Flux 10 (300/301) (D6, plan 2.4 Task 4). États internes
 // PA `draft` (rédigée localement) → `published` (émise au PPF via le port,
-// Flux 13) puis acquittement PPF `deposee` (acceptée) ⊕ `rejetee` (motif
-// requis, chaîne libre — aucun code de rejet réglementaire « Tableau »
-// n'existe pour l'annuaire, contrairement au REJ_* e-reporting, D6), plus un
-// chemin `masked` atteignable depuis `deposee` (fin d'adressage via
-// Nature='M' — une ligne déposée/en vigueur peut être masquée).
+// Flux 13) puis acquittement PPF `deposee` ⊕ `rejetee`, plus un chemin
+// `masked` atteignable depuis `deposee` (fin d'adressage via Nature='M' —
+// une ligne déposée/en vigueur peut être masquée).
 //
-// Aucun code officiel DGFiP n'est documenté pour la publication annuaire
-// (contraste avec les 300/301 e-reporting, Tableau 5/6) → `code: null` sur
-// TOUS les statuts (leçon 2.3-A3 : ne jamais attribuer un faux code
-// réglementaire à un état interne PA, seuls les codes effectivement
-// documentés par la DGFiP portent un entier).
+// CODES RÉGLEMENTAIRES (correctif backlog 3.6 — l'ancienne bannière affirmait
+// à tort qu'aucun code officiel n'existait ; extraction primaire du dossier
+// général v3.2, §3.5.7 Tableau 6 p.54) : la DGFiP documente DEUX statuts
+// obligatoires de ligne d'annuaire — 400 « Acceptée » (contrôlée conforme et
+// intégrée) et 401 « Rejetée » (contrôlée non conforme, pas intégrée). Ils
+// portent donc leur entier sur `deposee`/`rejetee` ; les états INTERNES PA
+// (`draft`/`published`/`masked`) restent `code: null` (leçon 2.3-A3 : ne
+// jamais attribuer un faux code réglementaire à un état interne PA).
+//
+// MOTIFS DE REJET (même correctif) : §3.5.8 Tableau 7 p.55 documente QUATRE
+// motifs normatifs (REJ_RG, REJ_HAB, REJ_COH, REJ_VAL_INC). Le champ motif
+// de `recordAck` reste aujourd'hui une chaîne libre — le CONTRAINDRE à ces 4
+// codes est une DETTE explicite, liée au raccordement des adaptateurs
+// annuaire réels (les acquittements réels porteront ces codes ; item
+// Xavier) : changer le contrat maintenant, sans source d'acks réelle,
+// fabriquerait une validation sur un flux que le port local ne produit pas.
 //
 // A-DEADLOCK (revue 2.4, .superpowers/sdd/plan-2-4-review.md) : TERMINAL =
 // {rejetee, masked} — `deposee` n'est PAS terminal (transition possible vers
@@ -27,8 +36,9 @@
 export const ANNUAIRE_STATUS_META = {
   draft: { code: null, label: 'Rédigée (PA)' },
   published: { code: null, label: 'Publiée au PPF (PA)' },
-  deposee: { code: null, label: 'Déposée (PPF)' },
-  rejetee: { code: null, label: 'Rejetée (PPF)' },
+  // Libellés 400/401 = Tableau 6 p.54 VERBATIM (« Acceptée »/« Rejetée »).
+  deposee: { code: 400, label: 'Acceptée (PPF)' },
+  rejetee: { code: 401, label: 'Rejetée (PPF)' },
   masked: { code: null, label: 'Masquée' },
 } as const satisfies Record<string, { code: number | null; label: string }>
 

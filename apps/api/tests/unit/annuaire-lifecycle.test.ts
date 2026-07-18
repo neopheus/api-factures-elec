@@ -30,11 +30,23 @@ const EXPECTED_ALLOWED: Record<AnnuaireLigneStatus, AnnuaireLigneStatus[]> = {
 }
 
 describe('machine à états publication annuaire (draft→published→déposée/rejetée, masquage)', () => {
-  it('ancre code:null sur tous les statuts (aucun code réglementaire DGFiP pour l’annuaire)', () => {
-    // Aucun « Tableau » de codes officiels n'existe pour l'annuaire
-    // (contrairement au 300/301 e-reporting) — leçon 2.3-A3 : ne jamais
-    // inventer un faux code réglementaire pour un état interne PA.
-    for (const status of ALL_STATUSES) {
+  it('ancre les codes DGFiP du Tableau 6 (400 Acceptée / 401 Rejetée) et code:null sur les états internes PA', () => {
+    // Oracle indépendant retranscrit À LA MAIN du dossier général v3.2,
+    // §3.5.7 Tableau 6 p.54 (correctif backlog 3.6 — l'ancien test ancrait
+    // code:null partout sur la foi d'une bannière FAUSSE « aucun code
+    // officiel ») : 400 « Acceptée » / 401 « Rejetée », caractère
+    // Obligatoire. Les états INTERNES PA (draft/published/masked) restent
+    // null — leçon 2.3-A3 : jamais de faux code réglementaire sur un état
+    // interne.
+    expect(ANNUAIRE_STATUS_META.deposee).toEqual({
+      code: 400,
+      label: 'Acceptée (PPF)',
+    })
+    expect(ANNUAIRE_STATUS_META.rejetee).toEqual({
+      code: 401,
+      label: 'Rejetée (PPF)',
+    })
+    for (const status of ['draft', 'published', 'masked'] as const) {
       expect(ANNUAIRE_STATUS_META[status].code).toBeNull()
     }
   })

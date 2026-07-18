@@ -506,10 +506,13 @@ export const annuaireLignes = pgTable(
   ],
 )
 
-// Journal APPEND-ONLY du cycle de vie annuaire — NON scellé (D6, motif
-// libre : aucun code de rejet réglementaire annuaire, contrairement au
-// REJ_* e-reporting) : pas de trigger de hash-chain, grants SELECT/INSERT
-// seuls (migration 0019).
+// Journal APPEND-ONLY du cycle de vie annuaire — NON scellé (D6) : pas de
+// trigger de hash-chain, grants SELECT/INSERT seuls (migration 0019). Motif
+// de rejet en chaîne LIBRE — correctif backlog 3.6 : des motifs normatifs
+// EXISTENT (§3.5.8 Tableau 7 p.55 : REJ_RG/REJ_HAB/REJ_COH/REJ_VAL_INC,
+// contrairement à ce que ce commentaire affirmait) ; la contrainte du champ
+// à ces 4 codes est une DETTE liée au raccordement des adaptateurs annuaire
+// réels (cf. annuaire-lifecycle.ts, bannière MOTIFS DE REJET).
 export const annuaireLigneEvents = pgTable(
   'annuaire_ligne_events',
   {

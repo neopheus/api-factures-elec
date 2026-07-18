@@ -189,8 +189,10 @@ API publique pour les systèmes custom.
 > routage `'9999'` (placeholder structurel, aucune valeur positive normée —
 > **à confirmer avec la DGFiP/PPF**), prédicat de couverture du consentement
 > (même SIREN + maille égale ou plus large, §3.5.5.5 non normative), motif de
-> rejet en chaîne libre (aucun code réglementaire annuaire, contraste
-> REJ_* e-reporting), F14 complet authentiquement vide traité en **no-op**
+> rejet en chaîne libre (les motifs normatifs REJ_RG/HAB/COH/VAL_INC du
+> Tableau 7 p.55 EXISTENT — correctif 3.6 : contrainte différée au
+> raccordement des adaptateurs réels ; les statuts 400/401 du Tableau 6
+> portent désormais leur code), F14 complet authentiquement vide traité en **no-op**
 > plutôt qu'en vidage du miroir (défaut sûr délibéré — une désactivation
 > totale authentique côté PPF ne convergerait donc jamais par ce seul
 > chemin). **959 tests** au total (`invoice-core` 129 100 % · `apps/api` 782
@@ -864,10 +866,10 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       cascade réelle vers le PPF (Flux 13 masquage + clôture + ligne
       fallback plateforme fictive `9998`), raison de révocation stockée
       (aucune colonne), outils d'actualisation post-révocation en masse.
-      **Backlog dédié acté (hors périmètre, non lié à la révocation)** :
-      divergence Tableau 6 — `annuaire-lifecycle.ts` affirme « aucun code
-      officiel DGFiP » alors que §3.5.7 p.54 documente les codes **400
-      Acceptée / 401 Rejetée** pour le cycle de publication annuaire.
+      **Backlog Tableau 6 : SOLDÉ** (correctif post-3.6) — `deposee`/
+      `rejetee` portent désormais les codes **400 Acceptée / 401 Rejetée**
+      (§3.5.7 p.54) ; motifs normatifs Tableau 7 actés, contrainte différée
+      aux adaptateurs réels.
       Détail complet : `apps/api/README.md` § Révocation de consentement —
       3.6.
 
