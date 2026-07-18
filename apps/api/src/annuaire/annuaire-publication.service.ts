@@ -12,6 +12,11 @@ import {
   motifRequired,
 } from './annuaire-lifecycle.js'
 import { validateAnnuaireActualisationXml } from './annuaire-xsd-validator.js'
+import {
+  CONSENT_SIGNATURE,
+  type ConsentSealResult,
+  type ConsentSignaturePort,
+} from './consent-signature.port.js'
 import { generateActualisationXml } from './flux13-xml.js'
 import {
   coversTarget,
@@ -59,6 +64,18 @@ export class MotifRequiredError extends Error {
   constructor(readonly outcome: string) {
     super(`un motif est requis pour l'issue '${outcome}'`)
     this.name = 'MotifRequiredError'
+  }
+}
+
+// Scellement de la preuve déclarée (branche `proof`, D3) rejeté par le
+// driver `CONSENT_SIGNATURE` — sœur de `ConsentRequiredError`, MÊME 422
+// côté `AnnuaireController.mapPublicationError` (corps distinct autorisé,
+// pas un anti-fuite : cette erreur ne fuite aucune existence, seulement un
+// échec de scellement).
+export class ConsentSignatureError extends Error {
+  constructor(readonly reason: string) {
+    super(`échec du scellement de la preuve de consentement : ${reason}`)
+    this.name = 'ConsentSignatureError'
   }
 }
 
@@ -123,6 +140,8 @@ export class AnnuairePublicationService {
   constructor(
     private readonly repo: AnnuaireRepository,
     @Inject(ANNUAIRE_TRANSPORT) private readonly port: AnnuairePort,
+    @Inject(CONSENT_SIGNATURE)
+    private readonly consentSignature: ConsentSignaturePort,
   ) {}
 
   // Gate consentement (D5, A-CONSENT, INTERPRÉTATION Task 8 — "consentId ou
@@ -161,7 +180,29 @@ export class AnnuairePublicationService {
     }
 
     if (input.proof) {
-      await this.repo.insertConsent(tenantId, { ...maille, ...input.proof })
+      // D3 : scellement AVANT insertConsent — un throw du driver (impl
+      // locale : jamais en usage normal ; driver réel différé) empêche
+      // TOUTE écriture du consentement (donc de la ligne). `evidence_ref`
+      // persisté = `seal.sealRef` (référence vérifiable de la preuve
+      // canonique write-once), JAMAIS la chaîne client brute — celle-ci
+      // reste conservée dans le contenu scellé (WORM), donc non perdue.
+      let seal: ConsentSealResult
+      try {
+        seal = await this.consentSignature.seal({
+          tenantId,
+          ...maille,
+          ...input.proof,
+        })
+      } catch (err) {
+        throw new ConsentSignatureError(
+          err instanceof Error ? err.message : String(err),
+        )
+      }
+      await this.repo.insertConsent(tenantId, {
+        ...maille,
+        ...input.proof,
+        evidenceRef: seal.sealRef,
+      })
     }
 
     const consent = await this.repo.findActiveConsent(tenantId, maille)

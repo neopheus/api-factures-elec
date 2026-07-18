@@ -7,6 +7,7 @@ import { AnnuaireRepository } from './annuaire.repository.js'
 import { AnnuaireConsultationService } from './annuaire-consultation.service.js'
 import { AnnuairePublicationService } from './annuaire-publication.service.js'
 import { AnnuaireTransportModule } from './annuaire-transport.module.js'
+import { ConsentSignatureModule } from './consent-signature.module.js'
 
 // Calqué `EreportingModule` (Task 9, plan 2.3) : `TenantAuthGuard` dépend
 // d'`ApiKeyService` (`AuthModule`) ET de `SessionService` (`UsersModule`) —
@@ -18,8 +19,17 @@ import { AnnuaireTransportModule } from './annuaire-transport.module.js'
 // `@Global()` — l'importer ICI suffit à exposer `ANNUAIRE_TRANSPORT` à toute
 // l'app (motif `EreportingTransmissionModule`, jamais importé ailleurs avant
 // Task 8) ; `AnnuairePublicationService` (Task 8) en dépend (`@Inject`).
+// `ConsentSignatureModule` (Task 1, plan 3.5) est également `@Global()`,
+// même motif : l'importer ICI expose `CONSENT_SIGNATURE` à toute l'app,
+// requis par `AnnuairePublicationService` (Task 2, 3.5) pour le scellement
+// de la preuve de consentement à la création (branche `proof`, D3).
 @Module({
-  imports: [AuthModule, UsersModule, AnnuaireTransportModule],
+  imports: [
+    AuthModule,
+    UsersModule,
+    AnnuaireTransportModule,
+    ConsentSignatureModule,
+  ],
   controllers: [AnnuaireController],
   providers: [
     AnnuaireRepository,

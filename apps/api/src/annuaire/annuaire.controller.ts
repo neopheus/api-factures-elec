@@ -29,6 +29,7 @@ import {
 import {
   AnnuairePublicationService,
   ConsentRequiredError,
+  ConsentSignatureError,
   InvalidLignePeriodError,
   StaleLigneTransitionError,
 } from './annuaire-publication.service.js'
@@ -218,6 +219,13 @@ export class AnnuaireController {
         problem(422, ProblemType.businessRule, 'Consent required', {
           detail:
             'aucun consentement actif ne couvre cette maille (§3.5.5.5, D5)',
+        }),
+      )
+    }
+    if (err instanceof ConsentSignatureError) {
+      return new UnprocessableEntityException(
+        problem(422, ProblemType.businessRule, 'Consent signature rejected', {
+          detail: err.message,
         }),
       )
     }
