@@ -21,7 +21,8 @@ import { Roles, RolesGuard } from '../auth/roles.guard.js'
 import { SessionGuard } from '../auth/session.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
-import { parseBody } from '../common/validation.js'
+import { parseBody, parseQuery } from '../common/validation.js'
+import { routingStatus as routingStatusEnum } from '../db/schema.js'
 import { parseFormatKind } from './format-kind.js'
 // biome-ignore lint/style/useImportType: InvoicesService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { InvoicesService } from './invoices.service.js'
@@ -32,6 +33,13 @@ import { isLifecycleStatus, type LifecycleStatus } from './lifecycle-status.js'
 const transitionSchema = z.object({
   toStatus: z.string().refine(isLifecycleStatus, 'unknown lifecycle status'),
   reason: z.string().min(1).max(1000).optional(),
+})
+
+// Source unique (D8, plan 3.4) : l'enum zod dérive de `routingStatus.enumValues`
+// (db/schema.ts), jamais d'une liste recopiée — un ajout/retrait de valeur au
+// schéma se propage ici automatiquement.
+const listQuerySchema = z.object({
+  routingStatus: z.enum(routingStatusEnum.enumValues).optional(),
 })
 
 // Guards posés PAR MÉTHODE (pas de classe) : l'ingestion (POST) reste
@@ -61,12 +69,14 @@ export class InvoicesController {
     @CurrentTenant() tenantId: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @Query('routingStatus') routingStatus?: string,
   ) {
     const n = Number(limit)
     const safeLimit = Number.isFinite(n)
       ? Math.min(Math.max(Math.trunc(n), 1), 100)
       : 20
-    return this.invoices.list(tenantId, safeLimit, cursor)
+    const query = parseQuery(listQuerySchema, { routingStatus })
+    return this.invoices.list(tenantId, safeLimit, cursor, query.routingStatus)
   }
 
   @Get(':id')
