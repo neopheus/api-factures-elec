@@ -31,6 +31,8 @@ import type { EnvConfig } from '../config/env.js'
 import { AdminGuard } from './admin.guard.js'
 // biome-ignore lint/style/useImportType: AdminService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { AdminService } from './admin.service.js'
+// biome-ignore lint/style/useImportType: AdminJobsService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
+import { AdminJobsService } from './admin-jobs.service.js'
 
 const loginSchema = z.object({
   email: z.email(),
@@ -45,12 +47,21 @@ const suspendSchema = z.object({
   reason: z.string().min(1).max(500),
 })
 
+// Relance jobs échoués (Task 5, spec §3) : `limit` borné 1..500, défaut 100
+// — `.default(100)` couvre le body ENTIÈREMENT absent (`parseBody(schema,
+// body ?? {})` ci-dessous), contrairement à `suspendSchema.reason` qui reste
+// obligatoire (aucun défaut sensé pour un motif de suspension).
+const retryJobsSchema = z.object({
+  limit: z.number().int().min(1).max(500).default(100),
+})
+
 @Controller('admin')
 export class AdminController {
   constructor(
     private readonly admin: AdminService,
     private readonly sessions: SessionService,
     private readonly config: ConfigService<EnvConfig, true>,
+    private readonly jobs: AdminJobsService,
   ) {}
 
   @Post('login')
@@ -157,10 +168,28 @@ export class AdminController {
     }
   }
 
-  private notFound(): NotFoundException {
-    return new NotFoundException(
-      problem(404, ProblemType.notFound, 'Unknown tenant'),
-    )
+  // Relance admin des jobs échoués d'une file (Task 5, spec §3) — `:queue` =
+  // nom PUBLIC exact d'une constante de queue.constants.ts (allowlist
+  // STRICTE posée par AdminJobsService, JAMAIS un nom Redis arbitraire) ;
+  // inconnu → 404 (même garde générique que tenantDetail/suspendTenant :
+  // `result === null` → `notFound()`). `body` peut être ENTIÈREMENT absent
+  // (`?? {}`) : `limit` a un défaut zod (100), motif retryJobsSchema.
+  @Post('jobs/:queue/retry')
+  @HttpCode(200)
+  @UseGuards(SessionGuard, AdminGuard, CsrfGuard)
+  async retryJobs(
+    @Param('queue') queueName: string,
+    @Body() body: unknown,
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ): Promise<{ retried: number; errors: number }> {
+    const { limit } = parseBody(retryJobsSchema, body ?? {})
+    const result = await this.jobs.retryFailed(queueName, admin.adminId, limit)
+    if (result === null) throw this.notFound('Unknown queue')
+    return result
+  }
+
+  private notFound(title = 'Unknown tenant'): NotFoundException {
+    return new NotFoundException(problem(404, ProblemType.notFound, title))
   }
 
   private conflict(detail: string): ConflictException {

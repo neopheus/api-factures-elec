@@ -4,6 +4,7 @@ import type { Response } from 'express'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdminController } from '../../src/admin/admin.controller.js'
 import type { AdminService } from '../../src/admin/admin.service.js'
+import type { AdminJobsService } from '../../src/admin/admin-jobs.service.js'
 import type { AdminTenantDetail } from '../../src/admin/admin-supervision.repository.js'
 import type {
   AuthenticatedAdmin,
@@ -45,6 +46,9 @@ describe('AdminController', () => {
     revoke: ReturnType<typeof vi.fn>
     ttlMs: ReturnType<typeof vi.fn>
   }
+  let jobs: {
+    retryFailed: ReturnType<typeof vi.fn>
+  }
   let controller: AdminController
 
   beforeEach(() => {
@@ -60,10 +64,14 @@ describe('AdminController', () => {
       revoke: vi.fn(),
       ttlMs: vi.fn().mockReturnValue(1000),
     }
+    jobs = {
+      retryFailed: vi.fn(),
+    }
     controller = new AdminController(
       admin as unknown as AdminService,
       sessions as unknown as SessionService,
       fakeConfig(),
+      jobs as unknown as AdminJobsService,
     )
   })
 
@@ -289,6 +297,75 @@ describe('AdminController', () => {
 
       expect(result).toBeUndefined()
       expect(admin.unsuspendTenant).toHaveBeenCalledWith(VALID_UUID, 'a1')
+    })
+  })
+
+  // Nouveau (Task 5, spec §3) : POST /admin/jobs/:queue/retry.
+  describe('retryJobs', () => {
+    it('defaults limit to 100 when the body is entirely absent (undefined, `?? {}` fallback)', async () => {
+      jobs.retryFailed.mockResolvedValue({ retried: 0, errors: 0 })
+
+      await controller.retryJobs('invoice-generation', undefined, FAKE_ADMIN)
+
+      expect(jobs.retryFailed).toHaveBeenCalledWith(
+        'invoice-generation',
+        'a1',
+        100,
+      )
+    })
+
+    it('defaults limit to 100 when the body is empty, forwards the admin id from @CurrentAdmin', async () => {
+      jobs.retryFailed.mockResolvedValue({ retried: 3, errors: 0 })
+
+      const result = await controller.retryJobs(
+        'invoice-generation',
+        {},
+        FAKE_ADMIN,
+      )
+
+      expect(jobs.retryFailed).toHaveBeenCalledWith(
+        'invoice-generation',
+        'a1',
+        100,
+      )
+      expect(result).toEqual({ retried: 3, errors: 0 })
+    })
+
+    it('forwards an explicit limit within [1, 500]', async () => {
+      jobs.retryFailed.mockResolvedValue({ retried: 0, errors: 0 })
+
+      await controller.retryJobs('maintenance', { limit: 250 }, FAKE_ADMIN)
+
+      expect(jobs.retryFailed).toHaveBeenCalledWith('maintenance', 'a1', 250)
+    })
+
+    it('rejects limit = 0 with a validation error, WITHOUT calling the service', async () => {
+      await expect(
+        controller.retryJobs('maintenance', { limit: 0 }, FAKE_ADMIN),
+      ).rejects.toThrow()
+      expect(jobs.retryFailed).not.toHaveBeenCalled()
+    })
+
+    it('rejects limit = 501 (above the 500 cap) with a validation error', async () => {
+      await expect(
+        controller.retryJobs('maintenance', { limit: 501 }, FAKE_ADMIN),
+      ).rejects.toThrow()
+      expect(jobs.retryFailed).not.toHaveBeenCalled()
+    })
+
+    it('404 when the service reports the queue name is outside the allowlist', async () => {
+      jobs.retryFailed.mockResolvedValue(null)
+
+      const err = await controller
+        .retryJobs('not-a-real-queue', {}, FAKE_ADMIN)
+        .catch((e) => e)
+
+      expect(err).toBeInstanceOf(NotFoundException)
+      expect(jobs.retryFailed).toHaveBeenCalledWith(
+        'not-a-real-queue',
+        'a1',
+        100,
+      )
     })
   })
 })

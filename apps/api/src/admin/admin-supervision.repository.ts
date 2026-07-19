@@ -293,4 +293,25 @@ export class AdminSupervisionRepository {
       return { outcome: 'unsuspended' }
     })
   }
+
+  // Journalisation générique admin_actions (Task 5, spec §3, retry_jobs) —
+  // contrairement à suspend/unsuspend ci-dessus, cette écriture n'a AUCUN
+  // tenant à scoper (`tenantId` nullable : retry_jobs journalise `null`,
+  // action cross-tenant par nature, une file BullMQ n'appartient à aucun
+  // tenant précis) : un simple INSERT direct sur le pool applicatif suffit,
+  // SANS passer par `tenant.run` — `admin_actions` n'a AUCUNE RLS (migration
+  // 0031 : GRANT SELECT/INSERT à factelec_app sans policy, motif commentaire
+  // migration « table plateforme, pas tenant-scopée »), donc aucun
+  // `app.tenant_id` n'est requis pour que cet INSERT réussisse.
+  async logAction(
+    adminId: string,
+    action: string,
+    tenantId: string | null,
+    detail: Record<string, unknown>,
+  ): Promise<void> {
+    await this.pool.query(
+      'INSERT INTO admin_actions (admin_id, action, tenant_id, detail) VALUES ($1, $2, $3, $4::jsonb)',
+      [adminId, action, tenantId, JSON.stringify(detail)],
+    )
+  }
 }
