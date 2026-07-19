@@ -178,3 +178,19 @@ ou bloqué. Aucun composant de paiement embarqué.
   sandbox ; tout le développement et la CI passent par le driver `fake`.
 - Nouvelle dépendance npm : `stripe` (SDK officiel, dernière stable —
   gate outdated vierge).
+
+## Amendement A1 (2026-07-19, post-revue finale de branche — arbitrage Xavier)
+
+Le principe « l'événement Stripe est l'état complet, pas un patch partiel »
+(§ Modèle de données / applyEvent) est **amendé pour le seul champ
+`currentPeriodEnd`** : un événement qui ne PORTE pas la notion de période
+(`checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`)
+transmet désormais `undefined` (« non porté ») et **préserve** la valeur du
+miroir ; `null` explicite (porté par un `customer.subscription.*` sans
+période) continue d'effacer. Motivation : revue finale I1 — l'écrasement à
+null rendait `currentPeriodEnd` intermittent/null en production. S'y
+ajoutent : lecture de la période via `items.data[].current_period_end`
+(le champ top-level a disparu des API Stripe récentes) et CAS assoupli à
+`<=` sur `last_event_created` (les événements de la même seconde ne sont
+plus rejetés — le couple checkout+subscription.created arrive dans la même
+seconde et le second portait la période).
