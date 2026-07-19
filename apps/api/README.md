@@ -3023,8 +3023,269 @@ de paiement ne transite par Factelec.
   `tax_behavior: 'exclusive'`, cohérent avec des clients 100 % entreprises
   françaises (SIREN obligatoire) ; aucune détection de pays/régime n'est
   effectuée.
-- **Aucune vue facturation super admin** au-delà du statut miroir par
-  tenant (`GET /admin/tenants`, inchangé) — différé.
+- **Aucune vue facturation super admin dédiée** au-delà du statut miroir déjà
+  exposé par `billingStatus` sur `GET /admin/tenants` (enrichi phase 5 it.2,
+  § Supervision admin ci-dessous) — différé.
+
+## Supervision admin, MFA TOTP & observabilité (phase 5, itération 2)
+
+Deuxième axe de la phase 5 (Commercialisation), après le billing Stripe
+(itération 1 ci-dessus). Spec produit :
+[`docs/superpowers/specs/2026-07-19-phase5-it2-admin-observabilite-design.md`](../../docs/superpowers/specs/2026-07-19-phase5-it2-admin-observabilite-design.md).
+Trois décisions de cadrage validées : (1) le super admin reste **supervision
++ actions clés**, jamais un backoffice d'édition métier — **pas
+d'impersonation**, pas de feature flags ; (2) observabilité = **Prometheus**
+(`prom-client`) + healthcheck enrichi + corrélation `requestId`/
+`tenantId`/`adminId` dans les logs pino existants — **ni OpenTelemetry ni
+Sentry** (écartés : collecteur à héberger / compte externe) ; (3) **MFA TOTP
+obligatoire** pour le super admin + TTL de session dédié + codes de
+récupération — l'**allowlist IP reste hors code** (item infra).
+
+Migration `0031` (suspension + colonnes TOTP + journal `admin_actions` + 2
+fonctions SD), `0032` (fonctions SD du flux TOTP, `authenticate_platform_admin`
+élargie), `0033` (grant de lecture du journal de migrations pour le
+healthcheck).
+
+### Supervision — liste enrichie, détail, suspension/réactivation
+
+- **`GET /admin/tenants`** (remplace l'ancienne liste brute) délègue à la
+  fonction `SECURITY DEFINER` `find_admin_tenant_stats()` (migration `0031`,
+  `LANGUAGE sql`, un seul `SELECT`, colonnes projetées bornées — même posture
+  que les `find_billing_*` de `0030`) : `{ tenants: [{ id, name, siren,
+  createdAt, suspendedAt, billingStatus, invoices30d, ereporting30d,
+  deadLetters }] }`, triée `created_at DESC` **côté application**
+  (`AdminSupervisionRepository.tenantStats`, la fonction elle-même ne garantit
+  aucun ordre).
+- **`GET /admin/tenants/:id`** combine la même ligne de stats et une lecture
+  **RLS-scopée** (`tenant.run(tenantId, …)`) : les 10 dernières factures
+  (`id`, `number`, `lifecycleStatus`, `createdAt` — **jamais de montant**) et
+  l'état du miroir billing (`status`, `currentPeriodEnd`, `hasCustomer` —
+  **jamais** l'id Stripe brut, même à l'admin plateforme), plus les anomalies
+  de ce tenant (≤ 20, voir § Anomalies ci-dessous). `:id` malformé (garde
+  `isUuid`) ou tenant inconnu renvoient le **même** 404 anti-fuite
+  byte-identique.
+- **`POST /admin/tenants/:id/suspend`** (`{ reason: string, 1..500 }`) pose
+  `suspended_at = now()` + `suspended_reason` et journalise dans
+  `admin_actions` **dans la même transaction** (`tenant.run` = un seul
+  `BEGIN`/`COMMIT` : soit les deux écritures s'appliquent, soit aucune) —
+  idempotence : déjà suspendu → **409** (jamais un 200 silencieux qui
+  masquerait l'état réel). Réponse `{ suspendedAt }`.
+- **`POST /admin/tenants/:id/unsuspend`** — symétrique (`204`), efface les
+  deux colonnes, journalise ; non-suspendu → 409.
+- **`SuspensionGuard`** est posé sur les **2 mêmes mutations d'émission** que
+  `BillingGuard` (`POST /invoices`, `POST /ereporting/retransmissions`),
+  **après** lui dans la chaîne — lecture indexée par PK de
+  `tenants.suspended_at` (même coût que `BillingRepository.getState`).
+  Suspendu → **403** `urn:factelec:problem:tenant-suspended` (**jamais** 402 :
+  la suspension est une décision **opérateur**, pas commerciale). Contraste
+  volontaire avec `BillingGuard` : **aucune** échappatoire de configuration
+  (pas d'équivalent à `BILLING_DRIVER=none`/`BILLING_ENFORCEMENT=off`) — la
+  suspension s'applique **toujours**. Lectures/exports/transitions de statut
+  **jamais** bloqués ; le login des users du tenant suspendu reste possible
+  (consultation). `req.tenantId` absent en amont → `Error` non maîtrisé
+  (fail-loud, même posture que `BillingGuard`), jamais un 403 conservateur qui
+  masquerait un bug de câblage.
+- **Limite actée** : une suspension ne stoppe **pas** les jobs de génération
+  déjà en file au moment où elle est posée — le garde protège l'**entrée**
+  (nouvelles émissions), pas les jobs déjà enfilés qui s'exécutent
+  normalement.
+
+### Relance des jobs échoués — `POST /admin/jobs/:queue/retry`
+
+`AdminJobsService` matérialise une **allowlist fermée** = exactement les 5
+files de `queue.constants.ts`, en `Map` figée nom public → `Queue` injectée
+au constructeur. Un nom hors de cette Map renvoie `null` **immédiatement**
+(404 côté contrôleur) — **aucune** requête Redis n'est tentée pour un nom
+arbitraire (contrairement à `new Queue(queueName, …)`, qui créerait
+silencieusement une file inexistante). Corps `{ limit?: 1..500, défaut 100 }`
+→ `queue.getFailed(0, limit - 1)` puis `job.retry()` **un par un**, isolé
+dans un `try/catch` dédié — un `retry()` qui throw est compté en erreur et ne
+stoppe **jamais** la boucle. Réponse `{ retried, errors }`, journalisée dans
+`admin_actions` (`tenantId` toujours `null` : une file BullMQ est une
+ressource plateforme, jamais scopée à un tenant). File vide → `{ retried: 0,
+errors: 0 }` (200), pas une erreur. Testé en e2e **heavy** avec un **vrai**
+worker BullMQ (`tests/e2e/admin-jobs-retry.e2e.test.ts`, job forcé en échec
+puis relancé) — ajouté à `HEAVY_TESTS` (`vitest.config.ts`) dans le **même
+commit** que le fichier.
+
+### Vue anomalies — `GET /admin/anomalies`
+
+Délègue à `find_admin_anomalies(p_limit)` (migration `0031`, `SECURITY
+DEFINER`, un seul `SELECT` englobant un `UNION ALL` de 3 branches, chacune
+bornée `LIMIT p_limit` avant le tri global) : `invoice_dead_letters` récents
+(`kind: 'dead_letter'`), transmissions CDV `parked`/`rejected` récentes
+(`kind: 'cdv_parked'`), transmissions e-reporting `rejetee` récentes (`kind:
+'ereporting_failed'` — l'énum `ereporting_status` n'a pas de valeur
+`'failed'`, `rejetee` est l'état terminal d'échec le plus proche). Lecture
+seule, **jamais** de colonne de contenu de facture. `?limit=` 1..200, défaut
+50 (`z.coerce.number()`, motif query string HTTP toujours une chaîne).
+
+**Couture avec le détail tenant** : le champ `anomalies` de `GET
+/admin/tenants/:id` (≤ 20) réutilise la **même** fonction SD, filtrée/triée/
+bornée en SQL sur son résultat — un seul point de vérité pour la définition
+d'« anomalie ». **Limite actée et documentée** : `find_admin_anomalies` borne
+elle-même son résultat aux 200 anomalies les plus récentes **tous tenants
+confondus**, **avant** le filtre par tenant — si 200 anomalies plus récentes
+existent déjà chez d'autres tenants, une anomalie plus ancienne d'un tenant
+donné peut être absente de son détail alors qu'elle apparaîtrait dans une
+requête dédiée à ce seul tenant. Compromis assumé (cas limite non rencontré
+en usage normal).
+
+### MFA TOTP super admin
+
+Lib `otplib` (13.x, API 100 % fonctionnelle — plus de singleton mutable),
+issuer `Factelec`, label = email admin.
+
+- **`POST /admin/login`** (même route, contrat élargi `{ email, password,
+  totpCode?, recoveryCode? }`) :
+  1. mot de passe invalide → **401** générique (inchangé, throttle inchangé,
+     `timingSafeVerifyReject` anti-énumération d'email) ;
+  2. mot de passe OK + **non enrôlé** (`totp_enabled_at` NULL) : génère (ou
+     réutilise, `coalesce`, anti-écrasement) un secret **PENDING** → **202**
+     `{ enrollmentRequired: true, otpauthUrl, secret }` — **aucune session
+     créée** ;
+  3. mot de passe OK + **enrôlé** : exige `totpCode` (6 chiffres, fenêtre ±1
+     pas de 30 s) **ou** `recoveryCode` — absent/faux → **401** générique
+     **byte-identique** au cas 1 (**anti-oracle**, asserté en test : pas de
+     distinction « mot de passe OK mais TOTP faux » observable dans le corps
+     de réponse) ; recovery code valide → **consommé** par CAS SQL
+     (`set_admin_recovery_codes`, `WHERE recovery_codes = p_prior` — anti
+     double-spend contre deux logins concurrents utilisant le même code) ;
+     succès → session créée avec le TTL **`ADMIN_SESSION_TTL_HOURS`** (défaut
+     2 h, max 24 h) au lieu du TTL standard (`SESSION_TTL_HOURS`, jusqu'à
+     720 h).
+- **`POST /admin/totp/confirm`** (`{ email, password, totpCode }`, **hors
+  session** — l'admin n'en a pas encore) : vérifie mot de passe + code contre
+  le secret PENDING → pose `totp_enabled_at`, génère les **10 codes de
+  récupération** (format `xxxx-xxxx`, argon2id hashés — primitives auth
+  existantes, jamais un hash maison) → répond `{ recoveryCodes: [...] }`,
+  **affichés une seule fois**, jamais rejournalisés ensuite. Même throttle que
+  le login (10/15 min/IP), bucket **séparé** (nom de handler distinct côté
+  `ThrottlerGuard`).
+- **Recovery codes** : 10 codes à usage unique, retirés du tableau `jsonb` à
+  l'emploi ; 32 bits d'entropie par code (4 octets CSPRNG), jugé suffisant
+  pour un usage unique protégé par argon2id + throttle amont.
+
+### Runbook — codes de récupération épuisés
+
+**Aucun endpoint de régénération** (surface minimale, décision assumée). Si
+un admin épuise ses 10 codes de récupération et perd l'accès à son
+authentificateur TOTP, ré-enrôlement **manuel en base** requis, avec le rôle
+**owner** (`DATABASE_OWNER_URL`, jamais `factelec_app` — `platform_admins`
+est deny-all pour ce dernier) :
+
+```sql
+UPDATE platform_admins
+SET totp_secret = NULL, totp_enabled_at = NULL, recovery_codes = NULL
+WHERE email = 'admin@example.com';
+```
+
+Le prochain `POST /admin/login` de cet admin relance l'enrôlement depuis zéro
+(**202** `enrollmentRequired`) — un nouveau secret est généré, un nouveau QR
+à scanner, 10 nouveaux codes de récupération à la confirmation.
+
+### Limites actées (itération 2)
+
+- **Fenêtre TOTP ±1 pas (30 s), sans anti-rejeu par `jti`** — le même code
+  peut être accepté deux fois dans la fenêtre ; surface admin
+  **mono-utilisateur** + throttle 10/15 min amont, jugé suffisant.
+- **Canal temporel résiduel « mot de passe valide »** — le chemin « mot de
+  passe OK + TOTP faux » exécute une vérification TOTP supplémentaire avant
+  de renvoyer le même 401 générique que « mot de passe invalide » ; le corps
+  de réponse est byte-identique mais la latence peut différer. Le throttle
+  amont **atténue** l'exploitation, sans l'éliminer.
+- **Codes de récupération épuisés** → runbook manuel (ci-dessus), pas
+  d'auto-service.
+- **Suspension et jobs en vol** : voir § Supervision ci-dessus.
+- **`/metrics` sans `METRICS_TOKEN` configuré → 404** indiscernable d'une
+  route absente (opt-in explicite, voir § Observabilité ci-dessous).
+
+### Observabilité — module `metrics` Prometheus
+
+`MetricsService` porte un `Registry` `prom-client` **dédié** (jamais le
+registre global) : plusieurs instances d'app Nest coexistent dans le même
+process de test, un registre process-global ferait échouer le second
+`new Histogram(...)` avec « metric already registered ».
+
+- **`GET /metrics`** — protégée par `Authorization: Bearer ${METRICS_TOKEN}`
+  (env **optionnelle**). Token **absent de l'env** → route **404**,
+  reproduisant **exactement** le corps `Cannot ${method} ${originalUrl}` que
+  Nest produit pour une route non matchée — indiscernable d'une route qui
+  n'existe pas (opt-in explicite : aucune métrique exposée tant qu'aucun
+  token n'est configuré). Token présent → comparaison **à temps constant**
+  (`timingSafeEqual`, garde de longueur d'abord pour éviter le throw sur
+  buffers de tailles différentes) — nécessaire car la route est
+  `@SkipThrottle()` (un scrape ne doit jamais être rate-limité), donc rien ne
+  borne le nombre d'essais qu'un attaquant peut tenter contre une comparaison
+  naïve. Token faux → **401** générique. Hors garde de session/clé API : un
+  scraper Prometheus n'a ni cookie ni clé applicative.
+- **HTTP** : histogramme `http_request_duration_seconds{method, route,
+  status}` (interceptor global, buckets par défaut `prom-client`, route
+  **normalisée** Nest — pas l'URL brute avec ses paramètres).
+- **BullMQ** : jauge `bullmq_jobs{queue, state}` pour les 5 files de
+  `queue.constants.ts` (`waiting`/`active`/`completed`/`failed`/`delayed`),
+  collectée **au scrape** (`queue.getJobCounts()`), jamais par un polling en
+  arrière-plan — isolation **par file** (Redis injoignable pour une file
+  n'empêche pas la collecte des 4 autres).
+- **DB** : jauge `pg_pool{state}` (total/idle/waiting) — compteurs internes
+  du pool `pg`, coût nul (aucune requête SQL).
+- **Billing** : compteurs `billing_guard_denials_total` et
+  `billing_webhook_events_total{outcome}`, incrémentés aux points de code
+  existants (`BillingGuard`, `BillingWebhookService`) — best-effort, un
+  compteur indisponible n'affecte jamais le comportement gardé/webhook
+  lui-même.
+- **Isolation par collector** : `MetricsService.render()` itère les
+  collectors **séquentiellement**, chacun dans son propre `try/catch` — un
+  collector en échec (ex. Redis injoignable pour les jauges BullMQ) ne fait
+  **jamais** échouer tout le scrape ; les métriques déjà enregistrées (HTTP,
+  process) restent servies.
+
+### Healthcheck enrichi — `GET /health/ready`
+
+`@nestjs/terminus` est **retiré** : les sondes DB/Redis/migrations sont
+désormais écrites à la main, chacune bornée **2 s** (`Promise.race` contre un
+timeout — un hôte injoignable qui ne refuse pas la connexion peut sinon
+bloquer plusieurs dizaines de secondes). Réponse `{ status: 'ok'|'degraded',
+db: { ok, latencyMs }, redis: { ok, latencyMs }, migrations: { ok } }` — **503
+si un composant est down**, les autres champs restant renseignés. Le détail
+(versions, messages d'erreur) n'est **jamais** exposé sans auth : réponse
+publique = statuts booléens + latences seulement.
+
+- **`db`** : `SELECT 1` sur le pool applicatif.
+- **`redis`** : `PING` sur le client BullMQ partagé (`queue.client`).
+- **`migrations`** : compare le nombre de lignes de
+  `drizzle.__drizzle_migrations` (table créée par le runtime `migrate()`,
+  propriété du rôle **owner**) au nombre d'entrées du journal `drizzle-kit`
+  (`meta/_journal.json`, lu une fois au démarrage). Nécessite le nouveau
+  grant de la migration `0033` (`GRANT USAGE ON SCHEMA drizzle` +
+  `GRANT SELECT ON drizzle.__drizzle_migrations TO factelec_app` — **SELECT
+  seul**, jamais d'écriture sur ce journal).
+
+`GET /health` (liveness, aucune dépendance externe) est **inchangé** : `{
+status: 'ok' }`. Les deux routes restent `@SkipThrottle()`.
+
+### Corrélation des logs
+
+`bindRequestLog()` (`src/logging/request-log.ts`) est appelée **après**
+authentification réussie dans les 3 guards d'auth (`session.guard.ts`,
+`api-key.guard.ts`, `admin.guard.ts`) : `req.log = req.log.child({ tenantId
+| adminId })`. Chaque ligne de log HTTP aval émise par pino-http (déjà
+porteuse de `req.id`, la corrélation `requestId` existante) porte désormais
+aussi l'identité authentifiée — posé **après** le succès de l'authentification
+seulement, jamais avant (le binding doit refléter une identité **vérifiée**,
+pas une prétention non authentifiée). Redaction pino existante (en-tête
+`authorization`, corps de requête) **inchangée**.
+
+### Dette « durcissement session super admin » — SOLDÉE pour TOTP + TTL
+
+La dette documentée depuis 1.4 (« la session super admin réutilise le régime
+standard, sans contrôle additionnel ») est **soldée sur ses deux volets
+applicatifs** : **MFA TOTP obligatoire** (enrôlement forcé, ci-dessus) et
+**TTL de session dédié réduit** (`ADMIN_SESSION_TTL_HOURS`, défaut 2 h vs
+jusqu'à 720 h côté marchand). Seul reste différé l'**allowlist IP**, décision
+de cadrage assumée dès le design (§ Décisions de cadrage) : c'est un contrôle
+**infrastructure** (reverse-proxy/pare-feu), pas applicatif — hors périmètre
+de ce dépôt.
 
 ## Sécurité / multi-tenant
 
@@ -3055,7 +3316,15 @@ dossier d'immatriculation DGFiP (PA/PDP).
   explicitement ci-dessous — la migration `0029` (3.5) n'effectue **aucun**
   `REVOKE` sur ce rôle, seulement des `GRANT` sur le nouveau rôle worker
   ci-dessous (honnêteté : la séparation des privilèges bénéficie au worker,
-  pas encore à `factelec_app`).
+  pas encore à `factelec_app`). **Phase 5 it.2** ajoute `SELECT/INSERT`
+  **uniquement** (jamais `UPDATE`/`DELETE`, motif `invoice_status_events`) sur
+  `admin_actions` (journal d'audit append-only, migration `0031`), `EXECUTE`
+  sur les 5 nouvelles fonctions `SECURITY DEFINER` de supervision/MFA
+  (`find_admin_tenant_stats`, `find_admin_anomalies`,
+  `set_admin_totp_secret_pending`, `confirm_admin_totp`,
+  `set_admin_recovery_codes`, migrations `0031`/`0032`), et `USAGE`/`SELECT`
+  **seul** sur le schéma `drizzle`/`drizzle.__drizzle_migrations` (migration
+  `0033`, healthcheck — § Healthcheck enrichi ci-dessus).
 - **`factelec_worker`** (3.5, D4/D5) — `NOSUPERUSER NOBYPASSRLS NOCREATEDB`,
   comme `factelec_app`. Rôle applicatif **dédié** du process **worker**
   (`WorkerModule` importe désormais inconditionnellement
@@ -3185,7 +3454,8 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `RATE_LIMIT_TTL` | Fenêtre du rate limit (secondes) | `60` |
 | `RATE_LIMIT_LIMIT` | Requêtes max par fenêtre et par IP | `120` |
 | `TRUST_PROXY` | Nombre de proxys de confiance devant l'API (`app.set('trust proxy', n)`) | `0` (aucun) |
-| `SESSION_TTL_HOURS` | Durée de vie **absolue** d'une session (utilisateur ou admin) — aucun renouvellement glissant (D1 amendé, plan 1.4) | `12` |
+| `SESSION_TTL_HOURS` | Durée de vie **absolue** d'une session **utilisateur** — aucun renouvellement glissant (D1 amendé, plan 1.4). Ne s'applique **plus** aux sessions admin depuis phase 5 it.2 (voir `ADMIN_SESSION_TTL_HOURS`) | `12` |
+| `ADMIN_SESSION_TTL_HOURS` | TTL **dédié** de la session super admin (phase 5 it.2, dette « durcissement session super admin » soldée sur ce volet) — volontairement plus court que `SESSION_TTL_HOURS` (surface d'exposition réduite d'un compte à privilèges élevés), borné max 24 h | `2` |
 | `SESSION_COOKIE_DOMAIN` | Domaine des cookies `factelec_session`/`factelec_csrf` — requis en prod pour un partage same-site dashboard/API (ex. `.factelec.fr`) ; absent en dev (localhost) | — (absent = cookie scopé à l'hôte courant) |
 | `REDIS_HOST` | Hôte Redis (BullMQ, workers) | `localhost` |
 | `REDIS_PORT` | Port Redis | `6379` |
@@ -3235,6 +3505,7 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `BILLING_DASHBOARD_URL` | Base URL du dashboard pour `success_url`/`cancel_url`/`return_url` des sessions Checkout/Portal hébergées | `http://localhost:3001` |
 | `BILLING_USAGE_EVERY_MS` | Périodicité (ms) du sweep de report d'usage billing (`BillingUsageService`, worker) — chaque exécution traite les buckets **quotidiens** de la fenêtre de rattrapage | `3600000` (1 h) |
 | `BILLING_USAGE_LOOKBACK_DAYS` | Profondeur (jours UTC) de la fenêtre de rattrapage du sweep d'usage (J-1..J-N, idempotent par `(tenant, jour)` — correctif I2) | `3` (max 30) |
+| `METRICS_TOKEN` | Bearer attendu sur `Authorization` pour le scrape `GET /metrics` (phase 5 it.2) — **optionnelle** : absente de l'env, la route répond **404** (opt-in explicite, aucune métrique exposée par défaut) ; min 16 caractères si fournie | — (absent = `/metrics` 404) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -3285,7 +3556,7 @@ README racine.
 | Méthode & route | Description | Codes possibles |
 | --- | --- | --- |
 | `GET /health` | Liveness (aucune dépendance externe) | 200 |
-| `GET /health/ready` | Readiness (ping Postgres **et Redis**, `@nestjs/terminus`, chacun borné 2 s) | 200, 503 |
+| `GET /health/ready` | Readiness enrichi (phase 5 it.2, `@nestjs/terminus` retiré) : `{ status, db:{ok,latencyMs}, redis:{ok,latencyMs}, migrations:{ok} }`, chaque sonde bornée 2 s — 503 si un composant est down (§ Healthcheck enrichi) | 200, 503 |
 | `POST /invoices` | Ingestion : validation `invoice-core`, persistance transactionnelle, **enfilement** du job de génération (asynchrone, 2.1 — voir § Nouvelle sémantique) | 201, 401, 409, 422 |
 | `GET /invoices` | Liste paginée (keyset), tenant-scopée — `?routingStatus=` filtre optionnel (3.4, D8), expose `routingStatus`/`recipientPlatform` | 200, 401, 422 |
 | `GET /invoices/:id` | Métadonnées d'une facture (`status` de génération, `lifecycleStatus` CDV, `routingStatus`/`recipientPlatform` — routage destinataire résolu à l'émission, 3.3, § Couture annuaire → émission) + formats disponibles | 200, 401, 404 |
@@ -3302,9 +3573,15 @@ README racine.
 | `POST /api-keys` | Création d'une clé API pour le tenant de la session (rôles `owner`/`admin` uniquement) ; secret **affiché une seule fois** | 201, 401, 403, 422 |
 | `GET /api-keys` | Liste des clés du tenant (préfixes uniquement, jamais le secret) — tout rôle utilisateur authentifié | 200, 401, 403 |
 | `DELETE /api-keys/:id` | Révocation immédiate d'une clé (rôles `owner`/`admin` uniquement) | 204, 401, 403, 404 |
-| `POST /admin/login` | Authentification super admin plateforme (`platform_admins`, Argon2id), ouvre une session admin | 200, 401, 422 |
+| `POST /admin/login` | Authentification super admin plateforme (`platform_admins`, Argon2id) + **MFA TOTP** (phase 5 it.2, § MFA TOTP super admin) : mot de passe invalide → 401 ; non enrôlé → **202** `{ enrollmentRequired, otpauthUrl, secret }`, aucune session ; enrôlé + `totpCode`/`recoveryCode` valide → 200, session TTL `ADMIN_SESSION_TTL_HOURS` | 200, 202, 401, 422 |
+| `POST /admin/totp/confirm` | Confirmation d'enrôlement TOTP (`{ email, password, totpCode }`, hors session) — pose `totp_enabled_at`, génère 10 codes de récupération affichés **une fois** (phase 5 it.2, § MFA TOTP super admin) | 200, 401, 422 |
 | `POST /admin/logout` | Révoque la session admin courante | 204, 401, 403 |
-| `GET /admin/tenants` | Liste de tous les tenants (vue plateforme : nombre d'utilisateurs, de factures) | 200, 401, 403 |
+| `GET /admin/tenants` | Liste enrichie de tous les tenants (SD `find_admin_tenant_stats`, phase 5 it.2) : billing/volumes 30j/dead letters/suspension — voir § Supervision admin | 200, 401, 403 |
+| `GET /admin/tenants/:id` | Détail per-tenant (phase 5 it.2) : stats + 10 dernières factures RLS-scopées (sans montant) + miroir billing + anomalies (≤ 20) — 404 anti-fuite byte-identique | 200, 401, 403, 404 |
+| `POST /admin/tenants/:id/suspend` | Suspension motivée (`{ reason: 1..500 }`), journalisée `admin_actions` (phase 5 it.2, § Supervision admin) — idempotence : déjà suspendu → 409 | 200, 401, 403, 404, 409, 422 |
+| `POST /admin/tenants/:id/unsuspend` | Réactivation, journalisée `admin_actions` — non-suspendu → 409 | 204, 401, 403, 404, 409 |
+| `POST /admin/jobs/:queue/retry` | Relance des jobs échoués d'une file (`:queue` allowlist fermée `queue.constants.ts`, sinon 404) — `{ limit?: 1..500, défaut 100 }` → `{ retried, errors }`, journalisé (phase 5 it.2, § Relance des jobs échoués) | 200, 401, 403, 404, 422 |
+| `GET /admin/anomalies` | Vue anomalies plateforme lecture seule (SD `find_admin_anomalies`, `?limit=` 1..200 défaut 50, phase 5 it.2, § Vue anomalies) | 200, 401, 403, 422 |
 | `POST /ereporting/retransmissions` | Retransmission RE opérateur (`{ declarantId, fluxKind, periodStart }`, dual-auth, 3.4, § Chemin RE) — régénération complète de la période sur jugement humain, jamais un automatisme | 202, 401, 403, 404, 409, 422 |
 | `GET /ereporting/transmissions` | Liste des transmissions e-reporting Flux 10 du tenant (résumés — **sans** le XML, `IN` **et** `RE`), `rejectOrigin` (`local`\|`ppf`\|`null`) dérivé pour les rejets | 200, 401 |
 | `GET /ereporting/transmissions/:id/xml` | XML de la transmission (`text/xml`) — 404 si absente ou d'un autre tenant | 200, 401, 404 |
@@ -3325,14 +3602,17 @@ README racine.
 | `POST /billing/portal-session` | Ouvre une session Stripe Customer Portal hébergée — session owner/admin + CSRF ; 409 si le tenant n'a jamais eu de customer Stripe (jamais passé par checkout) ; 503 si `BILLING_DRIVER=none` | 201, 401, 403, 409, 503 |
 | `GET /billing/status` | Statut d'abonnement du tenant lu **uniquement** dans le miroir local (`tenant_billing`, jamais Stripe en direct) — reste utilisable même en `BILLING_DRIVER=none` — session owner/admin | 200, 401, 403 |
 | `POST /billing/webhook` | Webhook Stripe signé (`stripe-signature`, `rawBody`) — **aucun** guard session/CSRF (authenticité = signature HMAC) ; 400 silencieux si `rawBody`/signature absents ou invalides ; 200 idempotent sinon, y compris les événements délibérément ignorés (customer inconnu, sans statut, en retard) | 200, 400 |
+| `GET /metrics` | Scrape Prometheus (`Bearer ${METRICS_TOKEN}`, phase 5 it.2, § Observabilité) — **aucun** guard session/clé API ; token absent de l'env → 404 indiscernable d'une route absente ; token faux → 401 générique ; hors throttle (`@SkipThrottle()`) | 200, 401, 404 |
 
 **Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
 route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
-(exemptées via `@SkipThrottle()` — jamais rate-limitées, interrogées à haute
-fréquence par l'orchestrateur). Seuils renforcés (`@Throttle`, en plus du
+et `GET /metrics` (exemptées via `@SkipThrottle()` — jamais rate-limitées,
+interrogées à haute fréquence par l'orchestrateur/le scraper Prometheus).
+Seuils renforcés (`@Throttle`, en plus du
 défaut `RATE_LIMIT_TTL`/`RATE_LIMIT_LIMIT`) sur `POST /auth/signup` (5/h/IP),
-`POST /auth/login` (10/15 min/IP) et `POST /admin/login` (10/15 min/IP) —
-anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
+`POST /auth/login` (10/15 min/IP), `POST /admin/login` (10/15 min/IP) et
+`POST /admin/totp/confirm` (10/15 min/IP, bucket séparé de `/admin/login` —
+phase 5 it.2) — anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
 
 **Deux régimes d'authentification distincts, jamais interchangeables** :
 - **`POST /invoices`** (ingestion) reste **exclusivement machine** :
@@ -3620,12 +3900,24 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   idempotence par `lookup_key` aux 3 cas (catalogue complet/partiel/meter
   déjà actif). **Factory** — `stripe` sans les 4 clés → throw explicite
   nommant `STRIPE_SECRET_KEY`.
+- **Supervision admin, MFA TOTP & observabilité** (phase 5 it.2) : matrice de
+  suspension du `SuspensionGuard` (suspendu/actif × les 2 mutations
+  d'émission) ; anti-oracle TOTP asserté **byte-identique** entre « mot de
+  passe invalide » et « mot de passe OK + TOTP faux » ; CAS anti double-spend
+  des recovery codes prouvé au niveau SQL réel (deux consommations
+  concurrentes du même code → une seule réussit) ; isolation de la relance de
+  jobs (un `job.retry()` qui throw ne stoppe pas la boucle, prouvé en e2e
+  **heavy** avec un vrai worker BullMQ, `admin-jobs-retry.e2e.test.ts`) ;
+  format 404 de `/metrics` sans token vérifié **byte-identique** à une route
+  réellement absente ; comparaison à temps constant du Bearer `/metrics` ;
+  isolation admin↔tenant étendue aux nouvelles routes (`admin-rate-limit`,
+  `admin-supervision`, `admin-totp` e2e).
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`, seuils fusionnés sur l'agrégat des projets `heavy` +
   `light`, § Durcissements transverses), exclusions limitées au bootstrap et
   au câblage DI pur (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`).
-  État actuel : 178 fichiers, **1291 tests**, couverture
-  **97.91 / 94.20 / 95.89 / 98.17 %** (statements/branches/functions/lines).
+  État actuel : 194 fichiers, **1467 tests**, couverture
+  **98.07 / 94.23 / 95.99 / 98.30 %** (statements/branches/functions/lines).
 
 ```sh
 pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docker requis)
@@ -3693,9 +3985,14 @@ pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docke
 - **Expiration glissante des sessions** différée : seule l'expiration
   **absolue** (`SESSION_TTL_HOURS`) est implémentée (D1 amendé, plan 1.4) ;
   pas de renouvellement à l'usage.
-- **Durcissement de la session admin** (TTL réduit spécifique, distinct de
-  `SESSION_TTL_HOURS`) différé — la session super admin partage aujourd'hui
-  la même durée de vie absolue que les sessions utilisateur.
+- **Durcissement de la session admin — SOLDÉ en phase 5 it.2** pour ses deux
+  volets applicatifs : TTL dédié réduit (`ADMIN_SESSION_TTL_HOURS`, défaut
+  2 h, distinct de `SESSION_TTL_HOURS`) et **MFA TOTP obligatoire**
+  (enrôlement forcé, codes de récupération) — voir § Supervision admin, MFA
+  TOTP & observabilité (phase 5, itération 2) ci-dessus. Seule **l'allowlist
+  IP** reste différée : décision de cadrage assumée, c'est un contrôle
+  **infrastructure** (reverse-proxy/pare-feu), hors périmètre applicatif de
+  ce dépôt.
 - **`Content-Disposition`** absent sur les téléchargements de formats
   (`GET /invoices/:id/formats/:format`) : le fichier s'ouvre dans l'onglet
   plutôt que de déclencher un téléchargement nommé — raffinement différé.

@@ -315,7 +315,8 @@ apps/
                     RLS, sessions httpOnly + CSRF ; workers BullMQ (génération
                     asynchrone) + cycle de vie des statuts CDV (phase 2.1)
   web/              Dashboard Next.js 16 (phase 1.4) : SPA authentifiée par session
-                    serveur, factures/clés API, espace super admin minimal
+                    serveur, factures/clés API, espace super admin (supervision,
+                    suspension, MFA TOTP — phase 5 it.2)
 packages/
   invoice-core/     Bibliothèque pure (sans I/O) : modèle canonique EN 16931,
                     calculs TVA/totaux, règles de cohérence, génération UBL 2.1
@@ -381,7 +382,7 @@ fichiers (hors tests).
 ## `@factelec/api`
 
 API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4 + 3.1 +
-3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 5.1** : ingestion et lecture des factures (consommant `@factelec/invoice-core`),
+3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 5.1 + 5.2** : ingestion et lecture des factures (consommant `@factelec/invoice-core`),
 authentification utilisateur (sessions httpOnly + CSRF), signup self-service
 transactionnel, gestion des clés API par session, super admin plateforme
 minimal, **workers BullMQ de génération asynchrone**, **cycle de vie des
@@ -511,6 +512,36 @@ redirections hébergées). `BILLING_ENFORCEMENT=off` par défaut — activer le
 blocage 402 est une **décision commerciale**, pas un oubli technique.
 Détail complet : `apps/api/README.md` § Billing Stripe (phase 5, itération
 1).
+**Supervision admin, MFA TOTP & observabilité** (5.2, itération 2) : deuxième
+axe de la phase 5. **Supervision** — `GET /admin/tenants` enrichi (SD
+`find_admin_tenant_stats` : billing/volumes 30j/dead letters/suspension),
+`GET /admin/tenants/:id` (détail RLS-scopé : 10 dernières factures sans
+montant + miroir billing + anomalies), **suspension/réactivation motivée**
+(`POST /admin/tenants/:id/suspend|unsuspend`, journal `admin_actions`
+append-only, `SuspensionGuard` posé après `BillingGuard` sur les 2 mêmes
+mutations d'émission, 403 `tenant-suspended` — jamais 402, décision opérateur
+non commerciale, aucune échappatoire de configuration), **relance des jobs
+échoués** (`POST /admin/jobs/:queue/retry`, allowlist fermée, isolation par
+job), **vue anomalies** lecture seule (`GET /admin/anomalies`, SD
+`find_admin_anomalies`). **MFA TOTP obligatoire** pour le super admin —
+enrôlement forcé au premier login (`POST /admin/login` répond **202**
+`enrollmentRequired` avant toute session), confirmation
+(`POST /admin/totp/confirm`, 10 codes de récupération argon2id affichés une
+fois), anti-oracle byte-identique entre mot de passe invalide et TOTP
+invalide, CAS anti double-spend des recovery codes, **TTL de session dédié**
+(`ADMIN_SESSION_TTL_HOURS`, défaut 2 h). **Observabilité Prometheus**
+(`prom-client`, registre dédié) : `GET /metrics` protégé par
+`METRICS_TOKEN` (absent → 404 indiscernable d'une route absente), histogramme
+HTTP par route normalisée, jauges BullMQ/pool pg au scrape, compteurs
+billing ; **healthcheck enrichi** (`GET /health/ready` : statuts
+DB/Redis/migrations + latences, 503 si down, `@nestjs/terminus` retiré) ;
+**corrélation des logs** (`tenantId`/`adminId` liés à `requestId` dans les
+guards d'auth). **Dette « durcissement session super admin » soldée** sur ses
+deux volets applicatifs (MFA TOTP + TTL dédié) — reste différée
+l'**allowlist IP** (contrôle infrastructure, décision de cadrage assumée).
+Détail complet, runbook recovery codes épuisés et limites actées :
+`apps/api/README.md` § Supervision admin, MFA TOTP & observabilité (phase 5,
+itération 2).
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -537,11 +568,14 @@ d'environnement, endpoints, tests, limites — dans
 
 ## `@factelec/web`
 
-Dashboard Next.js 16 (App Router, ESM), phase **1.4** : SPA authentifiée par
-session serveur httpOnly (cookie posé par `apps/api`, CSRF double-submit),
+Dashboard Next.js 16 (App Router, ESM), phases **1.4 + 5.2** : SPA authentifiée
+par session serveur httpOnly (cookie posé par `apps/api`, CSRF double-submit),
 consommant `@factelec/api`. Pages factures (pagination keyset, détail,
 téléchargement des formats), gestion des clés API (secret affiché une seule
-fois), espace super admin minimal (liste des tenants). Aucun SSR/RSC des
+fois), espace **super admin** — liste des tenants enrichie, détail/suspension
+motivée, jobs échoués, anomalies (5.2), et écran de login gérant les 3 états
+du flux MFA TOTP (mot de passe → code TOTP/recovery → enrôlement forcé avec
+QR et codes de récupération affichés une fois, 5.2). Aucun SSR/RSC des
 données métier, aucune création de facture via l'UI (ingestion = API, clé
 API uniquement). Stack pinnée, modèle d'auth, tests & couverture, verdict
 tsgo/Next — dans [`apps/web/README.md`](apps/web/README.md).
@@ -915,12 +949,48 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       sandbox idempotent par `lookup_key`, montants câblés en dur
       **uniquement** dans ce script). **Dashboard** : page `/billing` (5
       états, bannières `past_due`/bloqué, redirections Checkout/Portal
-      hébergées). **Restent en phase 5** : vue facturation du super admin,
-      super admin complet (impersonation tracée, feature flags, MFA TOTP +
-      allowlist IP, supervision des files/transmissions), observabilité
-      durcie, `BILLING_ENFORCEMENT=on` par défaut (décision commerciale),
-      Playwright (e2e navigateur). Détail complet : `apps/api/README.md` §
-      Billing Stripe (phase 5, itération 1).
+      hébergées). **Restent en phase 5** : vue facturation dédiée du super
+      admin, impersonation tracée, feature flags, allowlist IP applicative,
+      `BILLING_ENFORCEMENT=on` par défaut (décision commerciale), Playwright
+      (e2e navigateur). Détail complet : `apps/api/README.md` § Billing
+      Stripe (phase 5, itération 1).
+- [x] **5.2 — Supervision admin, MFA TOTP & observabilité** (terminé,
+      itération 2) : deuxième axe de la phase 5. **Supervision** — `GET
+      /admin/tenants` enrichi (SD `find_admin_tenant_stats`, billing/volumes
+      30j/dead letters/suspension), `GET /admin/tenants/:id` (détail
+      RLS-scopé, 404 anti-fuite byte-identique), **suspension/réactivation
+      motivée** (journal `admin_actions` append-only même transaction,
+      `SuspensionGuard` posé après `BillingGuard` sur les 2 mêmes mutations
+      d'émission, 403 `tenant-suspended` **jamais 402** — décision opérateur,
+      aucune échappatoire de configuration contrairement au billing),
+      **relance des jobs échoués** (`POST /admin/jobs/:queue/retry`,
+      allowlist fermée, isolation par job, testé en e2e **heavy** avec un vrai
+      worker BullMQ), **vue anomalies** lecture seule (SD
+      `find_admin_anomalies`, UNION bornée). **MFA TOTP obligatoire** : login
+      à 3 états (mot de passe invalide → 401 ; non enrôlé → **202**
+      `enrollmentRequired` **sans session** ; enrôlé → TOTP/recovery code
+      requis, anti-oracle **byte-identique** avec le 401 mot de passe
+      invalide), confirmation d'enrôlement (`POST /admin/totp/confirm`, 10
+      codes de récupération argon2id affichés **une fois**), CAS anti
+      double-spend des recovery codes, **TTL de session dédié**
+      (`ADMIN_SESSION_TTL_HOURS`, défaut 2 h, max 24 h) — runbook de
+      ré-enrôlement manuel documenté pour le cas des 10 codes épuisés.
+      **Observabilité Prometheus** (`prom-client`, registre dédié) : `GET
+      /metrics` protégé par `METRICS_TOKEN` (Bearer à comparaison temps
+      constant, absent de l'env → **404 indiscernable** d'une route absente),
+      histogramme HTTP par route normalisée, jauges BullMQ/pool pg au scrape,
+      compteurs billing ; **healthcheck enrichi** (`GET /health/ready` :
+      statuts DB/Redis/migrations booléens + latences, 503 si down,
+      `@nestjs/terminus` retiré au profit de sondes maison bornées 2 s) ;
+      **corrélation des logs** (`tenantId`/`adminId` liés à `requestId` dans
+      les 3 guards d'auth). **Dashboard** (`apps/web`) : pages supervision
+      (liste enrichie, détail/suspension, anomalies), écran de login gérant
+      les 3 états MFA. **Dette « durcissement session super admin » (1.4)
+      soldée** sur ses deux volets applicatifs (MFA TOTP + TTL dédié) — reste
+      différée l'**allowlist IP** (contrôle infrastructure, décision de
+      cadrage assumée dès le design, hors périmètre applicatif). Détail
+      complet, runbook et limites actées : `apps/api/README.md` § Supervision
+      admin, MFA TOTP & observabilité (phase 5, itération 2).
 
 > **Point de reprise → phase 3 (suite)** : adhésion OpenPeppol + PKI
 > test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport CDV
@@ -965,9 +1035,12 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
   réelle de déploiement (load balancer/reverse-proxy devant l'API, partage de
   cookies cross-subdomain dashboard/API) — les défauts conviennent au dev
   local uniquement.
-- **Durcissement de la session super admin** (MFA TOTP, allowlist IP, TTL
-  dédié réduit) — la session admin 1.4 réutilise le régime standard
-  (Argon2id, TTL absolu générique), sans contrôle additionnel → **phase 5**.
+- **Durcissement de la session super admin — SOLDÉ en phase 5 it.2 (5.2)**
+  sur ses deux volets applicatifs : **MFA TOTP obligatoire** (enrôlement
+  forcé, codes de récupération) et **TTL dédié réduit**
+  (`ADMIN_SESSION_TTL_HOURS`, défaut 2 h). Seule l'**allowlist IP** reste
+  différée — contrôle **infrastructure** (reverse-proxy/pare-feu), décision
+  de cadrage assumée, hors périmètre applicatif de ce dépôt.
 - **Validation et unicité du SIREN (KYB)** — seul le format est vérifié (9
   chiffres) ; ni la clé de contrôle (Luhn), ni l'existence, ni l'unicité
   réelle de l'entreprise ne sont vérifiées à ce jour.
@@ -1143,10 +1216,15 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
   M:N) différées : les users sont mono-tenant en 1.4 (un `owner` par
   signup).
 - **Playwright (e2e navigateur)** → **phase 5** (coût CI).
-- **Super admin complet** (impersonation tracée, feature flags, MFA TOTP +
-  allowlist IP, supervision des files/transmissions) → **phase 5** (spec
-  §6/§8) ; le super admin livré en 1.4 est volontairement minimal (login +
-  liste des tenants).
+- **Super admin — supervision + MFA TOTP RÉSOLUES en phase 5 it.2 (5.2)** :
+  liste enrichie, détail per-tenant, suspension/réactivation motivée
+  journalisée, relance de jobs échoués, vue anomalies, MFA TOTP obligatoire
+  (enrôlement forcé, TTL de session dédié, codes de récupération) — voir §
+  5.2 ci-dessus et `apps/api/README.md` § Supervision admin, MFA TOTP &
+  observabilité. Restent différés, **décision de cadrage explicite** (pas de
+  backoffice d'édition métier) : **impersonation tracée**, **feature flags**,
+  **allowlist IP applicative** (infra), **vue facturation dédiée** du super
+  admin.
 - **Pré-prod** : configurer `SESSION_COOKIE_DOMAIN` + `TRUST_PROXY` selon la
   topologie réelle (load balancer / reverse-proxy) ; vérifier `SameSite` et
   le partage de cookies cross-subdomain dashboard/API.
