@@ -218,6 +218,13 @@
       "when": 1784204252276,
       "tag": "0030_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1784204352276,
+      "tag": "0031_admin_observability",
+      "breakpoints": true
     }
   ]
 }

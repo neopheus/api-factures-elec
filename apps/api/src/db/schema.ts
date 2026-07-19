@@ -89,6 +89,14 @@ export const tenants = pgTable('tenants', {
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
+  // Suspension opérateur (phase 5 it.2, migration 0031, spec §2/§4) : NULL =
+  // actif. Suspendu ⇔ suspended_at IS NOT NULL — c'est l'unique
+  // discriminant lu par SuspensionGuard (requête directe indexée par PK,
+  // même coût que BillingGuard.getState). suspended_reason est le motif
+  // opérateur saisi à la suspension, effacé avec suspended_at à la
+  // réactivation (jamais conservé seul).
+  suspendedAt: timestamp('suspended_at', { withTimezone: true }),
+  suspendedReason: text('suspended_reason'),
 })
 
 export const apiKeys = pgTable(
@@ -837,6 +845,17 @@ export const platformAdmins = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(),
+    // MFA TOTP admin (migration 0031, spec §5) : secret base32 posé à
+    // l'enrôlement (POST /admin/login quand non-enrôlé). totp_enabled_at
+    // NULL = enrôlement PENDING (secret généré mais pas encore confirmé par
+    // POST /admin/totp/confirm) ; renseigné = enrôlement terminé, TOTP
+    // obligatoire au login.
+    totpSecret: text('totp_secret'),
+    totpEnabledAt: timestamp('totp_enabled_at', { withTimezone: true }),
+    // Codes de récupération (spec §5) : tableau de hashs argon2id générés
+    // UNE fois à la confirmation d'enrôlement, chaque code à usage unique
+    // retiré du tableau après emploi. NULL avant enrôlement.
+    recoveryCodes: jsonb('recovery_codes').$type<string[]>(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -844,6 +863,38 @@ export const platformAdmins = pgTable(
   (t) => [
     uniqueIndex('platform_admins_email_unique').on(sql`lower(${t.email})`),
   ],
+)
+
+// Journal d'audit des actions super admin (migration 0031, spec §2/§3) :
+// suspend_tenant | unsuspend_tenant | retry_jobs. APPEND-ONLY par GRANTs
+// (SELECT+INSERT seulement, motif payments 0025) — jamais d'UPDATE/DELETE,
+// à personne. Table PLATEFORME comme platform_admins (PAS de RLS
+// tenant_isolation malgré tenant_id : la lecture est cross-tenant par
+// nature — dashboard admin, jamais un query scopé `tenant.run()`). Contraste
+// platform_admins/sessions (FORCE RLS sans policy, zéro GRANT direct,
+// accès uniquement via SD) : ici l'API admin lit/écrit la table
+// DIRECTEMENT via factelec_app, donc RLS aurait bloqué ces GRANTs sans
+// apporter d'isolation utile — voir commentaire SQL de la migration.
+export const adminActions = pgTable(
+  'admin_actions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => platformAdmins.id, { onDelete: 'restrict' }),
+    action: text('action').notNull(),
+    tenantId: uuid('tenant_id').references(() => tenants.id, {
+      onDelete: 'restrict',
+    }),
+    detail: jsonb('detail')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('admin_actions_created_at_idx').on(t.createdAt.desc())],
 )
 
 export const sessions = pgTable(
