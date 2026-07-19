@@ -60,6 +60,11 @@ jobs:
           cache: pnpm
       - run: sudo apt-get update && sudo apt-get install -y libxml2-utils
       - run: pnpm install --frozen-lockfile
+      # Build préalable OBLIGATOIRE : les suites e2e résolvent
+      # @factelec/invoice-core par son entry `dist/` (exports du package) —
+      # sans build, 60 suites heavy échouent en « Failed to resolve entry »
+      # (constaté au premier run du job, 2026-07-19).
+      - run: pnpm build
       # Testcontainers démarre Postgres ET Redis (Docker natif du runner
       # ubuntu-latest, aucun service `redis:`/`postgres:` de job GitHub
       # requis — cycle de vie du conteneur géré par le test lui-même). Le
