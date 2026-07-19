@@ -2773,6 +2773,248 @@ non nul, historique jamais supprimé — `annuaire_consents` n'a pas de grant
   mais n'asserte le `Content-Type` que sur un seul — indiscernabilité
   transitive jugée suffisante (les 3 corps sont `toEqual`).
 
+## Billing Stripe (phase 5, itération 1)
+
+Modèle commercial self-service : abonnement mensuel unique + volume métré,
+100 % piloté par Stripe (Checkout + Customer Portal hébergés, aucune donnée
+carte côté Factelec). Spec produit :
+[`docs/superpowers/specs/2026-07-19-stripe-billing-phase5-design.md`](../../docs/superpowers/specs/2026-07-19-stripe-billing-phase5-design.md).
+**Itération 1** livre l'abonnement + l'usage métré + le garde d'émission +
+la page dashboard ; restent différés (itérations suivantes) : paliers
+tarifaires multiples, essai gratuit, vue facturation du super admin,
+Stripe Tax, coupons/parrainage, changement de plan en self-service.
+
+### Architecture — miroir local piloté par webhooks
+
+`BillingPort` (**6ᵉ port** du projet, même motif que
+`ConsentSignaturePort`/`CdvTransmissionPort`/`AnnuairePort`) expose 5
+méthodes (`ensureCustomer`, `createCheckoutSession`, `createPortalSession`,
+`reportUsage`, `constructWebhookEvent`) derrière 3 drivers sélectionnés par
+`BILLING_DRIVER` (`BillingPortModule`, `@Global`, factory **fail-fast** — le
+driver `stripe` exige les 4 clés `STRIPE_*` au bootstrap, throw explicite
+sinon, jamais au premier appel) :
+
+- **`none`** (défaut) : toute méthode active lève `BillingDisabledError` —
+  la plateforme reste 100 % fonctionnelle sans compte Stripe (dev/CI).
+- **`fake`** : driver en mémoire déterministe (signature HMAC locale,
+  customer dérivé du `tenantId`) — tests unit/e2e et dev interactif sans
+  compte Stripe.
+- **`stripe`** : SDK officiel `stripe` (pin **22.3.2**). Normalise les
+  événements webhook Stripe vers le contrat `BillingWebhookEvent` du port —
+  le service ne connaît jamais le vocabulaire Stripe brut.
+
+**Source de vérité = Stripe, jamais interrogé en direct par le code
+applicatif hors webhook.** `tenant_billing` (migration `0030`, RLS `FORCE`,
+grants `SELECT/INSERT/UPDATE factelec_app` + `SELECT factelec_worker`) est
+un **miroir** tenu à jour exclusivement par les événements webhook
+(`BillingRepository.applyEvent`) et par l'attachement initial du customer au
+checkout (`attachCustomer`). Deux garanties structurelles :
+
+- **CAS anti-réordonnancement** — `applyEvent` n'écrit que si
+  `last_event_created` est `NULL` ou strictement antérieur à
+  `event.created` (`WHERE lastEventCreated IS NULL OR lastEventCreated <
+  occurredAt`) ; un événement Stripe livré en retard (webhooks non garantis
+  ordonnés) est rejeté silencieusement (`false`, aucune écriture), jamais
+  appliqué en écrasant un état plus récent.
+- **État complet, jamais un patch** — chaque événement appliqué **écrase**
+  `status`/`stripeSubscriptionId`/`currentPeriodEnd` avec les valeurs de
+  l'événement (y compris `null` explicite), jamais une fusion partielle :
+  le webhook Stripe porte l'état intégral de l'abonnement à l'instant
+  `event.created`, pas un diff.
+
+**Traitement du webhook** (`POST /billing/webhook`, `BillingWebhookController`
+— aucun guard session/CSRF, l'authenticité vient de la signature HMAC
+`stripe-signature`, jamais d'un cookie) :
+
+- **400 silencieux** — `rawBody`/signature absents, **ou** signature
+  invalide (`BillingSignatureError`) : même corps 400 générique dans les
+  deux cas, jamais de détail sur la raison du rejet (surface publique non
+  authentifiée avant vérification de signature).
+- **200 idempotent sur tout le reste** — customer Stripe inconnu du miroir,
+  événement sans statut exploitable (ex. `payment_intent.created`),
+  événement en retard (CAS rejeté) : tous renvoient `200 { received: true
+  }` sans écriture — c'est le contrat Stripe, un 4xx/5xx déclencherait des
+  retries indéfinis côté Stripe pour un événement délibérément ignoré.
+- **Les erreurs DB remontent** — une erreur inattendue du repository/port
+  n'est **jamais** avalée en 200 : elle remonte telle quelle (500 via le
+  filtre global `ProblemDetailsFilter`), seule `BillingSignatureError` est
+  traduite par le controller.
+- Événements normalisés par le driver Stripe :
+  `customer.subscription.created`/`.updated` (statut Stripe mappé,
+  `unpaid` en repli conservateur pour tout statut Stripe non reconnu — mieux
+  vaut bloquer à tort un client encore payant que laisser passer un statut
+  inconnu), `customer.subscription.deleted` (→ `canceled` inconditionnel),
+  `checkout.session.completed` (→ `active`, un checkout complété **est** un
+  abonnement démarré même avant le `customer.subscription.created` Stripe),
+  `invoice.paid`/`invoice.payment_failed` (→ `active`/`past_due`).
+
+### Garde d'émission — matrice driver × enforcement × statut
+
+`BillingGuard` (Task 8) bloque en **402** les mutations d'**émission**
+uniquement — jamais la lecture. Câblé sur exactement **2** routes :
+`POST /invoices` (`@UseGuards(ApiKeyGuard, BillingGuard)`, après
+`ApiKeyGuard` dont il consomme `req.tenantId`) et
+`POST /ereporting/retransmissions` (`@UseGuards(TenantAuthGuard, RolesGuard,
+CsrfGuard, BillingGuard)`, en dernier). Toutes les routes `GET` (statuts,
+journaux, PAF, exports…) restent **inconditionnellement** ouvertes, y
+compris pour un tenant bloqué.
+
+Le garde lit **uniquement le miroir** (`BillingRepository.getState`) —
+jamais le port Stripe en direct, même comportement que `GET /billing/status`.
+
+| `BILLING_DRIVER` | `BILLING_ENFORCEMENT` | Statut miroir | Résultat |
+| --- | --- | --- | --- |
+| `none` | `on` ou `off` | n'importe lequel | **200** — garde neutralisé **inconditionnellement**, même à `on` (sans driver Stripe configuré aucun tenant ne peut jamais devenir `active` — bloquer couperait toute la plateforme) |
+| `stripe`/`fake` | `off` | n'importe lequel | **200** — le garde observe et laisse passer, seul un `logger.warn` signale qu'un tenant aurait été bloqué si l'enforcement était `on` |
+| `stripe`/`fake` | `on` | `active`, `trialing`, `past_due` | **200** |
+| `stripe`/`fake` | `on` | `none`, `unpaid`, `canceled`, `incomplete` | **402** `urn:factelec:problem:subscription-required` |
+
+`past_due` reste **autorisé** délibérément (spec §4) : Stripe retente le
+prélèvement pendant une fenêtre de dunning avant de faire passer
+l'abonnement à `unpaid`/`canceled` — couper l'accès dès le premier échec de
+paiement serait plus punitif que la politique de rétention Stripe
+elle-même. Absence de `req.tenantId` en amont (oubli de câblage d'un guard
+d'authentification) : **jamais** dégradé en 402 conservateur, l'erreur est
+levée en 500 non maîtrisé plutôt qu'avalée silencieusement.
+
+`checkoutSession`/`portalSession` (mutations, jamais `status`) appellent
+toujours le port : une `BillingDisabledError` (`BILLING_DRIVER=none`) y est
+traduite en **503** `urn:factelec:problem:billing-disabled` — jamais un 500
+non maîtrisé. `portalSession` sans customer Stripe attaché (tenant jamais
+passé par un checkout) renvoie **409** `urn:factelec:problem:conflict`
+explicite.
+
+### Usage métré — sweep périodique, bucket quotidien J-1
+
+`BillingUsageService` (worker, `BILLING_USAGE_EVERY_MS`, défaut 1 h,
+planificateur BullMQ répétable `upsertJobScheduler` idempotent — clé
+`billing-usage` dédiée) tourne pour **chaque** tenant abonné
+(`find_billing_subscribed_tenants`, SD migration `0030`, `EXECUTE`
+`factelec_worker` seul, statuts `trialing`/`active`/`past_due`) :
+
+1. Compte les documents traités la **veille UTC** (`day = J-1`) : factures
+   ingérées + transmissions e-reporting créées ce jour-là, tenant-scopé
+   (`tenant.run`, RLS).
+2. Enregistre ce compte (`recordUsage`, idempotent `(tenant, day)` —
+   contrainte unique `billing_usage_reports_tenant_day_unique`, `ON
+   CONFLICT DO NOTHING` : un rejeu du sweep ne double jamais un jour déjà
+   comptabilisé).
+3. Reporte au driver **toutes** les lignes encore non reportées
+   (`findUnreportedUsage` — pas seulement celle du jour : un backlog issu
+   d'un run précédent en échec est rattrapé ici), puis marque chaque ligne
+   reportée (`markUsageReported`) **après** un `reportUsage` réussi
+   seulement.
+
+**Isolation d'erreur par tenant** (motif `RecipientRoutingRetryService`) :
+un échec Stripe sur le tenant A ne prive jamais le tenant B ; un échec de
+`reportUsage` laisse les lignes **non marquées**, reprises naturellement au
+run suivant — jamais de perte d'usage facturable, jamais de double
+comptage. Le driver Stripe reporte via `stripe.billing.meterEvents.create`
+(event `documents_processed`) avec un `identifier` **`${customerId}-${day}`**
+— la déduplication Stripe sur cette clé (fenêtre glissante 24h côté Stripe)
+absorbe un double appel `reportUsage` pour le même jour/customer. Test e2e
+worker bouclé en-process dans `HEAVY_TESTS`
+(`tests/e2e/billing-usage.e2e.test.ts`).
+
+### Script de bootstrap sandbox — `pnpm billing:bootstrap`
+
+`apps/api/scripts/billing-bootstrap.ts` provisionne le catalogue Stripe
+sandbox de façon **idempotente par `lookup_key`** (`factelec_base` /
+`factelec_metered`) — ne crée que ce qui manque, ne modifie jamais un objet
+existant (aucun `update`) :
+
+- **Product** `Factelec` (résolu par `metadata['factelec']='base'`, pas par
+  nom affiché).
+- **Meter** `documents_processed` (agrégation `sum`, mapping customer par
+  `stripe_customer_id`) — recherché/créé uniquement si le price métré doit
+  l'être.
+- **Price base** : 29 € HT/mois, récurrent mensuel, `tax_behavior:
+  'exclusive'` (TVA 20 % fixe France ajoutée par-dessus, spec §3 — pas de
+  Stripe Tax).
+- **Price métré** `factelec_metered` : gradué (`tiers_mode: 'graduated'`),
+  0-100 documents/mois → 0 €, au-delà → 0,20 € HT/document, même
+  `tax_behavior: 'exclusive'`.
+
+Les **montants sont câblés en dur uniquement dans ce script**, seul endroit
+du dépôt hors `src/` autorisé à les connaître — l'API elle-même ne
+référence que les IDs (`STRIPE_PRICE_BASE`/`STRIPE_PRICE_METERED`) : changer
+un prix se fait dans le dashboard Stripe, sans redéploiement. Avertissement
+(non bloquant) si `STRIPE_SECRET_KEY` ne commence pas par `sk_test_` — le
+script est pensé pour la sandbox mais n'interdit pas un usage live délibéré.
+
+### Dashboard — page `/billing`
+
+`BillingPanel` (`apps/web`) lit `GET /billing/status` et affiche **5 états** :
+
+1. **`none`** — jamais abonné : bouton *S'abonner* → `POST
+   /billing/checkout-session` → redirection Checkout hébergée.
+2. **`active`/`trialing`** — abonnement en cours : bouton *Gérer mon
+   abonnement* → `POST /billing/portal-session` → redirection Portal
+   hébergé.
+3. **`past_due`** — bannière d'alerte (paiement en retard, grâce dunning
+   encore active côté garde) + bouton Portal.
+4. **`canceled`/`unpaid`/`incomplete`** — bannière d'alerte « émission
+   bloquée » (sous-ensemble des statuts refusés par `BillingGuard` à
+   `BILLING_ENFORCEMENT=on` — l'ensemble complet est `none`/`unpaid`/
+   `canceled`/`incomplete`, mais `none` reste présenté comme l'état 1
+   « jamais abonné », pas comme un blocage) + bouton Checkout
+   (re-souscription complète, une simple mise à jour de moyen de paiement
+   via Portal ne suffit pas).
+5. **Indisponible** (branche défensive, **actuellement inatteignable**) —
+   le panneau prévoit un état « Facturation indisponible » si `GET
+   /billing/status` répondait 503, mais `BillingService.status()` ne lit
+   **que** le miroir et répond **toujours 200** (y compris en
+   `BILLING_DRIVER=none`, où le statut affiché est simplement l'état 1
+   `none` → *S'abonner*, cf. § Garde d'émission ci-dessus et tableau des
+   endpoints). En `BILLING_DRIVER=none`, c'est le **clic** sur *S'abonner*
+   (`POST /billing/checkout-session`) qui échoue en **503**
+   `billing-disabled` — le panneau affiche alors l'erreur générique
+   « Redirection impossible » (catch générique de `redirectTo`), pas cet
+   état 5 dédié.
+
+Redirections par `window.location.assign` (navigation réelle vers les URLs
+hébergées Stripe renvoyées par l'API) — aucune donnée carte, aucun formulaire
+de paiement ne transite par Factelec.
+
+### Runbook opérationnel — sandbox Stripe
+
+1. Créer un compte Stripe (mode test activé par défaut).
+2. Provisionner le catalogue : `STRIPE_SECRET_KEY=sk_test_... pnpm
+   billing:bootstrap` (depuis `apps/api`) — imprime `STRIPE_PRICE_BASE=...`
+   et `STRIPE_PRICE_METERED=...`.
+3. Copier les 2 IDs affichés dans `.env` (`STRIPE_PRICE_BASE`,
+   `STRIPE_PRICE_METERED`), avec `STRIPE_SECRET_KEY`.
+4. Écouter les webhooks en local : `stripe listen --forward-to
+   localhost:3000/billing/webhook` (adapter le port à `PORT`).
+5. Copier le `whsec_...` affiché par `stripe listen` dans `.env`
+   (`STRIPE_WEBHOOK_SECRET`).
+6. Basculer `BILLING_DRIVER=stripe` (et `BILLING_ENFORCEMENT=on` pour
+   exercer le blocage 402 réel) puis redémarrer l'API — la sélection du
+   driver est figée au bootstrap du process, jamais réévaluée à chaud.
+
+### Limites documentées (itération 1)
+
+- **`BILLING_ENFORCEMENT=off` par défaut** — le garde évalue et journalise
+  (`logger.warn`) sans jamais bloquer tant que l'activation n'est pas
+  décidée explicitement ; c'est une **décision commerciale** (go-live de
+  facturation), pas un oubli technique.
+- **Dette « Flux 6 par encaissement partiel vs slot unique » — NON liée au
+  billing**, existe indépendamment depuis le swap AFNOR CDV (3.1) : voir §
+  Encaissements partiels répétés (212→212) vs slot unique ci-dessus.
+- **Double report d'usage sur une fenêtre > 24h** — non couvert par
+  l'idempotence Stripe (`identifier` dédupliqué sur une fenêtre glissante de
+  24h côté Stripe) mais **structurellement impossible** ici : `recordUsage`
+  est idempotent en base par `(tenant, day)` **avant** tout appel au port,
+  et `markUsageReported` n'est écrit qu'après un `reportUsage` réussi — un
+  rejeu du sweep, même des jours plus tard, ne peut ni doubler la ligne
+  d'usage locale ni renvoyer deux fois le même `(tenant, day)` au port.
+- **TVA 20 % fixe, aucun Stripe Tax** — les Prices sandbox du bootstrap sont
+  `tax_behavior: 'exclusive'`, cohérent avec des clients 100 % entreprises
+  françaises (SIREN obligatoire) ; aucune détection de pays/régime n'est
+  effectuée.
+- **Aucune vue facturation super admin** au-delà du statut miroir par
+  tenant (`GET /admin/tenants`, inchangé) — différé.
+
 ## Sécurité / multi-tenant
 
 Cette section documente les mécanismes de sécurité destinés à figurer au
@@ -2973,6 +3215,14 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `CDV_PA_MATRICULE` | Matricule ICD 0238 du PA émetteur du F6 (`senderMatricule`) — **item Xavier au déploiement** | `'0000'` (placeholder dev/test) |
 | `CONSENT_DRIVER` | Fournisseur de scellement de la preuve de consentement annuaire (3.5) : `local` (`LocalFilesystemConsentStore`, scellement **structurel** testable) \| `eidas` (fournisseur de signature qualifiée réel, **activé au déploiement**, lève une erreur explicite tant que non fourni) | `local` |
 | `CONSENT_LOCAL_DIR` | Répertoire local du driver `local` | `./var/consent` |
+| `BILLING_DRIVER` | Adaptateur de facturation (phase 5) : `none` (désactivé — plateforme 100 % fonctionnelle sans compte Stripe) \| `fake` (tests/dev, HMAC en mémoire) \| `stripe` (SDK réel, exige les 4 clés `STRIPE_*`, throw **fail-fast** au bootstrap sinon) | `none` |
+| `BILLING_ENFORCEMENT` | Active (`on`) ou désactive (`off`) le blocage 402 de `BillingGuard` — découplé du driver ; `BILLING_DRIVER=none` neutralise le garde **même** à `on` | `off` |
+| `STRIPE_SECRET_KEY` | Clé secrète Stripe (`sk_test_…`/`sk_live_…`) — requise **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
+| `STRIPE_WEBHOOK_SECRET` | Secret de signature du webhook (`whsec_…`, fourni par `stripe listen` en sandbox) — requis **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
+| `STRIPE_PRICE_BASE` | ID du Price Stripe de l'abonnement de base (`pnpm billing:bootstrap`) — requis **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
+| `STRIPE_PRICE_METERED` | ID du Price Stripe métré gradué (`pnpm billing:bootstrap`) — requis **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
+| `BILLING_DASHBOARD_URL` | Base URL du dashboard pour `success_url`/`cancel_url`/`return_url` des sessions Checkout/Portal hébergées | `http://localhost:3001` |
+| `BILLING_USAGE_EVERY_MS` | Périodicité (ms) du sweep de report d'usage billing (`BillingUsageService`, worker) — chaque exécution traite le bucket **quotidien** J-1 UTC | `3600000` (1 h) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
@@ -3059,6 +3309,10 @@ README racine.
 | `GET /cdv/transmissions/:id/events` | Journal des statuts de la transmission (`fromStatus`/`toStatus`/`motif`/`actor`) | 200, 401, 404 |
 | `POST /payments` | Capture d'un encaissement (`{ invoiceId, paymentDate, currency?, reference, subtotals: [{ taxPercent, amount }] }`) — dual-auth **et** session owner/admin/accountant + CSRF (voir ci-dessous), idempotent sur `(invoiceId, reference)` : **201** si nouveau, **200** si rejeu (`created:false`, payload divergent ignoré) | 201, 200, 401, 403, 404, 422 |
 | `GET /payments?invoiceId=…` | Liste des encaissements capturés d'une facture (dual-auth, sans garde de rôle) | 200, 401, 404 |
+| `POST /billing/checkout-session` | Ouvre une session Stripe Checkout hébergée (réutilise le customer déjà attaché au miroir sinon `ensureCustomer`+`attachCustomer`) — session owner/admin + CSRF ; 503 si `BILLING_DRIVER=none` | 201, 401, 403, 503 |
+| `POST /billing/portal-session` | Ouvre une session Stripe Customer Portal hébergée — session owner/admin + CSRF ; 409 si le tenant n'a jamais eu de customer Stripe (jamais passé par checkout) ; 503 si `BILLING_DRIVER=none` | 201, 401, 403, 409, 503 |
+| `GET /billing/status` | Statut d'abonnement du tenant lu **uniquement** dans le miroir local (`tenant_billing`, jamais Stripe en direct) — reste utilisable même en `BILLING_DRIVER=none` — session owner/admin | 200, 401, 403 |
+| `POST /billing/webhook` | Webhook Stripe signé (`stripe-signature`, `rawBody`) — **aucun** guard session/CSRF (authenticité = signature HMAC) ; 400 silencieux si `rawBody`/signature absents ou invalides ; 200 idempotent sinon, y compris les événements délibérément ignorés (customer inconnu, sans statut, en retard) | 200, 400 |
 
 **Rate limiting global par IP** (`ThrottlerGuard`, `APP_GUARD`) : **toute
 route ci-dessus peut renvoyer 429**, à l'exception de `/health`/`/health/ready`
@@ -3327,12 +3581,39 @@ anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   révocation (RLS). Verrou M1 étendu 6→7, sans exclusion. Suite **LIGHT**
   (aucun `createTestWorker`) — `heavy-suites.arch`/`apikeyid-setters.arch`
   inchangés sans modification.
+- **Billing Stripe** (phase 5, itération 1) : **Postgres réel** (Testcontainers)
+  sur `BillingRepository` — CAS anti-réordonnancement prouvé aux 3 issues
+  (accepté / rejeté si plus ancien / ré-accepté si plus récent), garde
+  défensive `evt.status === null` (rejeté sans écriture), isolation RLS
+  cross-tenant (tenant B → `none`, y compris en SQL brut sous son propre
+  contexte), les 2 fonctions SD testées **par rôle** (`find_billing_tenant_by_customer`
+  refusé `42501` sous `factelec_worker`, `find_billing_subscribed_tenants`
+  refusé `42501` sous `factelec_app`). **Garde d'émission** (e2e) — 402 sur
+  `POST /invoices` pour un tenant `none`, `GET /invoices` **et**
+  `POST /invoices/:id/status` prouvés **jamais bloqués** pendant le blocage,
+  passage à `active` via un webhook signé qui débloque immédiatement
+  l'émission suivante ; garde unitaire — driver `none` neutralise **sans
+  jamais appeler le repository**, `req.tenantId` absent → throw interne
+  (jamais un 402 conservateur), `driver='stripe'` suit la même logique
+  d'enforcement que `fake` (seul `none` neutralise). **Checkout/portal/status**
+  (e2e) — 401 sans session, 403 `viewer`, 403 sans CSRF, 409 portal avant
+  tout checkout, statut `none`→`active` après `applyEvent` direct (miroir
+  webhook). **Webhook** — événement signé accepté et reflété au miroir,
+  signature invalide → 400 sans effet, événement antérieur (CAS) → 200 sans
+  effet sur le miroir (anti-réordonnancement prouvé aussi côté HTTP, pas
+  seulement repository). **Sweep d'usage** — e2e worker bouclé en-process
+  dans `HEAVY_TESTS` prouvant le comptage J-1 UTC, le report au driver, le
+  marquage et la **non-duplication** d'un second sweep rejoué. **Bootstrap
+  sandbox** — montants **exacts** assertés (pas seulement la structure),
+  idempotence par `lookup_key` aux 3 cas (catalogue complet/partiel/meter
+  déjà actif). **Factory** — `stripe` sans les 4 clés → throw explicite
+  nommant `STRIPE_SECRET_KEY`.
 - **Couverture ≥ 90 % bloquante** (lignes/fonctions/statements/branches,
   `vitest.config.ts`, seuils fusionnés sur l'agrégat des projets `heavy` +
   `light`, § Durcissements transverses), exclusions limitées au bootstrap et
   au câblage DI pur (`main.ts`, `**/*.module.ts`, `src/db/migrations/**`).
-  État actuel : 165 fichiers, **1167 tests**, couverture
-  **97.86 / 94.27 / 95.77 / 98.15 %** (statements/branches/functions/lines).
+  État actuel : 178 fichiers, **1291 tests**, couverture
+  **97.91 / 94.20 / 95.89 / 98.17 %** (statements/branches/functions/lines).
 
 ```sh
 pnpm test          # apps/api : Vitest + Testcontainers (Postgres + Redis, Docker requis)

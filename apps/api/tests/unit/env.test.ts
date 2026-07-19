@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validateEnv } from '../../src/config/env.js'
+import { envSchema, validateEnv } from '../../src/config/env.js'
 
 const base = {
   NODE_ENV: 'test',
@@ -381,5 +381,40 @@ describe('validateEnv', () => {
         PAYMENTS_LOOKBACK_MS: '0',
       }),
     ).toThrow(/PAYMENTS_LOOKBACK_MS/)
+  })
+})
+
+describe('env billing (phase 5)', () => {
+  // Seule clé réellement requise (sans .default()/.optional()) dans
+  // envSchema à ce jour : DATABASE_URL.
+  const BASE = {
+    DATABASE_URL: 'postgres://u:p@h:5432/db',
+  } as const
+
+  it('défauts sûrs : driver none, enforcement off, usage horaire', () => {
+    const parsed = envSchema.parse(BASE)
+    expect(parsed.BILLING_DRIVER).toBe('none')
+    expect(parsed.BILLING_ENFORCEMENT).toBe('off')
+    expect(parsed.BILLING_DASHBOARD_URL).toBe('http://localhost:3001')
+    expect(parsed.BILLING_USAGE_EVERY_MS).toBe(3_600_000)
+  })
+
+  it('rejette un driver inconnu', () => {
+    expect(() =>
+      envSchema.parse({ ...BASE, BILLING_DRIVER: 'paypal' }),
+    ).toThrow()
+  })
+
+  it('accepte la configuration stripe complète', () => {
+    const parsed = envSchema.parse({
+      ...BASE,
+      BILLING_DRIVER: 'stripe',
+      STRIPE_SECRET_KEY: 'sk_test_123',
+      STRIPE_WEBHOOK_SECRET: 'whsec_123',
+      STRIPE_PRICE_BASE: 'price_base',
+      STRIPE_PRICE_METERED: 'price_metered',
+    })
+    expect(parsed.BILLING_DRIVER).toBe('stripe')
+    expect(parsed.STRIPE_SECRET_KEY).toBe('sk_test_123')
   })
 })

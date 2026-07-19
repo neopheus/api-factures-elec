@@ -41,3 +41,19 @@ export interface TenantOverview {
   userCount: number
   invoiceCount: number
 }
+// Statuts miroir Stripe (Task 5/6 phase 5) — énumération locale, jamais les
+// statuts Stripe bruts (mapping serveur : incomplete_expired → canceled,
+// paused → unpaid).
+export type BillingSubscriptionStatus =
+  | 'none'
+  | 'trialing'
+  | 'active'
+  | 'past_due'
+  | 'unpaid'
+  | 'canceled'
+  | 'incomplete'
+export interface BillingStatus {
+  status: BillingSubscriptionStatus
+  currentPeriodEnd: string | null
+  hasCustomer: boolean
+}

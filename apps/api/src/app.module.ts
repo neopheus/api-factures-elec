@@ -3,6 +3,7 @@ import { AdminModule } from './admin/admin.module.js'
 import { AnnuaireModule } from './annuaire/annuaire.module.js'
 import { ApiKeysModule } from './api-keys/api-keys.module.js'
 import { AuthModule } from './auth/auth.module.js'
+import { BillingModule } from './billing/billing.module.js'
 import { CdvModule } from './cdv/cdv.module.js'
 import { AppConfigModule } from './config/config.module.js'
 import { DbModule } from './db/db.module.js'
@@ -32,6 +33,7 @@ import { UsersModule } from './users/users.module.js'
     UsersModule,
     ApiKeysModule,
     AdminModule,
+    BillingModule,
   ],
 })
 export class AppModule {}

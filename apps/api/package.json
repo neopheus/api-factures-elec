@@ -1,6 +1,6 @@
 {
   "name": "@factelec/api",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "type": "module",
   "main": "./dist/main.js",
@@ -16,7 +16,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --import tsx scripts/migrate.ts",
     "provision:tenant": "node --import tsx scripts/provision-tenant.ts",
-    "provision:admin": "node --import tsx scripts/provision-admin.ts"
+    "provision:admin": "node --import tsx scripts/provision-admin.ts",
+    "billing:bootstrap": "node --import tsx scripts/billing-bootstrap.ts"
   },
   "dependencies": {
     "@factelec/invoice-core": "workspace:*",
@@ -38,13 +39,14 @@
     "pino": "10.3.1",
     "pino-http": "11.0.0",
     "reflect-metadata": "0.2.2",
+    "stripe": "22.3.2",
     "xmlbuilder2": "4.0.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@nestjs/testing": "11.1.28",
     "@swc/cli": "0.8.1",
-    "@swc/core": "1.15.43",
+    "@swc/core": "1.15.46",
     "@testcontainers/postgresql": "12.0.4",
     "@testcontainers/redis": "12.0.4",
     "@types/big.js": "7.0.0",

@@ -737,6 +737,72 @@ export const paymentSubtotals = pgTable(
   (t) => [index('payment_subtotals_payment_idx').on(t.paymentId)],
 )
 
+// ── Billing Stripe (phase 5, spec 2026-07-19) ─────────────────────────────
+// Énum LOCALE (pas les statuts Stripe bruts) : mapping conservateur fait au
+// webhook (incomplete_expired→canceled, paused→unpaid). 'none' = jamais
+// abonné — ligne créée au premier checkout.
+export const billingStatus = pgEnum('billing_status', [
+  'none',
+  'trialing',
+  'active',
+  'past_due',
+  'unpaid',
+  'canceled',
+  'incomplete',
+])
+
+// Miroir local de l'état d'abonnement (source de vérité = Stripe ; le garde
+// ne lit QUE ce miroir — zéro appel réseau par requête).
+// onDelete 'restrict' : historique comptable conservé (spec §3).
+export const tenantBilling = pgTable(
+  'tenant_billing',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    stripeCustomerId: text('stripe_customer_id'),
+    stripeSubscriptionId: text('stripe_subscription_id'),
+    status: billingStatus('status').notNull().default('none'),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+    // Horodatage Stripe (event.created) du dernier événement APPLIQUÉ :
+    // garde anti-réordonnancement des webhooks (spec §4 — un événement plus
+    // ancien que le dernier appliqué est rejeté silencieusement).
+    lastEventCreated: timestamp('last_event_created', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex('tenant_billing_customer_unique').on(t.stripeCustomerId)],
+)
+
+// Idempotence du report d'usage : une ligne par (tenant, jour UTC) ;
+// reported_at null = comptée mais pas encore poussée à Stripe (reprise au
+// run suivant — crash-safe, spec §6).
+export const billingUsageReports = pgTable(
+  'billing_usage_reports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    day: text('day').notNull(), // YYYY-MM-DD (UTC)
+    count: integer('count').notNull(),
+    reportedAt: timestamp('reported_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('billing_usage_reports_tenant_day_unique').on(
+      t.tenantId,
+      t.day,
+    ),
+  ],
+)
+
 export const userRole = pgEnum('user_role', [
   'owner',
   'admin',

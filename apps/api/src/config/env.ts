@@ -224,6 +224,25 @@ export const envSchema = z.object({
   // Matricule ICD 0238 du PA émetteur (déploiement — miroir EREPORTING_PA_ID) :
   // identifie l'émetteur du F6 (`senderMatricule`, Task 2/6).
   CDV_PA_MATRICULE: z.string().default('0000'),
+  // ── Billing Stripe (phase 5, spec 2026-07-19) ──────────────────────────
+  // Driver 'none' par défaut : la plateforme reste 100 % fonctionnelle sans
+  // compte Stripe (dev/CI). 'fake' = tests. 'stripe' = SDK réel (les 4 clés
+  // STRIPE_* deviennent nécessaires — vérifié au câblage du module, throw
+  // explicite, motif ConsentSignatureModule).
+  BILLING_DRIVER: z.enum(['stripe', 'fake', 'none']).default('none'),
+  // Enforcement découplé du driver : 'off' = le garde évalue et log sans
+  // bloquer (activation explicite au go-live commercial). BILLING_DRIVER
+  // 'none' neutralise le garde même à 'on' (sinon : blocage global).
+  BILLING_ENFORCEMENT: z.enum(['on', 'off']).default('off'),
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  STRIPE_PRICE_BASE: z.string().optional(),
+  STRIPE_PRICE_METERED: z.string().optional(),
+  // success/cancel/return URLs des sessions hébergées Stripe.
+  BILLING_DASHBOARD_URL: z.url().default('http://localhost:3001'),
+  // Sweep horaire idempotent (report du jour J-1 UTC, sauté si déjà fait) —
+  // même philosophie que les autres *_EVERY_MS.
+  BILLING_USAGE_EVERY_MS: z.coerce.number().int().positive().default(3_600_000),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

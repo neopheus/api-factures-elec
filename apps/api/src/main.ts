@@ -9,7 +9,17 @@ import { ProblemDetailsFilter } from './common/http-exception.filter.js'
 import type { EnvConfig } from './config/env.js'
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true })
+  // `rawBody: true` : nécessaire au webhook Stripe (BillingWebhookController,
+  // Task 7) qui doit vérifier la signature HMAC sur le corps BRUT de la
+  // requête — le body-parser JSON de Nest reconstruit un JSON.stringify qui
+  // ne correspond PAS bit-à-bit au payload envoyé par Stripe (ordre des
+  // clés, espaces) et ferait échouer toute vérification de signature. Nest
+  // expose alors `req.rawBody` (type `RawBodyRequest<Request>`) SANS changer
+  // le comportement du parsing JSON pour tous les autres endpoints.
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  })
   app.useLogger(app.get(Logger))
   const config = app.get<ConfigService<EnvConfig, true>>(ConfigService)
 

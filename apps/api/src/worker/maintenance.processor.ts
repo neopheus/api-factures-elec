@@ -6,6 +6,7 @@ import {
   ANNUAIRE_SYNC_DIFF_JOB,
   ANNUAIRE_SYNC_FULL_JOB,
   ARCHIVE_RETRY_JOB,
+  BILLING_USAGE_JOB,
   CDV_STUCK_RETRY_JOB,
   CDV_TRANSMISSION_SWEEP_JOB,
   EREPORTING_SWEEP_JOB,
@@ -18,6 +19,8 @@ import { MAINTENANCE_QUEUE } from '../queue/queue.constants.js'
 import { AnnuaireSweepService } from './annuaire-sweep.service.js'
 // biome-ignore lint/style/useImportType: ArchiveRetryService résolu par Nest via design:paramtypes.
 import { ArchiveRetryService } from './archive-retry.service.js'
+// biome-ignore lint/style/useImportType: BillingUsageService résolu par Nest via design:paramtypes.
+import { BillingUsageService } from './billing-usage.service.js'
 // biome-ignore lint/style/useImportType: CdvStuckRetryService résolu par Nest via design:paramtypes.
 import { CdvStuckRetryService } from './cdv-stuck-retry.service.js'
 // biome-ignore lint/style/useImportType: CdvTransmissionSweepService résolu par Nest via design:paramtypes.
@@ -53,6 +56,7 @@ export class MaintenanceProcessor extends WorkerHost {
     private readonly cdvSweep: CdvTransmissionSweepService,
     private readonly cdvStuckRetry: CdvStuckRetryService,
     private readonly routingRetry: RecipientRoutingRetryService,
+    private readonly billingUsage: BillingUsageService,
   ) {
     super()
   }
@@ -106,6 +110,13 @@ export class MaintenanceProcessor extends WorkerHost {
     if (job.name === ROUTING_RETRY_JOB) {
       const n = await this.routingRetry.sweepPendingRouting()
       this.logger.log(`routing retry sweep: ${n} invoice(s)`)
+      return
+    }
+    if (job.name === BILLING_USAGE_JOB) {
+      const { tenants, reported } = await this.billingUsage.sweep()
+      this.logger.log(
+        `billing usage sweep: ${tenants} tenant(s), ${reported} usage line(s) reported`,
+      )
       return
     }
     this.logger.warn(`unknown maintenance job: ${job.name}`)

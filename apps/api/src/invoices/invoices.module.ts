@@ -3,6 +3,7 @@ import { AnnuaireModule } from '../annuaire/annuaire.module.js'
 import { AuthModule } from '../auth/auth.module.js'
 import { RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
+import { BillingModule } from '../billing/billing.module.js'
 import { QueueModule } from '../queue/queue.module.js'
 import { UsersModule } from '../users/users.module.js'
 import { InvoicesController } from './invoices.controller.js'
@@ -26,8 +27,17 @@ import { RecipientRoutingService } from './recipient-routing.service.js'
 // plan) : `UsersModule` (déjà importé) l'exporte déjà — la route
 // `:id/status` (Task lifecycle) le prouve, elle le compose sans qu'il soit
 // jamais un provider local d'`InvoicesModule`.
+// `BillingModule` (Task 8) : requis pour résoudre `BillingGuard`, posé sur
+// `@Post()` (dépôt facture) — `BillingModule` l'exporte déjà, aucun cycle
+// (il n'importe ni `InvoicesModule` ni ses imports, grep vérifié).
 @Module({
-  imports: [AuthModule, UsersModule, QueueModule, AnnuaireModule],
+  imports: [
+    AuthModule,
+    UsersModule,
+    QueueModule,
+    AnnuaireModule,
+    BillingModule,
+  ],
   controllers: [InvoicesController],
   providers: [
     InvoicesService,

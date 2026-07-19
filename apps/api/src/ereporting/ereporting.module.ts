@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common'
 import { AuthModule } from '../auth/auth.module.js'
 import { RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
+import { BillingModule } from '../billing/billing.module.js'
 import { QueueModule } from '../queue/queue.module.js'
 import { UsersModule } from '../users/users.module.js'
 import { EreportingController } from './ereporting.controller.js'
@@ -22,8 +23,11 @@ import { EreportingStatusService } from './ereporting-status.service.js'
 // dépend que de `Reflector` (built-in Nest) — fourni en provider local
 // (motif PaymentsModule/InvoicesModule) ; `CsrfGuard`/`SessionService` ne
 // sont PAS re-déclarés ici : `UsersModule` les exporte déjà.
+// `BillingModule` (Task 8) : requis pour résoudre `BillingGuard`, posé sur
+// `@Post('retransmissions')` — `BillingModule` l'exporte déjà, aucun cycle
+// (il n'importe ni `EreportingModule` ni ses imports, grep vérifié).
 @Module({
-  imports: [AuthModule, UsersModule, QueueModule],
+  imports: [AuthModule, UsersModule, QueueModule, BillingModule],
   controllers: [EreportingController],
   providers: [
     EreportingRepository,

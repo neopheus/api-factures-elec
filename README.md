@@ -381,7 +381,7 @@ fichiers (hors tests).
 ## `@factelec/api`
 
 API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4 + 3.1 +
-3.2 + 3.3 + 3.4 + 3.5 + 3.6** : ingestion et lecture des factures (consommant `@factelec/invoice-core`),
+3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 5.1** : ingestion et lecture des factures (consommant `@factelec/invoice-core`),
 authentification utilisateur (sessions httpOnly + CSRF), signup self-service
 transactionnel, gestion des clés API par session, super admin plateforme
 minimal, **workers BullMQ de génération asynchrone**, **cycle de vie des
@@ -495,6 +495,22 @@ détail complet, le runbook opérateur et les différés (cascade Flux 13
 réelle, raison de révocation stockée, outils d'actualisation en masse,
 ainsi qu'une divergence Tableau 6 **pré-existante** et **non liée**,
 notée au backlog).
+**Billing Stripe** (5.1, itération 1) : modèle commercial self-service —
+abonnement mensuel unique + volume métré, 100 % hébergé Stripe (Checkout +
+Customer Portal, aucune donnée carte côté Factelec). `BillingPort` (6ᵉ port
+du projet) + miroir local `tenant_billing` piloté par **webhooks signés**
+(CAS anti-réordonnancement, jamais Stripe interrogé en direct hors
+webhook) ; garde d'émission 402 (`BillingGuard`, matrice
+driver×enforcement×statut, câblé sur `POST /invoices` et `POST
+/ereporting/retransmissions` **uniquement** — les lectures ne sont jamais
+bloquées) ; sweep périodique (défaut horaire) de report d'usage métré, à
+bucket quotidien J-1, idempotent par tenant×jour ; script
+`pnpm billing:bootstrap` (catalogue sandbox
+idempotent par `lookup_key`) ; page dashboard `/billing` (5 états,
+redirections hébergées). `BILLING_ENFORCEMENT=off` par défaut — activer le
+blocage 402 est une **décision commerciale**, pas un oubli technique.
+Détail complet : `apps/api/README.md` § Billing Stripe (phase 5, itération
+1).
 Multi-tenant Postgres avec Row-Level Security **`ENABLE` + `FORCE`**, double
 régime d'auth (clés API Argon2id pour l'ingestion machine, sessions Argon2id
 pour le dashboard — lecture des factures acceptant l'un ou l'autre du même
@@ -880,6 +896,31 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       aux adaptateurs réels.
       Détail complet : `apps/api/README.md` § Révocation de consentement —
       3.6.
+- [x] **5.1 — Billing Stripe (abonnement + usage, garde d'émission)**
+      (terminé, itération 1) : premier axe de la **phase 5 (Commercialisation)**
+      — modèle self-service, plan unique + volume métré, 100 % hébergé Stripe
+      (Checkout + Customer Portal, aucune donnée carte côté Factelec).
+      `BillingPort` (6ᵉ port) + 3 drivers (`none`/`fake`/`stripe`, factory
+      fail-fast) ; miroir local `tenant_billing` piloté par **webhooks
+      signés** (CAS anti-réordonnancement `last_event_created`, état complet
+      jamais un patch, migration `0030` RLS `FORCE`) — Stripe reste la seule
+      source de vérité, jamais interrogé en direct hors webhook. **Garde
+      d'émission** 402 (`BillingGuard`, matrice driver×enforcement×statut)
+      câblé sur `POST /invoices` et `POST /ereporting/retransmissions`
+      **uniquement** — aucune lecture jamais bloquée ; `driver='none'`
+      neutralise le garde **inconditionnellement**. **Usage métré** : sweep
+      worker périodique (défaut horaire, bucket quotidien J-1 UTC,
+      idempotent par tenant×jour, isolation d'erreur par tenant). **Script**
+      `pnpm billing:bootstrap` (catalogue
+      sandbox idempotent par `lookup_key`, montants câblés en dur
+      **uniquement** dans ce script). **Dashboard** : page `/billing` (5
+      états, bannières `past_due`/bloqué, redirections Checkout/Portal
+      hébergées). **Restent en phase 5** : vue facturation du super admin,
+      super admin complet (impersonation tracée, feature flags, MFA TOTP +
+      allowlist IP, supervision des files/transmissions), observabilité
+      durcie, `BILLING_ENFORCEMENT=on` par défaut (décision commerciale),
+      Playwright (e2e navigateur). Détail complet : `apps/api/README.md` §
+      Billing Stripe (phase 5, itération 1).
 
 > **Point de reprise → phase 3 (suite)** : adhésion OpenPeppol + PKI
 > test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport CDV
@@ -1084,8 +1125,17 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
 
 Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
 
-- **Stripe / abonnements** (modèle commercial self-service, spec §2/§8) →
-  **phase 5** (Commercialisation).
+- **Stripe / abonnements — RÉSOLU pour l'itération 1 (2026-07-19)** :
+  abonnement mensuel unique + volume métré, sessions Checkout/Customer
+  Portal 100 % hébergées Stripe, miroir local piloté par webhooks, garde
+  d'émission 402 (`POST /invoices`, `POST /ereporting/retransmissions`),
+  sweep périodique (défaut horaire) de report d'usage à bucket quotidien
+  J-1, script de bootstrap catalogue sandbox
+  et page dashboard `/billing` — voir § Billing Stripe (phase 5, itération
+  1) dans `apps/api/README.md`. Restent différés (itérations suivantes) :
+  vue facturation du super admin, `BILLING_ENFORCEMENT=on` par défaut
+  (décision commerciale), paliers tarifaires multiples, essai gratuit,
+  Stripe Tax, coupons/parrainage, changement de plan en self-service.
 - **Vérification email** différée : fournisseur transactionnel non
   provisionné ; colonne `email_verified` prête en base, non contraignante
   aujourd'hui — rate limiting strict sur `/auth/signup` en compensation.

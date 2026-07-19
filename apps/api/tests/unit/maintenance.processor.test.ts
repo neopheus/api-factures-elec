@@ -27,6 +27,9 @@ function build() {
   const routingRetry = {
     sweepPendingRouting: vi.fn().mockResolvedValue(9),
   }
+  const billingUsage = {
+    sweep: vi.fn().mockResolvedValue({ tenants: 10, reported: 11 }),
+  }
   const processor = new MaintenanceProcessor(
     reconciliation as never,
     sessionMaintenance as never,
@@ -36,6 +39,7 @@ function build() {
     cdvSweep as never,
     cdvStuckRetry as never,
     routingRetry as never,
+    billingUsage as never,
   )
   return {
     processor,
@@ -47,6 +51,7 @@ function build() {
     cdvSweep,
     cdvStuckRetry,
     routingRetry,
+    billingUsage,
   }
 }
 
@@ -155,6 +160,15 @@ describe('MaintenanceProcessor.process', () => {
     expect(cdvStuckRetry.retryParked).not.toHaveBeenCalled()
   })
 
+  it('dispatches billing-usage jobs to the billing usage service (Task 9)', async () => {
+    const { processor, billingUsage, routingRetry } = build()
+
+    await processor.process({ name: 'billing-usage' } as never)
+
+    expect(billingUsage.sweep).toHaveBeenCalledTimes(1)
+    expect(routingRetry.sweepPendingRouting).not.toHaveBeenCalled()
+  })
+
   it('ignores a genuinely unknown job name without throwing (forward-compat)', async () => {
     const {
       processor,
@@ -166,6 +180,7 @@ describe('MaintenanceProcessor.process', () => {
       cdvSweep,
       cdvStuckRetry,
       routingRetry,
+      billingUsage,
     } = build()
 
     await expect(
@@ -180,5 +195,6 @@ describe('MaintenanceProcessor.process', () => {
     expect(cdvSweep.sweep).not.toHaveBeenCalled()
     expect(cdvStuckRetry.retryParked).not.toHaveBeenCalled()
     expect(routingRetry.sweepPendingRouting).not.toHaveBeenCalled()
+    expect(billingUsage.sweep).not.toHaveBeenCalled()
   })
 })

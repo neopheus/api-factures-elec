@@ -68,3 +68,12 @@ export const CDV_STUCK_RETRY_JOB = 'cdv-stuck-retry'
 // MaintenanceProcessor (branche dédiée), planifié par RoutingRetryScheduler
 // (worker/routing-retry.scheduler.ts).
 export const ROUTING_RETRY_JOB = 'routing-retry'
+// BILLING_USAGE_JOB : sweep quotidien de report d'usage billing (Task 9,
+// phase 5 Stripe) — énumère les tenants abonnés
+// (find_billing_subscribed_tenants, SD cross-tenant, migration 0030), compte
+// les documents (factures + transmissions e-reporting) créés la veille (UTC)
+// par tenant, enregistre l'usage (`BillingRepository.recordUsage`, idempotent
+// tenant×jour) puis reporte au driver Stripe (`BILLING_PORT.reportUsage`) les
+// lignes encore non reportées. Dispatché par MaintenanceProcessor (branche
+// dédiée), planifié par BillingUsageScheduler (worker/billing-usage.scheduler.ts).
+export const BILLING_USAGE_JOB = 'billing-usage'

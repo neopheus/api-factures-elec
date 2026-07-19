@@ -54,6 +54,7 @@ export function listenOnce(app: INestApplication): Promise<void> {
 export async function createTestApp(
   appUrl: string,
   redis?: { host: string; port: number },
+  opts?: { rawBody?: boolean },
 ): Promise<INestApplication> {
   process.env.DATABASE_URL = appUrl
   process.env.LOG_LEVEL = 'silent'
@@ -68,7 +69,14 @@ export async function createTestApp(
     })
   }
   const moduleRef = await builder.compile()
-  const app = moduleRef.createNestApplication({ bufferLogs: true })
+  // `rawBody` : opt-in (défaut `false`, comportement inchangé pour tous les
+  // autres fichiers e2e) — seule la suite billing webhook (Task 7) en a
+  // besoin, motif `main.ts` (vérification de signature Stripe sur le corps
+  // brut).
+  const app = moduleRef.createNestApplication({
+    bufferLogs: true,
+    rawBody: opts?.rawBody ?? false,
+  })
   app.use(helmet())
   app.use(cookieParser())
   app.useGlobalFilters(new ProblemDetailsFilter())
