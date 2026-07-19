@@ -119,36 +119,12 @@ describe('NoneBillingDriver', () => {
   })
 })
 
-describe('StripeBillingDriver (squelette Task 3 — implémentation Task 4)', () => {
-  it('chaque méthode throw explicitement "non implémenté (Task 4)"', async () => {
-    const stripe = new StripeBillingDriver(
-      'sk_test_x',
-      'whsec_x',
-      'price_base',
-      'price_metered',
-    )
-    await expect(
-      stripe.ensureCustomer({
-        tenantId: 't-1',
-        name: 'Org',
-        siren: '123456789',
-        email: 'o@ex.com',
-      }),
-    ).rejects.toThrow('non implémenté (Task 4)')
-    await expect(
-      stripe.createCheckoutSession('cus_x', 'http://ok', 'http://ko'),
-    ).rejects.toThrow('non implémenté (Task 4)')
-    await expect(
-      stripe.createPortalSession('cus_x', 'http://back'),
-    ).rejects.toThrow('non implémenté (Task 4)')
-    await expect(stripe.reportUsage([])).rejects.toThrow(
-      'non implémenté (Task 4)',
-    )
-    expect(() => stripe.constructWebhookEvent(Buffer.from(''), 'x')).toThrow(
-      'non implémenté (Task 4)',
-    )
-  })
-})
+// StripeBillingDriver a désormais une implémentation réelle (Task 4) — ses
+// tests dédiés vivent dans stripe-billing-driver.test.ts (SDK mocké) et
+// stripe-billing-driver-webhook-signature.test.ts (signature réelle, zéro
+// réseau). Le describe "squelette" qui vivait ici a été retiré : il
+// vérifiait le comportement `throw 'non implémenté'` du placeholder Task 3,
+// qui n'existe plus.
 
 // `billing-port.module.ts` est exclu de la couverture globale
 // (`**/*.module.ts`, cf. vitest.config.ts) — pur câblage DI. On extrait
