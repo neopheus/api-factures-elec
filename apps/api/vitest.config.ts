@@ -63,7 +63,10 @@ export default defineConfig({
           // helpers/postgres.ts) PUIS applique rôles/migrations, et ici en
           // plus Redis + les Workers BullMQ — le hook doit pouvoir dépasser
           // les 120 s du seul démarrage du conteneur Postgres.
-          hookTimeout: 150_000,
+          // Surcharge CI (VITEST_HOOK_TIMEOUT_MS) : les premières vagues à froid
+          // du runner (pull des images + init sous instrumentation coverage)
+          // dépassent 150 s — 300 s en CI, défaut local inchangé.
+          hookTimeout: Number(process.env.VITEST_HOOK_TIMEOUT_MS ?? '150000'),
           // Au plus un fichier heavy à la fois : élimine la contention
           // testcontainers dominante entre suites lourdes simultanées.
           fileParallelism: false,
@@ -79,7 +82,10 @@ export default defineConfig({
           exclude: HEAVY_TESTS,
           setupFiles: ['tests/setup.ts'],
           testTimeout: 60_000,
-          hookTimeout: 150_000,
+          // Surcharge CI (VITEST_HOOK_TIMEOUT_MS) : les premières vagues à froid
+          // du runner (pull des images + init sous instrumentation coverage)
+          // dépassent 150 s — 300 s en CI, défaut local inchangé.
+          hookTimeout: Number(process.env.VITEST_HOOK_TIMEOUT_MS ?? '150000'),
           // Plafond de concurrence des e2e/unit légers (Testcontainers) :
           // chaque fichier e2e démarre son propre conteneur Postgres réel ET
           // son propre serveur HTTP éphémère (supertest). Un parallélisme non

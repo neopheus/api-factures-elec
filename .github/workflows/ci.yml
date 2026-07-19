@@ -49,6 +49,10 @@ jobs:
     timeout-minutes: 120
     env:
       VITEST_LIGHT_MAX_WORKERS: "2"
+      # Démarrage à froid du runner : les premières vagues Testcontainers
+      # (sous instrumentation coverage) dépassent les 150 s locaux — 23
+      # suites light en hook timeout constatées au run 29694403835.
+      VITEST_HOOK_TIMEOUT_MS: "300000"
     steps:
       - uses: actions/checkout@v7
       # Action tierce épinglée au SHA de commit (immutabilité supply-chain,
@@ -65,6 +69,10 @@ jobs:
       # sans build, 60 suites heavy échouent en « Failed to resolve entry »
       # (constaté au premier run du job, 2026-07-19).
       - run: pnpm build
+      # Pré-pull des images Testcontainers : sans lui, les premiers beforeAll
+      # paient le téléchargement des images en plus de l'init — première
+      # cause des hook timeouts à froid.
+      - run: docker pull -q postgres:17-alpine && docker pull -q redis:7-alpine
       # Testcontainers démarre Postgres ET Redis (Docker natif du runner
       # ubuntu-latest, aucun service `redis:`/`postgres:` de job GitHub
       # requis — cycle de vie du conteneur géré par le test lui-même). Le
