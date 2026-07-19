@@ -130,6 +130,18 @@ export class AdminController {
         secret: result.secret,
       }
     }
+    // Revue sécurité Task 7, Issue 2 (fail-closed ACCEPTÉ, documenté) : à cet
+    // instant, si `result` vient de la branche recoveryCode, le code est
+    // DÉJÀ consommé côté SQL (COMMIT de set_admin_recovery_codes dans
+    // AdminService.login, avant son `return`) — un échec de `sessions.create`
+    // ci-dessous (panne DB transitoire, etc.) laisse l'admin SANS session
+    // ET avec un code de récupération perdu. Ordre inverse (créer la session
+    // AVANT de consommer le code) rejeté : une session serait alors accordée
+    // sans second facteur définitivement validé si la consommation échouait
+    // ensuite — inacceptable pour une surface admin. Le sens retenu échoue
+    // toujours du côté sûr (refuser l'accès), jamais du côté qui l'accorderait
+    // à tort ; l'admin dispose de 9 autres codes en cas de panne isolée.
+    //
     // TTL dédié (spec §5/§8, ADMIN_SESSION_TTL_HOURS, défaut 2h) — PAS le
     // TTL standard (SESSION_TTL_HOURS, 12h) : surface d'exposition réduite
     // d'un compte à privilèges élevés, cf. config/env.ts.

@@ -217,7 +217,7 @@ describe('AdminService', () => {
       expect(missingMfa.getResponse()).toEqual(wrongPassword.getResponse())
     })
 
-    it('succeeds with a valid recoveryCode, then persists the remaining codes (consumed once)', async () => {
+    it('succeeds with a valid recoveryCode, then persists the remaining codes via a CAS write (p_prior = the array just read)', async () => {
       const hash = await passwordModule.hashPassword('super-admin-passphrase-1')
       const { plain, hashed } = await totp.generateRecoveryCodes()
       query.mockResolvedValueOnce({
@@ -230,7 +230,12 @@ describe('AdminService', () => {
           }),
         ],
       })
-      query.mockResolvedValueOnce({ rows: [] }) // set_admin_recovery_codes
+      // CAS gagné (revue sécurité Task 7, Issue 1) : set_admin_recovery_codes
+      // renvoie `true` quand l'UPDATE WHERE recovery_codes = p_prior a bien
+      // affecté 1 ligne.
+      query.mockResolvedValueOnce({
+        rows: [{ set_admin_recovery_codes: true }],
+      })
 
       const result = await service.login(
         'root@factelec.fr',
@@ -245,6 +250,51 @@ describe('AdminService', () => {
       const remaining = JSON.parse(params[1])
       expect(remaining).toHaveLength(9)
       expect(remaining).not.toContain(hashed[0])
+      // p_prior = EXACTEMENT le tableau lu (hashed, avant retrait) — c'est
+      // la condition du CAS, motif de la migration 0032 amendée.
+      expect(JSON.parse(params[2])).toEqual(hashed)
+    })
+
+    // Revue sécurité Task 7, Issue 1 (TOCTOU double-spend) : deux logins
+    // concurrents avec le MÊME recoveryCode lisent tous deux la même ligne
+    // (recovery_codes encore intact pour les DEUX) puis tentent chacun
+    // l'écriture CAS — seul le PREMIER à committer gagne, le second voit son
+    // `WHERE recovery_codes = p_prior` échouer (l'état a changé) → 0 ligne →
+    // `set_admin_recovery_codes` renvoie NULL. Simulé ici en mockant ce
+    // second appel SQL directement (le mock du pool ne peut pas exprimer une
+    // vraie concurrence Postgres — la preuve au niveau réel vit dans
+    // `tests/e2e/admin-totp.e2e.test.ts`, contre un vrai Postgres).
+    it('rejects a lost CAS race (set_admin_recovery_codes returns NULL — another request already consumed this code), SAME 401 body as a wrong password', async () => {
+      const hash = await passwordModule.hashPassword('super-admin-passphrase-1')
+      const { plain, hashed } = await totp.generateRecoveryCodes()
+      query.mockResolvedValueOnce({
+        rows: [
+          pendingRow({
+            password_hash: hash,
+            totp_secret: totp.generateSecret(),
+            totp_enabled_at: new Date('2026-07-01T00:00:00Z'),
+            recovery_codes: hashed,
+          }),
+        ],
+      })
+      query.mockResolvedValueOnce({
+        rows: [{ set_admin_recovery_codes: null }], // CAS perdu
+      })
+      const lostRace = await service
+        .login('root@factelec.fr', 'super-admin-passphrase-1', {
+          recoveryCode: plain[0],
+        })
+        .catch((e) => e)
+
+      query.mockResolvedValueOnce({
+        rows: [pendingRow({ password_hash: hash })],
+      })
+      const wrongPassword = await service
+        .login('root@factelec.fr', 'wrong-password', {})
+        .catch((e) => e)
+
+      expect(lostRace).toBeInstanceOf(UnauthorizedException)
+      expect(lostRace.getResponse()).toEqual(wrongPassword.getResponse())
     })
 
     it('rejects an unknown recoveryCode with the SAME 401 body as a wrong password (anti-oracle)', async () => {

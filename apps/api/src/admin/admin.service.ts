@@ -133,10 +133,21 @@ export class AdminService {
         mfa.recoveryCode,
       )
       if (!ok) throw this.invalid()
-      await this.pool.query('SELECT set_admin_recovery_codes($1, $2::jsonb)', [
+      // CAS (revue sécurité Task 7, Issue 1 — TOCTOU double-spend) : `p_prior`
+      // = EXACTEMENT le tableau lu ci-dessus (`hashedCodes`, avant retrait du
+      // code consommé). Si un login concurrent a déjà consommé ce même code
+      // entre notre lecture et cet UPDATE, `recovery_codes` en base a déjà
+      // changé → le WHERE échoue, 0 ligne, `set_admin_recovery_codes` renvoie
+      // NULL → même 401 générique que tout autre échec (le code vient d'être
+      // consommé par l'autre requête, aucune distinction offerte au client).
+      const written = await this.pool.query<{
+        set_admin_recovery_codes: boolean | null
+      }>('SELECT set_admin_recovery_codes($1, $2::jsonb, $3::jsonb)', [
         row.admin_id,
         JSON.stringify(remaining),
+        JSON.stringify(hashedCodes),
       ])
+      if (!written.rows[0]?.set_admin_recovery_codes) throw this.invalid()
       return { outcome: 'success', adminId: row.admin_id }
     }
     throw this.invalid() // ni totpCode ni recoveryCode fourni

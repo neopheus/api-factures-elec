@@ -24,9 +24,10 @@ const PASSWORD = 'super-admin-passphrase-1'
 // (contrairement au throttle GLOBAL RATE_LIMIT_LIMIT/RATE_LIMIT_TTL,
 // bypassable via tests/e2e/helpers/rate-limit-env.ts : /admin/login pose son
 // propre `@Throttle` par-route qui l'ignore, cf. admin.controller.ts). Ce
-// fichier compte ses appels : 7 POST /admin/login au total (202 enrôlement,
-// 200 via totpCode, 200 via recoveryCode, 401 rejeu recovery, 401×3
-// anti-oracle) — sous la limite de 10. `/admin/totp/confirm` a son PROPRE
+// fichier compte ses appels : 9 POST /admin/login au total (202 enrôlement,
+// 200 via totpCode, 200 via recoveryCode, 401 rejeu recovery, 200+401 course
+// concurrente réelle, 401×3 anti-oracle) — sous la limite de 10. `/admin/
+// totp/confirm` a son PROPRE
 // throttle indépendant (clé incluant le nom du handler, cf.
 // ThrottlerGuard.generateKey) : le seul appel de ce fichier ne partage donc
 // aucun budget avec /admin/login.
@@ -131,6 +132,28 @@ describe('MFA TOTP super admin — cycle complet (e2e)', () => {
       .send({ email: EMAIL, password: PASSWORD, recoveryCode: target })
       .expect(401)
     expect(replay.body.type).toBe('urn:factelec:problem:unauthorized')
+  })
+
+  // Revue sécurité Task 7, Issue 1 (TOCTOU double-spend, migration 0032
+  // amendée avec un CAS p_prior) : preuve à la Postgres RÉELLE, pas mockée
+  // — deux requêtes envoyées SIMULTANÉMENT (`Promise.all`, pas séquentielles
+  // comme le test 4 ci-dessus) avec le MÊME recoveryCode encore valide.
+  // Le verrouillage ligne standard de l'UPDATE CAS (set_admin_recovery_codes)
+  // sérialise les deux écritures : la première gagne (200), la seconde
+  // réévalue son `WHERE recovery_codes = p_prior` contre l'état déjà modifié
+  // par la première et échoue déterministiquement (401) — jamais les deux à
+  // 200 (double-spend), jamais les deux à 401 (perte du code sans usage).
+  it('4b. deux logins SIMULTANÉS avec le MÊME recoveryCode → un seul réussit (200), l’autre échoue (401)', async () => {
+    const target = recoveryCodes[1]!
+    const [first, second] = await Promise.all([
+      request(app.getHttpServer())
+        .post('/admin/login')
+        .send({ email: EMAIL, password: PASSWORD, recoveryCode: target }),
+      request(app.getHttpServer())
+        .post('/admin/login')
+        .send({ email: EMAIL, password: PASSWORD, recoveryCode: target }),
+    ])
+    expect([first.status, second.status].sort()).toEqual([200, 401])
   })
 
   it('5. anti-oracle : password faux / totpCode faux / totpCode+recoveryCode absents → le MÊME corps 401 (strict)', async () => {

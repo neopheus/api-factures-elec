@@ -81,13 +81,34 @@ GRANT EXECUTE ON FUNCTION confirm_admin_totp(uuid, jsonb) TO factelec_app;
 -- ── set_admin_recovery_codes : retire un code consommé (spec §5, POST ────
 -- /admin/login via recoveryCode) — écrit le tableau `remaining` calculé par
 -- TotpService.consumeRecoveryCode (le code employé déjà retiré côté Node).
-CREATE FUNCTION set_admin_recovery_codes(p_admin_id uuid, p_recovery_codes jsonb)
-RETURNS void
+--
+-- CAS (compare-and-swap) sur `p_prior` (revue sécurité Task 7, Issue 1) :
+-- SANS `AND recovery_codes = p_prior`, deux logins CONCURRENTS avec le MÊME
+-- recovery code lisent tous deux la même ligne AVANT que l'un des deux
+-- n'écrive (lecture faite par AdminService.login via authenticate_platform_
+-- admin, dans une requête SQL SÉPARÉE de celle-ci) — chacun calcule
+-- indépendamment `remaining` (le même tableau) et l'écrit sans condition :
+-- les DEUX logins réussissent (double-spend d'un code à usage unique). La
+-- clause `WHERE recovery_codes = p_prior` (jsonb, égalité structurelle —
+-- comparaison profonde, PAS une comparaison de texte) transforme l'UPDATE
+-- en CAS : le verrouillage ligne standard de Postgres sérialise les deux
+-- UPDATE concurrents (le second bloque jusqu'au COMMIT du premier), puis le
+-- second réévalue le WHERE contre l'état POST-COMMIT du premier — qui a déjà
+-- changé `recovery_codes`, donc `= p_prior` échoue, 0 ligne affectée,
+-- RETURNING ne renvoie rien → AdminService traite ça comme un code déjà
+-- consommé (même 401 générique, motif confirm_admin_totp ci-dessus).
+CREATE FUNCTION set_admin_recovery_codes(
+  p_admin_id uuid, p_recovery_codes jsonb, p_prior jsonb
+)
+RETURNS boolean
 LANGUAGE sql SECURITY DEFINER SET search_path = public
 AS $$
-  UPDATE platform_admins SET recovery_codes = p_recovery_codes WHERE id = p_admin_id;
+  UPDATE platform_admins
+  SET recovery_codes = p_recovery_codes
+  WHERE id = p_admin_id AND recovery_codes = p_prior
+  RETURNING true;
 $$;
 --> statement-breakpoint
-REVOKE ALL ON FUNCTION set_admin_recovery_codes(uuid, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION set_admin_recovery_codes(uuid, jsonb, jsonb) FROM PUBLIC;
 --> statement-breakpoint
-GRANT EXECUTE ON FUNCTION set_admin_recovery_codes(uuid, jsonb) TO factelec_app;
+GRANT EXECUTE ON FUNCTION set_admin_recovery_codes(uuid, jsonb, jsonb) TO factelec_app;
