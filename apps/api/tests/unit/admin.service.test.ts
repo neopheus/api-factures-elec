@@ -2,15 +2,28 @@ import { UnauthorizedException } from '@nestjs/common'
 import type pg from 'pg'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdminService } from '../../src/admin/admin.service.js'
+import type {
+  AdminSupervisionRepository,
+  AdminTenantDetail,
+  AdminTenantStats,
+} from '../../src/admin/admin-supervision.repository.js'
 import * as passwordModule from '../../src/auth/password.js'
 
 describe('AdminService', () => {
   let query: ReturnType<typeof vi.fn>
+  let supervision: {
+    tenantStats: ReturnType<typeof vi.fn>
+    tenantDetail: ReturnType<typeof vi.fn>
+  }
   let service: AdminService
 
   beforeEach(() => {
     query = vi.fn()
-    service = new AdminService({ query } as unknown as pg.Pool)
+    supervision = { tenantStats: vi.fn(), tenantDetail: vi.fn() }
+    service = new AdminService(
+      { query } as unknown as pg.Pool,
+      supervision as unknown as AdminSupervisionRepository,
+    )
   })
 
   describe('login', () => {
@@ -62,51 +75,71 @@ describe('AdminService', () => {
     })
   })
 
+  // Vecteur modifié (Task 3, spec §3) : `listTenants` ne construit plus la
+  // requête SQL/le mapping bigint→number lui-même (ancien test ci-dessus,
+  // supprimé) — cette logique a migré dans `AdminSupervisionRepository`
+  // (SD 1 find_admin_tenant_stats), couverte par
+  // `tests/e2e/admin-supervision.e2e.test.ts` contre un vrai Postgres (même
+  // convention que BillingRepository, jamais unit-testé avec un pool mocké).
+  // `AdminService.listTenants` est désormais un pur délégateur : le seul
+  // comportement à vérifier ici est la délégation elle-même.
   describe('listTenants', () => {
-    it('maps every tenant row, converting bigint counts to numbers', async () => {
-      query.mockResolvedValue({
-        rows: [
-          {
-            id: 't1',
-            name: 'Shop A',
-            siren: null,
-            created_at: new Date('2024-01-01T00:00:00Z'),
-            user_count: '3',
-            invoice_count: '10',
-          },
-          {
-            id: 't2',
-            name: 'Shop B',
-            siren: '732829320',
-            created_at: new Date('2024-02-01T00:00:00Z'),
-            user_count: '0',
-            invoice_count: '0',
-          },
-        ],
-      })
-
-      const result = await service.listTenants()
-
-      expect(result).toEqual([
+    it('delegates to AdminSupervisionRepository.tenantStats and forwards its result unchanged', async () => {
+      const stats: AdminTenantStats[] = [
         {
           id: 't1',
           name: 'Shop A',
           siren: null,
           createdAt: new Date('2024-01-01T00:00:00Z'),
-          userCount: 3,
-          invoiceCount: 10,
+          suspendedAt: null,
+          billingStatus: 'active',
+          invoices30d: 3,
+          ereporting30d: 1,
+          deadLetters: 0,
         },
-        {
-          id: 't2',
-          name: 'Shop B',
-          siren: '732829320',
-          createdAt: new Date('2024-02-01T00:00:00Z'),
-          userCount: 0,
-          invoiceCount: 0,
+      ]
+      supervision.tenantStats.mockResolvedValue(stats)
+
+      const result = await service.listTenants()
+
+      expect(supervision.tenantStats).toHaveBeenCalledWith()
+      expect(result).toBe(stats)
+    })
+  })
+
+  describe('tenantDetail', () => {
+    it('delegates to AdminSupervisionRepository.tenantDetail with the given id', async () => {
+      const detail: AdminTenantDetail = {
+        id: 't1',
+        name: 'Shop A',
+        siren: null,
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        suspendedAt: null,
+        billingStatus: 'active',
+        invoices30d: 3,
+        ereporting30d: 1,
+        deadLetters: 0,
+        invoices: [],
+        billing: {
+          status: 'active',
+          currentPeriodEnd: null,
+          hasCustomer: true,
         },
-      ])
-      const [sql] = query.mock.calls[0]!
-      expect(sql).toContain('list_tenants_for_admin')
+      }
+      supervision.tenantDetail.mockResolvedValue(detail)
+
+      const result = await service.tenantDetail('t1')
+
+      expect(supervision.tenantDetail).toHaveBeenCalledWith('t1')
+      expect(result).toBe(detail)
+    })
+
+    it('forwards null unchanged when the repository finds no matching tenant (controller turns it into 404)', async () => {
+      supervision.tenantDetail.mockResolvedValue(null)
+
+      const result = await service.tenantDetail('unknown-id')
+
+      expect(result).toBeNull()
     })
   })
 })

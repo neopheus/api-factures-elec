@@ -36,7 +36,16 @@ describe('db schema (Drizzle)', () => {
   it('tenants has no tenant_id column (it IS the tenant) and defaults an id', () => {
     const { columns } = getTableConfig(tenants)
     const names = columns.map((c) => c.name)
-    expect(names).toEqual(['id', 'name', 'siren', 'created_at'])
+    // suspended_at/suspended_reason : migration 0031 (phase 5 it.2, Task 2,
+    // spec §2 — suspension opérateur, préexistant à cette tâche).
+    expect(names).toEqual([
+      'id',
+      'name',
+      'siren',
+      'created_at',
+      'suspended_at',
+      'suspended_reason',
+    ])
     expect(names).not.toContain('tenant_id')
   })
 

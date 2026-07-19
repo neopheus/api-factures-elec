@@ -3,19 +3,19 @@ import type pg from 'pg'
 import { timingSafeVerifyReject, verifyPassword } from '../auth/password.js'
 import { ProblemType, problem } from '../common/problem.js'
 import { APP_POOL } from '../db/client.js'
-
-export interface TenantOverview {
-  id: string
-  name: string
-  siren: string | null
-  createdAt: Date
-  userCount: number
-  invoiceCount: number
-}
+import type {
+  AdminTenantDetail,
+  AdminTenantStats,
+} from './admin-supervision.repository.js'
+// biome-ignore lint/style/useImportType: AdminSupervisionRepository est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
+import { AdminSupervisionRepository } from './admin-supervision.repository.js'
 
 @Injectable()
 export class AdminService {
-  constructor(@Inject(APP_POOL) private readonly pool: pg.Pool) {}
+  constructor(
+    @Inject(APP_POOL) private readonly pool: pg.Pool,
+    private readonly supervision: AdminSupervisionRepository,
+  ) {}
 
   async login(email: string, password: string): Promise<{ adminId: string }> {
     const res = await this.pool.query(
@@ -40,17 +40,17 @@ export class AdminService {
     return { adminId: row.admin_id }
   }
 
-  async listTenants(): Promise<TenantOverview[]> {
-    const res = await this.pool.query(
-      'SELECT id, name, siren, created_at, user_count, invoice_count FROM list_tenants_for_admin()',
-    )
-    return res.rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      siren: r.siren,
-      createdAt: r.created_at,
-      userCount: Number(r.user_count),
-      invoiceCount: Number(r.invoice_count),
-    }))
+  // Task 3 (spec §3) : liste enrichie déléguée au repository (SD 1
+  // find_admin_tenant_stats, migration 0031) — remplace l'ancienne requête
+  // directe à list_tenants_for_admin() (compteurs users/invoices bruts,
+  // sans billing/anomalies). Contrat HTTP élargi côté contrôleur
+  // (AdminController.listTenants enveloppe dans `{ tenants }`).
+  async listTenants(): Promise<AdminTenantStats[]> {
+    return this.supervision.tenantStats()
+  }
+
+  // null = tenant inconnu → 404 problem posé par AdminController.
+  async tenantDetail(tenantId: string): Promise<AdminTenantDetail | null> {
+    return this.supervision.tenantDetail(tenantId)
   }
 }

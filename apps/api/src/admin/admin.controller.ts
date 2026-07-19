@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   HttpCode,
+  NotFoundException,
+  Param,
   Post,
   Req,
   Res,
@@ -19,6 +21,8 @@ import { SessionGuard } from '../auth/session.guard.js'
 // biome-ignore lint/style/useImportType: SessionService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { SessionService } from '../auth/session.service.js'
 import { CSRF_COOKIE, SESSION_COOKIE } from '../auth/session-token.js'
+import { ProblemType, problem } from '../common/problem.js'
+import { isUuid } from '../common/uuid.js'
 import { parseBody } from '../common/validation.js'
 import type { EnvConfig } from '../config/env.js'
 import { AdminGuard } from './admin.guard.js'
@@ -77,9 +81,31 @@ export class AdminController {
     res.clearCookie(CSRF_COOKIE, csrfCookieOptions(this.config, 0))
   }
 
+  // Task 3 (spec §3) : liste enrichie (SD find_admin_tenant_stats), enveloppe
+  // `{ tenants }` — remplace l'ancien tableau nu (adaptation du contrat,
+  // motif documenté au rapport de tâche).
   @Get('tenants')
   @UseGuards(SessionGuard, AdminGuard)
-  listTenants() {
-    return this.admin.listTenants()
+  async listTenants() {
+    return { tenants: await this.admin.listTenants() }
+  }
+
+  // Détail per-tenant RLS-scopé (spec §3) : 404 anti-fuite BYTE-IDENTIQUE
+  // pour un id malformé (garde isUuid, motif LedgerController/CdvController)
+  // ou un tenant inconnu (service → null) — un attaquant ne peut pas
+  // distinguer les deux cas.
+  @Get('tenants/:id')
+  @UseGuards(SessionGuard, AdminGuard)
+  async tenantDetail(@Param('id') id: string) {
+    if (!isUuid(id)) throw this.notFound()
+    const detail = await this.admin.tenantDetail(id)
+    if (detail === null) throw this.notFound()
+    return detail
+  }
+
+  private notFound(): NotFoundException {
+    return new NotFoundException(
+      problem(404, ProblemType.notFound, 'Unknown tenant'),
+    )
   }
 }

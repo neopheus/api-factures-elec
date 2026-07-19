@@ -82,17 +82,26 @@ describe('super admin (e2e)', () => {
       .expect(422)
   })
 
+  // Vecteur modifié (Task 3, spec §3) : `GET /admin/tenants` renvoie
+  // désormais `{ tenants: [...] }` (plus un tableau nu) avec les colonnes
+  // enrichies de `find_admin_tenant_stats` (billing/volumes/anomalies) au
+  // lieu de `userCount`/`invoiceCount` — la couverture détaillée de
+  // l'enrichissement (billing actif, invoices30d, détail per-tenant, 404)
+  // vit dans `tests/e2e/admin-supervision.e2e.test.ts` ; ce test-ci ne
+  // vérifie plus que le contrat d'enveloppe minimal reste satisfait pour
+  // les 2 tenants déjà seedés par ce fichier.
   it('lists all tenants for an authenticated admin', async () => {
     const cookie = await adminCookie()
     const res = await request(app.getHttpServer())
       .get('/admin/tenants')
       .set('Cookie', cookie)
       .expect(200)
-    const names = res.body.map((t: { name: string }) => t.name)
+    const names = res.body.tenants.map((t: { name: string }) => t.name)
     expect(names).toContain('Shop A')
     expect(names).toContain('Shop B')
-    expect(res.body[0]).toHaveProperty('userCount')
-    expect(res.body[0]).toHaveProperty('invoiceCount')
+    expect(res.body.tenants[0]).toHaveProperty('billingStatus')
+    expect(res.body.tenants[0]).toHaveProperty('invoices30d')
+    expect(res.body.tenants[0]).toHaveProperty('deadLetters')
   })
 
   it('forbids a tenant user from the admin area (403)', async () => {
