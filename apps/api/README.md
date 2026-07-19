@@ -33,9 +33,12 @@ statut Flux 6/CDAR)** et le **remplacement de la matrice de transitions du
 cycle de vie facture** : la matrice **monotone** 2.1 (bloqueur go-live
 documenté) est remplacée par une **matrice DAG data-driven** corrigeant les 4
 anomalies mandatées, **paramétrée** pour absorber la norme **AFNOR
-XP Z12-012** (payante, hors dépôt — achat Xavier) sans toucher au reste du
-code — le bloqueur devient une **interprétation en attente d'AFNOR**, plus
-une matrice **fausse**. Le Flux 6 est généré au format **CDAR** (UN/CEFACT
+XP Z12-012** sans toucher au reste du code. **Depuis le 2026-07-19, le swap
+AFNOR est effectué** : la table est ancrée sur les normes **XP Z12-012 et
+XP Z12-014 (juillet 2025)** — transmission ordonnée, traitement indépendant,
+`refusee`/`rejetee` terminaux de droit, `encaissee` ré-ouvrable pour les
+encaissements partiels (voir § Cycle de vie CDV) — l'interprétation projet
+n'est plus en attente de la norme. Le Flux 6 est généré au format **CDAR** (UN/CEFACT
 SCRDM CI, aucun XSD DGFiP disponible → **validation structurelle** honnête,
 posture PAF) et transmis vers **deux cibles indépendantes** (PPF réglementaire
 + plateforme de réception résolue par l'annuaire 2.4), sous un délai **24h**
@@ -281,55 +284,70 @@ restants sont facultatifs (`emise`/`recue`/
 `paiement_transmis`). Chaque facture démarre à `deposee` (200, **obligatoire**)
 à l'ingestion (événement initial inscrit dans le journal, cf. ci-dessous).
 
-**Machine à états — matrice DAG data-driven** (`src/invoices/lifecycle-status.ts`,
-**remplace en 3.1** la chronologie monotone de 2.1) : une transition
-`from → to` n'est valide que si l'arête `to` figure dans
-`ALLOWED_TRANSITIONS[from]` (`Record<LifecycleStatus, LifecycleStatus[]>`,
+**Machine à états — matrice NORMATIVE data-driven** (`src/invoices/lifecycle-status.ts`,
+**swap AFNOR effectué le 2026-07-19** — remplace l'interprétation projet
+de 3.1) : une transition `from → to` n'est valide que si l'arête `to` figure
+dans `ALLOWED_TRANSITIONS[from]` (`Record<LifecycleStatus, LifecycleStatus[]>`,
 paramétrée — le reste du code, `LifecycleService`/`InvoicesController`/…,
 n'appelle jamais que `canTransition`/`requiresReason`, jamais la table
-directement) ; motif (`reason`) **obligatoire** pour `refusee`/`suspendue`
-(règle G7.25) ; terminaux : `refusee` (210), `encaissee` (212) et `rejetee`
-(213) — aucune transition sortante, y compris entre eux.
+directement) ; motif (`reason`) **obligatoire** pour
+`refusee`/`rejetee`/`en_litige` (XP Z12-014 §4.3.1/§4.2.2/§4.3.2) et
+`suspendue` (règle G7.25) ; terminaux **de droit** : `refusee` (210) et
+`rejetee` (213) — « ne peut pas être suivi d'un autre statut »
+(XP Z12-014 §4.3.1 p. 22).
 
-**4 anomalies mandatées, corrigées contre le modèle monotone 2.1** (ledger
-2.1, appliquées à la table ci-dessus) :
-- **`212 Encaissée → 213 Rejetée` INTERDIT** (`encaissee` rendu terminal —
-  CGI art. 290 A : une facture encaissée n'est plus rejetable) — le monotone
-  l'autorisait à tort (code strictement croissant).
-- **`207 En litige → 205 Approuvée` AUTORISÉ** (dispute résolue) — le
-  monotone le refusait (205 < 207).
-- **`208 Suspendue → 204 Prise en charge` AUTORISÉ** (reprise
-  post-suspension) — le monotone le refusait (204 < 208).
-- **`206 Approuvée partiellement → 205 Approuvée` AUTORISÉ** (complétion) —
-  le monotone le refusait (205 < 206).
+**Modèle normatif traduit en machine à états** (AFNOR XP Z12-012 juillet
+2025 + XP Z12-014 juillet 2025, pages primaires ré-extraites des PDF au
+moment du swap — leçon B1) :
+- **Phase de transmission ordonnée** : `Déposée → Émise → Reçue → Mise à
+  disposition` « dans cet ordre » (XP Z12-014 §4.2.1 p. 14), avec sauts
+  (statuts facultatifs, non systématiquement transmis à la contrepartie) ;
+  `Rejetée` (213) est l'**alternative exclusive** au succès des contrôles
+  (« soit “Rejetée” en cas d'erreur, soit “Reçue” », p. 15-16) : possible
+  depuis `deposee`/`emise` (rejet en réception encore à venir), **jamais**
+  après `recue` ni depuis un statut de traitement.
+- **Phase de traitement indépendante** : les 7 statuts de traitement non
+  terminaux (`prise_en_charge`, `approuvee`, `approuvee_partiellement`,
+  `en_litige`, `suspendue`, `completee`, `paiement_transmis`) « peuvent être
+  posés de façon indépendante » (p. 14) → **maillage complet** entre eux,
+  plus `encaissee` et `refusee` depuis chacun. Couvre notamment
+  `suspendue → completee` (réponse du VENDEUR, §4.2.1 ét. 4c) et
+  `approuvee → encaissee` direct (« Paiement Transmis » seulement
+  « recommandé », §4.2.1 ét. 5).
+- **`encaissee` (212) n'est plus intégralement terminale** : « créer […] un
+  statut “Encaissée” à chaque encaissement **partiel** ou total » (§4.2.1
+  p. 18) → self-loop `212→212` (seul de la table) + `212→211` (paiement du
+  solde). Terminale **de fait** après encaissement total (§4.3.2 ét. 6a-6b).
+  L'amendement A3 (« 212 entièrement terminal », sur-ensemble du mandat,
+  explicitement révisable à l'acquisition d'AFNOR) est **levé** ; le mandat
+  dur `¬(212→213)` reste garanti.
 
-> ⚠️ **INTERPRÉTATION PROJET — la table ENTIÈRE, en attente d'AFNOR
-> XP Z12-012.** La DGFiP ne publie, dans le Dossier général, aucune matrice
-> de transitions autorisées (les figures 48/49 du circuit de transmission
-> sont purement graphiques, non extractibles en règles machine) — seule la
-> contrainte « respect de la chronologie » (G7.19/G7.25/G7.45) est
-> documentée, complétée par les 4 corrections mandatées ci-dessus (ledger
-> 2.1). La norme qui énumère formellement ces transitions — **AFNOR
-> XP Z12-012** — est **payante et hors dépôt** (**item Xavier : achat
-> requis** avant tout passage en production réelle). La table est
-> **paramétrée** précisément pour que ce remplacement futur ne touche QUE
-> `ALLOWED_TRANSITIONS` + `REASON_REQUIRED` + les vecteurs de test — aucun
-> autre fichier consommateur. **Amendement A3 (revue plan 3.1, binding) :**
-> `encaissee` est rendu **entièrement** terminal (aucune arête sortante,
-> pas seulement `¬(212→213)`) — un **sur-ensemble** du mandat dur, défendable
-> (CGI 290 A ; aucune source publique n'ancre de transition sortante de 212)
-> mais **plus strict que l'exigence mandatée**, donc **révisable** à
-> l'acquisition d'AFNOR. **Le remplacement du monotone par ce DAG NE
+**4 anomalies mandatées du monotone 2.1 — toujours corrigées** :
+`¬(212→213)` ; `207→205` ; `208→204` ; `206→205` (les 3 retours sont
+désormais couverts par l'indépendance normative des statuts de traitement).
+
+> 📘 **ANCRAGE NORMATIF DU SWAP.** Ni la DGFiP (Dossier général v3.2) ni la
+> norme AFNOR n'énumèrent de matrice `from→to` : la XP Z12-012 (« Formats et
+> Profils des messages Factures et Statuts de cycle de vie ») décrit le
+> message CDAR et ses règles (BR-FR-CDV-*), la XP Z12-014 (« Cas d'usage
+> B2B ») décrit l'ordonnancement par cinématiques. La table est la
+> **traduction machine-à-états** de ce modèle, chaque arête (ou absence
+> d'arête) étant ancrée à une citation précise (voir bannière du module).
+> **Statuts normatifs émergents hors socle** (non intégrés — le socle
+> MDT-105 reste « 200 à 213 pour l'instant », XP Z12-012 §5.1.1 p. 49) :
+> « Annulée » (§4.3.3, sans code assigné), « ERREUR_ROUTAGE » (221, signal
+> PDP-R→PDP-E de rejeu — à traiter avec les adaptateurs transport réels),
+> « RECEVABLE »/« IRRECEVABLE » (500/501, niveau **lot**). **Le swap NE
 > TOUCHE PAS au journal scellé (2.2)** : `verifyTenantChain` ne re-valide
 > jamais les transitions historiques (seul le hash-chain est vérifié) — les
-> lignes déjà inscrites sous l'ancienne matrice monotone restent
-> intégralement valides après le swap ; seul le **garde de service** change
-> pour les futures transitions. **Filet anti-régression indépendant** : les
-> tests de complétude (14×14 arêtes) comparent `ALLOWED_TRANSITIONS` à un
-> littéral `EXPECTED_TRANSITIONS` retranscrit à la main du plan — **pas** à
-> lui-même — pour qu'une future erreur de retranscription AFNOR (typo de
-> table) reste détectable plutôt que de valider silencieusement contre son
-> propre sujet.
+> lignes inscrites sous les matrices précédentes restent intégralement
+> valides ; seul le **garde de service** change pour les futures
+> transitions. **Filet anti-régression indépendant** : les tests de
+> complétude (14×14 arêtes) comparent `ALLOWED_TRANSITIONS` à un oracle
+> `EXPECTED_TRANSITIONS` retranscrit à la main **depuis les extraits
+> primaires de la norme** — pas dérivé de la table — pour qu'une erreur de
+> retranscription reste détectable plutôt que de valider silencieusement
+> contre son propre sujet.
 
 **Endpoints** :
 
@@ -1895,6 +1913,21 @@ erroné du réseau/destinataire, ou bug de génération local depuis corrigé),
 la remise en circulation exige un **reset manuel hors-bande** (accès DB
 direct, rôle propriétaire — comme la procédure du slot A2 e-reporting) ;
 aucun endpoint de redrive n'est fourni en 3.1.
+
+### Encaissements partiels répétés (212→212) vs slot unique — dette documentée
+
+Depuis le swap AFNOR (2026-07-19), la matrice de cycle de vie accepte des
+statuts `212 Encaissée` **successifs** (encaissements partiels — XP Z12-014
+§4.2.1 p. 18 : « à chaque encaissement partiel ou total »). Le **journal
+CDV** enregistre bien chaque événement `212→212` ; en revanche, le slot
+unique `(invoice_id, to_status, target)` de `cdv_transmissions` fait
+qu'**un seul Flux 6 « Encaissée » par cible** est transmis : le 2ᵉ
+encaissement partiel déduplique sur le slot du 1ᵉʳ (idempotence
+anti-double-envoi, comportement voulu pour les statuts uniques). Transmettre
+un Flux 6 **par encaissement partiel** exigera d'étendre la clé du slot
+(p. ex. au `seq` de l'événement source) — évolution différée à
+l'implémentation des **adaptateurs de transport réels** (item Xavier),
+aucune transmission réelle n'ayant lieu à ce jour.
 
 ### 601 tardif après acceptation implicite — refus correct, sans événement fantôme
 
