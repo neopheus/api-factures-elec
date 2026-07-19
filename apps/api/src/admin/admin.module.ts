@@ -7,6 +7,7 @@ import { AdminService } from './admin.service.js'
 import { AdminJobsService } from './admin-jobs.service.js'
 import { AdminSupervisionRepository } from './admin-supervision.repository.js'
 import { SuspensionGuard } from './suspension.guard.js'
+import { TotpService } from './totp.service.js'
 
 // UsersModule : SessionService/SessionGuard/CsrfGuard — CE DERNIER désormais
 // UTILISÉ ici (Task 4, POST suspend/unsuspend, spec §2 "CsrfGuard sur les
@@ -29,6 +30,9 @@ import { SuspensionGuard } from './suspension.guard.js'
     AdminSupervisionRepository,
     SuspensionGuard,
     AdminJobsService,
+    // Task 7 (spec §5) : MFA TOTP — consommé UNIQUEMENT par AdminService,
+    // pas exporté (même convention que AdminJobsService ci-dessus).
+    TotpService,
   ],
   // SuspensionGuard + AdminSupervisionRepository exportés (motif
   // BillingModule : BillingRepository + BillingGuard) — InvoicesModule et

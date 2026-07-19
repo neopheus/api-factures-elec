@@ -35,9 +35,32 @@ import { AdminService } from './admin.service.js'
 // biome-ignore lint/style/useImportType: AdminJobsService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { AdminJobsService } from './admin-jobs.service.js'
 
+// `totpCode`/`recoveryCode` optionnels (Task 7, spec §5) : c'est
+// AdminService.login qui tranche selon l'état d'enrôlement — un admin non
+// enrôlé peut se passer des deux (→ 202 enrollment_required), un admin
+// enrôlé DOIT fournir l'un des deux (sinon 401 générique, posé par le
+// service). `totpCode` bornée 6 chiffres exactement (format TOTP standard) ;
+// `recoveryCode` bornée en longueur seulement (PAS de regex stricte sur le
+// format `xxxx-xxxx` ici : un format invalide échoue simplement à matcher
+// un hash dans consumeRecoveryCode → même 401 générique, aucune fuite
+// d'information supplémentaire à distinguer par un 422 dédié).
 const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1).max(200),
+  totpCode: z
+    .string()
+    .regex(/^\d{6}$/)
+    .optional(),
+  recoveryCode: z.string().min(1).max(32).optional(),
+})
+
+// POST /admin/totp/confirm (Task 7, spec §5) — hors session, mêmes bornes
+// email/password que loginSchema ; totpCode REQUIS (pas d'enrollment sans
+// code, contrairement au login où il est conditionnel à l'état admin).
+const totpConfirmSchema = z.object({
+  email: z.email(),
+  password: z.string().min(1).max(200),
+  totpCode: z.string().regex(/^\d{6}$/),
 })
 
 // Motif reason 1..500 (spec §3, symétrique à `retransmissionSchema.reason`
@@ -81,17 +104,41 @@ export class AdminController {
     private readonly jobs: AdminJobsService,
   ) {}
 
+  // Flux MFA TOTP (Task 7, spec §5) — status dynamique (200 succès / 202
+  // enrollment_required), motif `PaymentsController.capture` (`res.status()`
+  // + `@Res({passthrough:true})`, PAS de `@HttpCode()` fixe ici,
+  // contrairement à l'ancien flux password-seul) : la même route ne peut
+  // plus renvoyer un unique code figé.
   @Post('login')
-  @HttpCode(200)
-  @Throttle({ default: { ttl: 900_000, limit: 10 } }) // anti-brute-force : 10 / 15 min / IP (même politique que /auth/login)
+  @Throttle({ default: { ttl: 900_000, limit: 10 } }) // anti-brute-force : 10 / 15 min / IP (même politique que /auth/login), inchangé par cette tâche
   async login(
     @Body() body: unknown,
     @Res({ passthrough: true }) res: Response,
   ) {
     const input = parseBody(loginSchema, body)
-    const { adminId } = await this.admin.login(input.email, input.password)
-    const session = await this.sessions.create({ adminId })
-    const maxAge = this.sessions.ttlMs()
+    const result = await this.admin.login(input.email, input.password, {
+      totpCode: input.totpCode,
+      recoveryCode: input.recoveryCode,
+    })
+    if (result.outcome === 'enrollment_required') {
+      // AUCUNE session ici (spec §5) : l'admin n'a pas encore prouvé son
+      // second facteur, seul POST /admin/totp/confirm peut la créer ensuite.
+      res.status(202)
+      return {
+        enrollmentRequired: true,
+        otpauthUrl: result.otpauthUrl,
+        secret: result.secret,
+      }
+    }
+    // TTL dédié (spec §5/§8, ADMIN_SESSION_TTL_HOURS, défaut 2h) — PAS le
+    // TTL standard (SESSION_TTL_HOURS, 12h) : surface d'exposition réduite
+    // d'un compte à privilèges élevés, cf. config/env.ts.
+    const maxAge =
+      this.config.get('ADMIN_SESSION_TTL_HOURS', { infer: true }) * 3_600_000
+    const session = await this.sessions.create(
+      { adminId: result.adminId },
+      maxAge,
+    )
     res.cookie(
       SESSION_COOKIE,
       session.token,
@@ -102,7 +149,24 @@ export class AdminController {
       session.csrfToken,
       csrfCookieOptions(this.config, maxAge),
     )
-    return { admin: { id: adminId, email: input.email } }
+    res.status(200)
+    return { admin: { id: result.adminId, email: input.email } }
+  }
+
+  // POST /admin/totp/confirm (Task 7, spec §5) — HORS SESSION (l'admin n'en
+  // a pas encore à ce stade du flux) : ni SessionGuard/AdminGuard (rien à
+  // authentifier par cookie) ni CsrfGuard (double-submit suppose déjà un
+  // cookie CSRF posé, absent ici — même motif que login() ci-dessus, qui
+  // n'en a jamais eu). Throttle IDENTIQUE à login (copie exacte du
+  // décorateur, spec §5 « Throttle identique au login ») — clé de
+  // rate-limiting distincte côté ThrottlerGuard (nom de handler différent),
+  // donc un bucket 10/15min SÉPARÉ de /admin/login, pas partagé.
+  @Post('totp/confirm')
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 900_000, limit: 10 } })
+  async confirmTotp(@Body() body: unknown) {
+    const input = parseBody(totpConfirmSchema, body)
+    return this.admin.confirmTotp(input.email, input.password, input.totpCode)
   }
 
   @Post('logout')

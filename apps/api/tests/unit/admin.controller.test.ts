@@ -22,7 +22,13 @@ const FAKE_ADMIN: AuthenticatedAdmin = {
 
 function fakeConfig(): ConfigService<EnvConfig, true> {
   return {
-    get: (key: keyof EnvConfig) => (key === 'NODE_ENV' ? 'test' : undefined),
+    get: (key: keyof EnvConfig) => {
+      if (key === 'NODE_ENV') return 'test'
+      // Défaut réel de env.ts (Task 7, spec §8) — la route login() calcule
+      // le TTL admin depuis cette clé pour poser le cookie de session.
+      if (key === 'ADMIN_SESSION_TTL_HOURS') return 2
+      return undefined
+    },
   } as unknown as ConfigService<EnvConfig, true>
 }
 
@@ -30,12 +36,14 @@ function fakeResponse(): Response {
   return {
     cookie: vi.fn(),
     clearCookie: vi.fn(),
+    status: vi.fn().mockReturnThis(),
   } as unknown as Response
 }
 
 describe('AdminController', () => {
   let admin: {
     login: ReturnType<typeof vi.fn>
+    confirmTotp: ReturnType<typeof vi.fn>
     listTenants: ReturnType<typeof vi.fn>
     tenantDetail: ReturnType<typeof vi.fn>
     suspendTenant: ReturnType<typeof vi.fn>
@@ -55,6 +63,7 @@ describe('AdminController', () => {
   beforeEach(() => {
     admin = {
       login: vi.fn(),
+      confirmTotp: vi.fn(),
       listTenants: vi.fn(),
       tenantDetail: vi.fn(),
       suspendTenant: vi.fn(),
@@ -77,8 +86,14 @@ describe('AdminController', () => {
     )
   })
 
-  it('login: validates the body, authenticates, issues session + csrf cookies, returns admin identity', async () => {
-    admin.login.mockResolvedValue({ adminId: 'a1' })
+  // Task 7 (spec §5) : login() renvoie désormais une union discriminée
+  // (`outcome: 'success' | 'enrollment_required'`) — `success` couvre à la
+  // fois l'ancien flux password-seul (mocké ici avec un totpCode, la
+  // validation elle-même vit dans AdminService, hors scope de ce test
+  // contrôleur) et pose la session avec le TTL ADMIN_SESSION_TTL_HOURS
+  // (PAS `sessions.ttlMs()`, spec §8).
+  it('login: validates the body, authenticates, issues session + csrf cookies with the ADMIN TTL, returns admin identity (200)', async () => {
+    admin.login.mockResolvedValue({ outcome: 'success', adminId: 'a1' })
     sessions.create.mockResolvedValue({
       token: 'tok',
       csrfToken: 'csrf',
@@ -87,18 +102,87 @@ describe('AdminController', () => {
     const res = fakeResponse()
 
     const result = await controller.login(
-      { email: 'root@factelec.fr', password: 'super-admin-passphrase-1' },
+      {
+        email: 'root@factelec.fr',
+        password: 'super-admin-passphrase-1',
+        totpCode: '123456',
+      },
       res,
     )
 
     expect(admin.login).toHaveBeenCalledWith(
       'root@factelec.fr',
       'super-admin-passphrase-1',
+      { totpCode: '123456', recoveryCode: undefined },
     )
-    expect(sessions.create).toHaveBeenCalledWith({ adminId: 'a1' })
+    // TTL admin dédié (2h ici, fakeConfig) — PAS sessions.ttlMs() (jamais
+    // appelé par ce flux, contrairement à l'ancien comportement).
+    expect(sessions.create).toHaveBeenCalledWith(
+      { adminId: 'a1' },
+      2 * 3_600_000,
+    )
+    expect(sessions.ttlMs).not.toHaveBeenCalled()
     expect(res.cookie).toHaveBeenCalledTimes(2)
+    expect(res.status).toHaveBeenCalledWith(200)
     expect(result).toEqual({
       admin: { id: 'a1', email: 'root@factelec.fr' },
+    })
+  })
+
+  // Task 7 (spec §5) : password OK + non enrôlé → 202, AUCUNE session/cookie.
+  it('login: returns 202 enrollmentRequired without creating a session when AdminService reports enrollment_required', async () => {
+    admin.login.mockResolvedValue({
+      outcome: 'enrollment_required',
+      otpauthUrl: 'otpauth://totp/Factelec:root%40factelec.fr?secret=ABC',
+      secret: 'ABC',
+    })
+    const res = fakeResponse()
+
+    const result = await controller.login(
+      { email: 'root@factelec.fr', password: 'super-admin-passphrase-1' },
+      res,
+    )
+
+    expect(sessions.create).not.toHaveBeenCalled()
+    expect(res.cookie).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(202)
+    expect(result).toEqual({
+      enrollmentRequired: true,
+      otpauthUrl: 'otpauth://totp/Factelec:root%40factelec.fr?secret=ABC',
+      secret: 'ABC',
+    })
+  })
+
+  // Nouveau (Task 7, spec §5) : POST /admin/totp/confirm.
+  describe('confirmTotp', () => {
+    it('validates the body and delegates to AdminService.confirmTotp, returning its result unchanged', async () => {
+      admin.confirmTotp.mockResolvedValue({
+        recoveryCodes: ['aaaa-bbbb', 'cccc-dddd'],
+      })
+
+      const result = await controller.confirmTotp({
+        email: 'root@factelec.fr',
+        password: 'super-admin-passphrase-1',
+        totpCode: '123456',
+      })
+
+      expect(admin.confirmTotp).toHaveBeenCalledWith(
+        'root@factelec.fr',
+        'super-admin-passphrase-1',
+        '123456',
+      )
+      expect(result).toEqual({ recoveryCodes: ['aaaa-bbbb', 'cccc-dddd'] })
+    })
+
+    it('rejects a malformed totpCode (not 6 digits) with a validation error, WITHOUT calling the service', async () => {
+      await expect(
+        controller.confirmTotp({
+          email: 'root@factelec.fr',
+          password: 'super-admin-passphrase-1',
+          totpCode: 'abcdef',
+        }),
+      ).rejects.toThrow()
+      expect(admin.confirmTotp).not.toHaveBeenCalled()
     })
   })
 

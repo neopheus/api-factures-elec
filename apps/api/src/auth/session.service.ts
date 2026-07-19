@@ -32,16 +32,24 @@ export class SessionService {
     return this.config.get('SESSION_TTL_HOURS', { infer: true }) * 3_600_000
   }
 
-  async create(subject: {
-    userId?: string
-    adminId?: string
-    tenantId?: string
-  }): Promise<IssuedSession> {
+  // `ttlMs` optionnel (Task 7, spec §5/§8) : TTL PAR-CRÉATION, réservé aux
+  // sessions super admin (ADMIN_SESSION_TTL_HOURS, volontairement plus
+  // court que SESSION_TTL_HOURS) — absent (défaut historique), utilise
+  // `this.ttlMs()` (SESSION_TTL_HOURS) comme avant cette tâche, changement
+  // rétro-compatible pour tous les appelants existants (users/auth.controller.ts).
+  async create(
+    subject: {
+      userId?: string
+      adminId?: string
+      tenantId?: string
+    },
+    ttlMs?: number,
+  ): Promise<IssuedSession> {
     const session = generateOpaqueToken()
     const csrf = generateOpaqueToken()
     // Expiration ABSOLUE, fixée une fois pour toutes à l'émission : aucun
     // renouvellement glissant à la lecture (cf. find(), amendement D1).
-    const expiresAt = new Date(Date.now() + this.ttlMs())
+    const expiresAt = new Date(Date.now() + (ttlMs ?? this.ttlMs()))
     await this.pool.query('SELECT create_session($1, $2, $3, $4, $5, $6)', [
       subject.userId ?? null,
       subject.adminId ?? null,

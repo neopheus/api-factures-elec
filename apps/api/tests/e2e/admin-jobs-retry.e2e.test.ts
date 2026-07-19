@@ -4,9 +4,9 @@ import { Queue } from 'bullmq'
 import pg from 'pg'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { hashPassword } from '../../src/auth/password.js'
 import { GENERATE_JOB } from '../../src/queue/invoice-generation.job.js'
 import { INVOICE_GENERATION_QUEUE } from '../../src/queue/queue.constants.js'
+import { adminLoginCookies, seedEnrolledAdmin } from './helpers/admin-auth.js'
 import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
 import { startTestRedis, type TestRedis } from './helpers/redis.js'
@@ -72,12 +72,12 @@ describe('admin retry de jobs échoués — invoice-generation (e2e heavy)', () 
   let csrf: string
   let tenantId: string
 
-  async function adminLogin(): Promise<void> {
-    const res = await request(app.getHttpServer())
-      .post('/admin/login')
-      .send({ email: 'root@factelec.fr', password: 'super-admin-passphrase-1' })
-      .expect(200)
-    cookie = res.headers['set-cookie'] as unknown as string[]
+  // Admin déjà enrôlé TOTP dès le seed (Task 7, spec §5) — le cycle
+  // d'enrôlement lui-même vit dans admin-totp.e2e.test.ts, pas ici.
+  async function adminLogin(
+    admin: Awaited<ReturnType<typeof seedEnrolledAdmin>>,
+  ): Promise<void> {
+    cookie = await adminLoginCookies(app, admin)
     csrf = extractCookie(cookie, 'factelec_csrf')
   }
 
@@ -104,12 +104,12 @@ describe('admin retry de jobs échoués — invoice-generation (e2e heavy)', () 
     ownerPool = new pg.Pool({ connectionString: db.ownerUrl })
     app = await createTestApp(db.appUrl, { host: redis.host, port: redis.port })
 
-    const hash = await hashPassword('super-admin-passphrase-1')
-    await ownerPool.query(
-      "INSERT INTO platform_admins (email, password_hash) VALUES ('root@factelec.fr', $1)",
-      [hash],
+    const admin = await seedEnrolledAdmin(
+      ownerPool,
+      'root@factelec.fr',
+      'super-admin-passphrase-1',
     )
-    await adminLogin()
+    await adminLogin(admin)
 
     const t = await ownerPool.query(
       "INSERT INTO tenants (name) VALUES ('Shop Jobs Retry') RETURNING id",
