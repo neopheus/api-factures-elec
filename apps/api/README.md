@@ -2425,7 +2425,7 @@ appelées par le worker (`find_stuck_generation_invoices`,
 `find_ereporting_declarants_due`, `find_annuaire_sync_targets`,
 `find_stale_annuaire_drafts`, `find_cdv_transmissions_due`,
 `find_parked_cdv_transmissions`, `find_pending_routing_invoices`) — **jamais**
-les 8 SD auth/session/admin (`authenticate_api_key` compris : refus `42501`
+les 13 SD auth/session/admin (`authenticate_api_key` compris : refus `42501`
 prouvé en e2e), **jamais** `find_stuck_received_invoices` (superseded).
 
 **RLS active sous le nouveau rôle — sans policy nouvelle.** Toutes les
@@ -3335,7 +3335,7 @@ dossier d'immatriculation DGFiP (PA/PDP).
   re-résolution ambiguous — 3.5 ci-dessous). **AUCUN** accès à
   `tenants`/`api_keys`/`users`/`platform_admins`/`sessions`/
   `annuaire_consents`, **AUCUN** `INSERT` sur `invoices`/`annuaire_lignes`,
-  **AUCUNE** des 8 fonctions `SECURITY DEFINER` auth/session/admin — soumis à
+  **AUCUNE** des 13 fonctions `SECURITY DEFINER` auth/session/admin — soumis à
   la RLS `FORCE` comme `factelec_app` (policies existantes créées **sans**
   clause `TO`, donc `TO PUBLIC` : aucune policy nouvelle n'a été nécessaire).
   ⚠️ **Doit exister avant tout déploiement de cette version** : le worker
