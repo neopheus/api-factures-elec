@@ -24,6 +24,12 @@ export const ProblemType = {
   // n'est pas configuré, pas une faute du client).
   paymentRequired: `${BASE}:subscription-required`,
   billingDisabled: `${BASE}:billing-disabled`,
+  // Suspension opérateur (phase 5 it.2, posé par SuspensionGuard — Task 4) :
+  // 403 dédié, JAMAIS 402 (contrairement à `paymentRequired` ci-dessus, la
+  // suspension n'est pas une affaire commerciale mais une décision
+  // opérateur — motif distinct pour ne pas confondre les deux blocages
+  // côté client/dashboard).
+  tenantSuspended: `${BASE}:tenant-suspended`,
 } as const
 
 export function problem(

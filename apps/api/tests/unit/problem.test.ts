@@ -22,6 +22,11 @@ describe('problem (RFC 9457)', () => {
     expect(ProblemType.invalidTransition).toBe(
       'urn:factelec:problem:invalid-status-transition',
     )
+    // Suspension opérateur (phase 5 it.2, SuspensionGuard — Task 4) :
+    // 403 dédié, jamais 402 (la suspension n'est pas commerciale).
+    expect(ProblemType.tenantSuspended).toBe(
+      'urn:factelec:problem:tenant-suspended',
+    )
   })
 })
 

@@ -430,3 +430,52 @@ describe('env billing (phase 5)', () => {
     expect(parsed.STRIPE_SECRET_KEY).toBe('sk_test_123')
   })
 })
+
+describe('env admin/observabilité (phase 5 it.2)', () => {
+  // Seule clé réellement requise (sans .default()/.optional()) dans
+  // envSchema à ce jour : DATABASE_URL.
+  const BASE = {
+    DATABASE_URL: 'postgres://u:p@h:5432/db',
+  } as const
+
+  it('ADMIN_SESSION_TTL_HOURS : défaut 2 (TTL réduit session super admin, dette 1.4 soldée)', () => {
+    const parsed = envSchema.parse(BASE)
+    expect(parsed.ADMIN_SESSION_TTL_HOURS).toBe(2)
+  })
+
+  it('ADMIN_SESSION_TTL_HOURS : accepte la borne max (24)', () => {
+    const parsed = envSchema.parse({ ...BASE, ADMIN_SESSION_TTL_HOURS: '24' })
+    expect(parsed.ADMIN_SESSION_TTL_HOURS).toBe(24)
+  })
+
+  it('ADMIN_SESSION_TTL_HOURS : rejette au-delà de la borne max (25)', () => {
+    expect(() =>
+      envSchema.parse({ ...BASE, ADMIN_SESSION_TTL_HOURS: '25' }),
+    ).toThrow(/ADMIN_SESSION_TTL_HOURS/)
+  })
+
+  it('ADMIN_SESSION_TTL_HOURS : rejette une valeur non positive', () => {
+    expect(() =>
+      envSchema.parse({ ...BASE, ADMIN_SESSION_TTL_HOURS: '0' }),
+    ).toThrow(/ADMIN_SESSION_TTL_HOURS/)
+  })
+
+  it('METRICS_TOKEN : absent par défaut (opt-in — /metrics répond 404 sans elle)', () => {
+    const parsed = envSchema.parse(BASE)
+    expect(parsed.METRICS_TOKEN).toBeUndefined()
+  })
+
+  it('METRICS_TOKEN : rejette une valeur de moins de 16 caractères (15)', () => {
+    expect(() =>
+      envSchema.parse({ ...BASE, METRICS_TOKEN: '123456789012345' }),
+    ).toThrow(/METRICS_TOKEN/)
+  })
+
+  it("METRICS_TOKEN : accepte une valeur d'au moins 16 caractères", () => {
+    const parsed = envSchema.parse({
+      ...BASE,
+      METRICS_TOKEN: '1234567890123456',
+    })
+    expect(parsed.METRICS_TOKEN).toBe('1234567890123456')
+  })
+})
