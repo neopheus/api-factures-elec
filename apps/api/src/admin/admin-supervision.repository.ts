@@ -48,6 +48,29 @@ export interface AdminTenantBillingMirror {
 export interface AdminTenantDetail extends AdminTenantStats {
   invoices: AdminTenantInvoiceSummary[]
   billing: AdminTenantBillingMirror
+  anomalies: AdminAnomaly[]
+}
+
+// Kinds réels renvoyés par la SD 2 (migration 0031, commentaire de la
+// fonction) : 'cdv_parked' couvre les 2 statuts CDV en échec/en attente
+// (parked ET rejected, cf. `WHERE status IN ('parked', 'rejected')`) —
+// aucun kind 'cdv_rejected' distinct n'existe côté SQL.
+export type AdminAnomalyKind =
+  | 'dead_letter'
+  | 'cdv_parked'
+  | 'ereporting_failed'
+
+// Ligne de la vue anomalies (Task 6, spec §3) — SD 2 find_admin_anomalies.
+// `detail` est TOUJOURS une chaîne (la SD ne projette qu'un texte libre :
+// reason / coalesce(reject_reason, status) / status — jamais de JSON
+// structuré, jamais de contenu de facture, motif commentaire migration
+// 0031).
+export interface AdminAnomaly {
+  kind: AdminAnomalyKind
+  tenantId: string
+  refId: string
+  detail: string
+  createdAt: Date
 }
 
 // Résultats de suspend/unsuspend (Task 4, spec §3/§4) — union discriminée
@@ -67,6 +90,34 @@ export type UnsuspendOutcome =
   | { outcome: 'not_found' }
 
 const LAST_INVOICES_LIMIT = 10
+
+// Borne haute passée à `find_admin_anomalies` par `anomaliesForTenant`
+// ci-dessous (Task 6, couture Task 3) — VOLONTAIREMENT identique au plafond
+// public de `GET /admin/anomalies` (contrôleur, `anomaliesQuerySchema`,
+// max 200) : la SD elle-même ne connaît qu'UNE notion de « borne haute »,
+// aucune raison d'en introduire une seconde ici.
+const ANOMALIES_SD_QUERY_LIMIT = 200
+// Borne du champ `anomalies` de GET /admin/tenants/:id (Task 6, spec §3
+// « borne le champ à 20 entrées max »).
+const TENANT_ANOMALIES_LIMIT = 20
+
+interface AdminAnomalyRow {
+  kind: string
+  tenant_id: string
+  ref_id: string
+  detail: string
+  created_at: Date
+}
+
+function mapAnomalyRow(row: AdminAnomalyRow): AdminAnomaly {
+  return {
+    kind: row.kind as AdminAnomalyKind,
+    tenantId: row.tenant_id,
+    refId: row.ref_id,
+    detail: row.detail,
+    createdAt: row.created_at,
+  }
+}
 
 interface AdminTenantStatsRow {
   tenant_id: string
@@ -138,6 +189,12 @@ export class AdminSupervisionRepository {
     if (!row) return null
     const stats = mapStatsRow(row)
 
+    // Couture différée de la Task 3 (Task 6, spec §3) : anomalies DE CE
+    // TENANT, direct sur le pool applicatif (PAS `tenant.run`) — même motif
+    // que la ligne de stats ci-dessus, `anomaliesForTenant` délègue
+    // entièrement à la SD SECURITY DEFINER, cross-tenant par construction.
+    const anomalies = await this.anomaliesForTenant(tenantId)
+
     // Lecture per-tenant RLS-scopée (spec §3) : 10 dernières factures
     // (projection stricte, sans montant) + état du miroir billing
     // (tenant_billing). Aucun filtre `eq(invoices.tenantId, tenantId)`
@@ -181,7 +238,55 @@ export class AdminSupervisionRepository {
       }
     })
 
-    return { ...stats, ...detail }
+    return { ...stats, ...detail, anomalies }
+  }
+
+  // Task 6 (spec §3) : vue anomalies plateforme (GET /admin/anomalies) —
+  // délègue INTÉGRALEMENT à la SD 2 (find_admin_anomalies, SECURITY
+  // DEFINER, migration 0031) : tri createdAt DESC déjà posé côté SQL PAR LA
+  // FONCTION elle-même (contrairement à `tenantStats` ci-dessus, aucun
+  // `ORDER BY` à rajouter ici). Direct sur le pool applicatif (PAS
+  // `tenant.run`) : cross-tenant par nature, même motif que
+  // `tenantStats`/`tenantDetail` (partie stats).
+  async anomalies(limit: number): Promise<AdminAnomaly[]> {
+    const { rows } = await this.pool.query<AdminAnomalyRow>(
+      'SELECT * FROM find_admin_anomalies($1)',
+      [limit],
+    )
+    return rows.map(mapAnomalyRow)
+  }
+
+  // Couture différée de la Task 3 (Task 6, spec §3 « GET /admin/tenants/:id
+  // s'enrichit d'un champ anomalies = les anomalies DE CE TENANT ») —
+  // RÉUTILISE la SD (option retenue plutôt qu'une requête dédiée sur les 3
+  // tables sources dead_letters/cdv_transmissions/ereporting_transmissions,
+  // spec Task 6) : un seul point de vérité pour la définition d'une
+  // « anomalie », zéro divergence possible avec `anomalies()` ci-dessus.
+  // Filtre + tri + LIMIT posés ICI EN SQL sur le résultat de la fonction
+  // table (pas un `.filter()`/`.slice()` en mémoire côté service) : évite
+  // de rapatrier `ANOMALIES_SD_QUERY_LIMIT` (200) lignes pour n'en garder
+  // qu'au plus `TENANT_ANOMALIES_LIMIT` (20).
+  //
+  // Limite ACCEPTÉE et documentée (brief Task 6) : `find_admin_anomalies`
+  // borne ELLE-MÊME son résultat aux 200 anomalies les plus récentes TOUS
+  // TENANTS confondus AVANT ce filtre par tenant — si 200 anomalies plus
+  // récentes existent déjà chez D'AUTRES tenants, une anomalie plus
+  // ancienne de CE tenant peut être absente du détail alors qu'elle
+  // apparaîtrait dans une requête dédiée à ce seul tenant. Compromis
+  // assumé : la vue anomalies reste la SEULE définition d'anomalie de la
+  // plateforme, quitte à cette imprécision de bord pour un tenant très en
+  // dessous du top 200 global (cas limite, non rencontré en usage normal —
+  // un opérateur qui suspend/investigue un tenant le fait généralement
+  // parce que SES anomalies sont récentes).
+  async anomaliesForTenant(tenantId: string): Promise<AdminAnomaly[]> {
+    const { rows } = await this.pool.query<AdminAnomalyRow>(
+      `SELECT * FROM find_admin_anomalies($1) AS a
+       WHERE a.tenant_id = $2
+       ORDER BY a.created_at DESC
+       LIMIT $3`,
+      [ANOMALIES_SD_QUERY_LIMIT, tenantId, TENANT_ANOMALIES_LIMIT],
+    )
+    return rows.map(mapAnomalyRow)
   }
 
   // Lue par `SuspensionGuard` (Task 4, spec §4) — requête directe indexée

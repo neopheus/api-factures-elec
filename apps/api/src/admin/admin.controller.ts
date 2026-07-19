@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -26,7 +27,7 @@ import { SessionService } from '../auth/session.service.js'
 import { CSRF_COOKIE, SESSION_COOKIE } from '../auth/session-token.js'
 import { ProblemType, problem } from '../common/problem.js'
 import { isUuid } from '../common/uuid.js'
-import { parseBody } from '../common/validation.js'
+import { parseBody, parseQuery } from '../common/validation.js'
 import type { EnvConfig } from '../config/env.js'
 import { AdminGuard } from './admin.guard.js'
 // biome-ignore lint/style/useImportType: AdminService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
@@ -53,6 +54,22 @@ const suspendSchema = z.object({
 // obligatoire (aucun défaut sensé pour un motif de suspension).
 const retryJobsSchema = z.object({
   limit: z.number().int().min(1).max(500).default(100),
+})
+
+// Vue anomalies (Task 6, spec §3) : `limit` bornée 1..200, défaut 50 —
+// `z.coerce.number()` (PAS `z.number()` comme `retryJobsSchema` ci-dessus) :
+// un paramètre de query string HTTP est TOUJOURS une chaîne (`?limit=10`),
+// jamais un number natif, contrairement à un body JSON (même motif que
+// `ADMIN_SESSION_TTL_HOURS`, config/env.ts). `.default(50)` couvre le
+// paramètre ENTIÈREMENT absent (même mécanique que `retryJobsSchema.limit`
+// ci-dessus : zod applique le défaut AVANT la validation interne quand la
+// clé est `undefined`). Invalide (0, > 200, non numérique tel que 'abc') →
+// 422 validation (`parseQuery`, motif annuaire.controller.ts — AUCUNE route
+// de ce projet ne renvoie 400 pour une erreur zod, cf. grep
+// `ProblemType.validation` : toujours couplé à 422 sauf le webhook Stripe,
+// hors zod).
+const anomaliesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
 })
 
 @Controller('admin')
@@ -186,6 +203,16 @@ export class AdminController {
     const result = await this.jobs.retryFailed(queueName, admin.adminId, limit)
     if (result === null) throw this.notFound('Unknown queue')
     return result
+  }
+
+  // Vue anomalies plateforme, lecture seule (Task 6, spec §3) — SD 2
+  // find_admin_anomalies (migration 0031), tri createdAt desc déjà posé
+  // côté SQL par la fonction (AdminSupervisionRepository.anomalies).
+  @Get('anomalies')
+  @UseGuards(SessionGuard, AdminGuard)
+  async anomalies(@Query() query: unknown) {
+    const { limit } = parseQuery(anomaliesQuerySchema, query)
+    return { anomalies: await this.admin.anomalies(limit) }
   }
 
   private notFound(title = 'Unknown tenant'): NotFoundException {

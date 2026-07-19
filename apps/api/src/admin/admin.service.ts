@@ -4,6 +4,7 @@ import { timingSafeVerifyReject, verifyPassword } from '../auth/password.js'
 import { ProblemType, problem } from '../common/problem.js'
 import { APP_POOL } from '../db/client.js'
 import type {
+  AdminAnomaly,
   AdminTenantDetail,
   AdminTenantStats,
   SuspendOutcome,
@@ -74,5 +75,13 @@ export class AdminService {
     adminId: string,
   ): Promise<UnsuspendOutcome> {
     return this.supervision.unsuspend(tenantId, adminId)
+  }
+
+  // Task 6 (spec §3) : pur délégateur (motif listTenants/tenantDetail
+  // ci-dessus) — la requête SQL (SD 2 find_admin_anomalies) et le mapping
+  // vivent entièrement dans AdminSupervisionRepository ; `limit` est déjà
+  // validé (1..200) par AdminController avant d'arriver ici.
+  async anomalies(limit: number): Promise<AdminAnomaly[]> {
+    return this.supervision.anomalies(limit)
   }
 }

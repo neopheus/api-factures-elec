@@ -398,4 +398,149 @@ describe('admin supervision — liste enrichie + détail (e2e)', () => {
       expect(unsuspendRes.body.type).toBe('urn:factelec:problem:not-found')
     })
   })
+
+  // Task 6 (spec §3) : GET /admin/anomalies (SD 2 find_admin_anomalies) +
+  // couture différée de la Task 3 (champ `anomalies` du détail per-tenant).
+  // Suite LIGHT (Postgres seul, motif suspend/unsuspend ci-dessus) : ni
+  // dead letter ni transmission CDV ne touchent BullMQ/Redis, seedées
+  // DIRECTEMENT en base (ownerPool), motif billedTenantId plus haut.
+  describe('anomalies (Task 6)', () => {
+    let anomalyTenantId: string
+    let cookie: string[]
+
+    // Timestamps EXPLICITES et distincts (pas `now()` implicite) : le test
+    // de tri (createdAt DESC) a besoin d'un ordre déterministe entre les 2
+    // anomalies seedées, jamais garanti par un double INSERT au même
+    // instant.
+    const DEAD_LETTER_CREATED_AT = new Date('2026-07-18T10:00:00Z')
+    const CDV_PARKED_CREATED_AT = new Date('2026-07-19T10:00:00Z')
+
+    // Cookie admin obtenu UNE SEULE FOIS (motif describe suspend/unsuspend
+    // ci-dessus, MÊME throttle 10/15min/IP sur /admin/login — ce fichier
+    // dépasserait la limite avec un login par `it` sur les 6 tests ci-après,
+    // en plus des logins déjà consommés par les describes précédents).
+    beforeAll(async () => {
+      cookie = await adminCookie()
+
+      const t = await ownerPool.query(
+        "INSERT INTO tenants (name) VALUES ('Shop Anomalies') RETURNING id",
+      )
+      anomalyTenantId = t.rows[0].id
+
+      // Une seule facture porte les 2 anomalies (dead letter + transmission
+      // CDV) : aucune contrainte d'unicité entre les 2 tables sources, motif
+      // cdv-transmission-persistence.e2e.test.ts (INSERT SQL minimal, pas de
+      // service dédié nécessaire pour un simple seed).
+      const inv = await invoicesRepo.insertReceived(
+        anomalyTenantId,
+        buildInvoice(invoiceInput('ANOM-1')),
+      )
+
+      // `invoice_dead_letters` colonnes NOT NULL (schema.ts) : tenant_id,
+      // invoice_id, reason, attempts — created_at posé explicitement
+      // (au-dessus).
+      await ownerPool.query(
+        `INSERT INTO invoice_dead_letters
+           (tenant_id, invoice_id, reason, attempts, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          anomalyTenantId,
+          inv.id,
+          'poison test seed',
+          3,
+          DEAD_LETTER_CREATED_AT,
+        ],
+      )
+
+      // `cdv_transmissions` : status='parked' (une des 2 valeurs couvertes
+      // par le kind 'cdv_parked' de la SD, avec 'rejected') — reject_reason
+      // NULL ⇒ detail = status::text = 'parked' (coalesce, cf. migration
+      // 0031).
+      await ownerPool.query(
+        `INSERT INTO cdv_transmissions
+           (tenant_id, invoice_id, to_status, target, status, status_horodate, created_at)
+         VALUES ($1, $2, 'deposee', 'ppf', 'parked', '20260719100000', $3)`,
+        [anomalyTenantId, inv.id, CDV_PARKED_CREATED_AT],
+      )
+    })
+
+    it('GET /admin/anomalies requires a session (401)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/admin/anomalies')
+        .expect(401)
+      expect(res.body.type).toBe('urn:factelec:problem:unauthorized')
+    })
+
+    it('lists the 2 seeded kinds (dead_letter, cdv_parked), sorted createdAt DESC', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/admin/anomalies')
+        .set('Cookie', cookie)
+        .expect(200)
+
+      expect(Array.isArray(res.body.anomalies)).toBe(true)
+      const seeded = res.body.anomalies.filter(
+        (a: { tenantId: string }) => a.tenantId === anomalyTenantId,
+      )
+      expect(seeded).toHaveLength(2)
+      // Tri createdAt DESC (spec §3) : le plus récent (cdv_parked) d'abord.
+      expect(seeded[0]).toMatchObject({
+        kind: 'cdv_parked',
+        tenantId: anomalyTenantId,
+        detail: 'parked',
+      })
+      expect(seeded[1]).toMatchObject({
+        kind: 'dead_letter',
+        tenantId: anomalyTenantId,
+        detail: 'poison test seed',
+      })
+      expect(new Date(seeded[0].createdAt).getTime()).toBeGreaterThan(
+        new Date(seeded[1].createdAt).getTime(),
+      )
+    })
+
+    it('limit=1 respects the bound (exactly 1 result, the most recent one)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/admin/anomalies?limit=1')
+        .set('Cookie', cookie)
+        .expect(200)
+
+      expect(res.body.anomalies).toHaveLength(1)
+      expect(res.body.anomalies[0]).toMatchObject({ kind: 'cdv_parked' })
+    })
+
+    it.each([['0'], ['201'], ['abc']])(
+      '422 validation pour un limit invalide (%s)',
+      async (limit) => {
+        const res = await request(app.getHttpServer())
+          .get(`/admin/anomalies?limit=${limit}`)
+          .set('Cookie', cookie)
+          .expect(422)
+        expect(res.body.type).toBe('urn:factelec:problem:validation-error')
+      },
+    )
+
+    it('tenant detail: the field `anomalies` contains this tenant’s 2 seeded anomalies', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/admin/tenants/${anomalyTenantId}`)
+        .set('Cookie', cookie)
+        .expect(200)
+
+      expect(Array.isArray(res.body.anomalies)).toBe(true)
+      expect(res.body.anomalies).toHaveLength(2)
+      for (const a of res.body.anomalies) {
+        expect(a.tenantId).toBe(anomalyTenantId)
+      }
+      expect(res.body.anomalies[0]).toMatchObject({ kind: 'cdv_parked' })
+      expect(res.body.anomalies[1]).toMatchObject({ kind: 'dead_letter' })
+    })
+
+    it('tenant detail: an unrelated tenant has an empty `anomalies` array', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/admin/tenants/${plainTenantId}`)
+        .set('Cookie', cookie)
+        .expect(200)
+
+      expect(res.body.anomalies).toEqual([])
+    })
+  })
 })

@@ -3,6 +3,7 @@ import type pg from 'pg'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdminService } from '../../src/admin/admin.service.js'
 import type {
+  AdminAnomaly,
   AdminSupervisionRepository,
   AdminTenantDetail,
   AdminTenantStats,
@@ -16,6 +17,7 @@ describe('AdminService', () => {
     tenantDetail: ReturnType<typeof vi.fn>
     suspend: ReturnType<typeof vi.fn>
     unsuspend: ReturnType<typeof vi.fn>
+    anomalies: ReturnType<typeof vi.fn>
   }
   let service: AdminService
 
@@ -26,6 +28,7 @@ describe('AdminService', () => {
       tenantDetail: vi.fn(),
       suspend: vi.fn(),
       unsuspend: vi.fn(),
+      anomalies: vi.fn(),
     }
     service = new AdminService(
       { query } as unknown as pg.Pool,
@@ -132,6 +135,7 @@ describe('AdminService', () => {
           currentPeriodEnd: null,
           hasCustomer: true,
         },
+        anomalies: [],
       }
       supervision.tenantDetail.mockResolvedValue(detail)
 
@@ -178,6 +182,28 @@ describe('AdminService', () => {
 
       expect(supervision.unsuspend).toHaveBeenCalledWith('t1', 'a1')
       expect(result).toBe(outcome)
+    })
+  })
+
+  // Task 6 (spec §3) : pur délégateur (même motif que listTenants ci-dessus)
+  // — `limit` est déjà validé par AdminController avant d'arriver ici.
+  describe('anomalies', () => {
+    it('delegates to AdminSupervisionRepository.anomalies with the given limit and forwards its result unchanged', async () => {
+      const anomalies: AdminAnomaly[] = [
+        {
+          kind: 'dead_letter',
+          tenantId: 't1',
+          refId: 'dl1',
+          detail: 'poison',
+          createdAt: new Date('2026-07-19T10:00:00Z'),
+        },
+      ]
+      supervision.anomalies.mockResolvedValue(anomalies)
+
+      const result = await service.anomalies(50)
+
+      expect(supervision.anomalies).toHaveBeenCalledWith(50)
+      expect(result).toBe(anomalies)
     })
   })
 })

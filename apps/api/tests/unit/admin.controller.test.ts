@@ -40,6 +40,7 @@ describe('AdminController', () => {
     tenantDetail: ReturnType<typeof vi.fn>
     suspendTenant: ReturnType<typeof vi.fn>
     unsuspendTenant: ReturnType<typeof vi.fn>
+    anomalies: ReturnType<typeof vi.fn>
   }
   let sessions: {
     create: ReturnType<typeof vi.fn>
@@ -58,6 +59,7 @@ describe('AdminController', () => {
       tenantDetail: vi.fn(),
       suspendTenant: vi.fn(),
       unsuspendTenant: vi.fn(),
+      anomalies: vi.fn(),
     }
     sessions = {
       create: vi.fn(),
@@ -193,6 +195,7 @@ describe('AdminController', () => {
           currentPeriodEnd: null,
           hasCustomer: true,
         },
+        anomalies: [],
       }
       admin.tenantDetail.mockResolvedValue(detail)
 
@@ -366,6 +369,50 @@ describe('AdminController', () => {
         'a1',
         100,
       )
+    })
+  })
+
+  // Nouveau (Task 6, spec §3) : GET /admin/anomalies.
+  describe('anomalies', () => {
+    it('defaults limit to 50 when the query is entirely empty, wraps the result in { anomalies }', async () => {
+      const anomalies = [
+        {
+          kind: 'dead_letter',
+          tenantId: 't1',
+          refId: 'dl1',
+          detail: 'poison',
+          createdAt: new Date('2026-07-19T10:00:00Z'),
+        },
+      ]
+      admin.anomalies.mockResolvedValue(anomalies)
+
+      const result = await controller.anomalies({})
+
+      expect(admin.anomalies).toHaveBeenCalledWith(50)
+      expect(result).toEqual({ anomalies })
+    })
+
+    it('coerces a string query limit (HTTP query strings are always strings) and forwards it as a number', async () => {
+      admin.anomalies.mockResolvedValue([])
+
+      await controller.anomalies({ limit: '10' })
+
+      expect(admin.anomalies).toHaveBeenCalledWith(10)
+    })
+
+    it('rejects limit = 0 with a validation error, WITHOUT calling the service', async () => {
+      await expect(controller.anomalies({ limit: '0' })).rejects.toThrow()
+      expect(admin.anomalies).not.toHaveBeenCalled()
+    })
+
+    it('rejects limit = 201 (above the 200 cap) with a validation error', async () => {
+      await expect(controller.anomalies({ limit: '201' })).rejects.toThrow()
+      expect(admin.anomalies).not.toHaveBeenCalled()
+    })
+
+    it('rejects a non-numeric limit with a validation error', async () => {
+      await expect(controller.anomalies({ limit: 'abc' })).rejects.toThrow()
+      expect(admin.anomalies).not.toHaveBeenCalled()
     })
   })
 })
