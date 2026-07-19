@@ -102,9 +102,9 @@ export class BillingUsageService {
     return { tenants: subscribed.length, reported }
   }
 
-  // Fenêtre [J-N, J-1] (UTC), triée du plus ANCIEN au plus récent (I2). J lui
-  // -même n'est JAMAIS inclus : le sweep tourne en cours de journée J, ses
-  // documents ne sont pas encore définitivement comptabilisables.
+  // Fenêtre [J-N, J-1] (UTC), triée du plus ANCIEN au plus récent (I2). Le
+  // jour courant J n'est JAMAIS inclus : le sweep tourne en cours de journée
+  // J, ses documents ne sont pas encore définitivement comptabilisables.
   private targetDays(now: Date): string[] {
     const days: string[] = []
     for (let offset = this.lookbackDays; offset >= 1; offset--) {
