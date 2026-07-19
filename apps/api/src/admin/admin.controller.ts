@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Get,
   HttpCode,
@@ -15,8 +16,10 @@ import { ConfigService } from '@nestjs/config'
 import { Throttle } from '@nestjs/throttler'
 import type { Response } from 'express'
 import { z } from 'zod'
-import type { SessionRequest } from '../auth/auth.types.js'
+import type { AuthenticatedAdmin, SessionRequest } from '../auth/auth.types.js'
 import { csrfCookieOptions, sessionCookieOptions } from '../auth/cookie.js'
+import { CsrfGuard } from '../auth/csrf.guard.js'
+import { CurrentAdmin } from '../auth/current-admin.decorator.js'
 import { SessionGuard } from '../auth/session.guard.js'
 // biome-ignore lint/style/useImportType: SessionService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { SessionService } from '../auth/session.service.js'
@@ -32,6 +35,14 @@ import { AdminService } from './admin.service.js'
 const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1).max(200),
+})
+
+// Motif reason 1..500 (spec §3, symétrique à `retransmissionSchema.reason`
+// de LifecycleService — cf. invoices.controller.ts `transitionSchema`, même
+// bornage) : un motif vide n'est pas un motif, 500 évite un pavé de texte
+// libre disproportionné dans le journal `admin_actions`.
+const suspendSchema = z.object({
+  reason: z.string().min(1).max(500),
 })
 
 @Controller('admin')
@@ -103,9 +114,58 @@ export class AdminController {
     return detail
   }
 
+  // Suspension opérateur (Task 4, spec §3/§4) — 200 `{ suspendedAt }` (motif
+  // symétrie avec le reste du contrôleur : aucune réponse 201 n'existe déjà
+  // ici, une suspension ne « crée » rien). `CsrfGuard` : 1re mutation
+  // protégée par double-submit de ce contrôleur (spec §2 « CsrfGuard sur les
+  // POST ») — `logout` ci-dessus en est dépourvu (dette PRÉ-EXISTANTE à cette
+  // tâche, hors périmètre Task 4, non touchée). Idempotence : déjà suspendu
+  // → 409 conflict (jamais un 200 silencieux qui masquerait l'état réel à
+  // l'opérateur).
+  @Post('tenants/:id/suspend')
+  @HttpCode(200)
+  @UseGuards(SessionGuard, AdminGuard, CsrfGuard)
+  async suspendTenant(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ): Promise<{ suspendedAt: Date }> {
+    if (!isUuid(id)) throw this.notFound()
+    const { reason } = parseBody(suspendSchema, body)
+    const result = await this.admin.suspendTenant(id, admin.adminId, reason)
+    if (result.outcome === 'not_found') throw this.notFound()
+    if (result.outcome === 'already_suspended') {
+      throw this.conflict('Tenant already suspended')
+    }
+    return { suspendedAt: result.suspendedAt }
+  }
+
+  // Réactivation (Task 4, spec §3) — 204 (motif logout : mutation sans corps
+  // de réponse utile). Symétrique de suspendTenant : non-suspendu → 409.
+  @Post('tenants/:id/unsuspend')
+  @HttpCode(204)
+  @UseGuards(SessionGuard, AdminGuard, CsrfGuard)
+  async unsuspendTenant(
+    @Param('id') id: string,
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ): Promise<void> {
+    if (!isUuid(id)) throw this.notFound()
+    const result = await this.admin.unsuspendTenant(id, admin.adminId)
+    if (result.outcome === 'not_found') throw this.notFound()
+    if (result.outcome === 'not_suspended') {
+      throw this.conflict('Tenant not suspended')
+    }
+  }
+
   private notFound(): NotFoundException {
     return new NotFoundException(
       problem(404, ProblemType.notFound, 'Unknown tenant'),
+    )
+  }
+
+  private conflict(detail: string): ConflictException {
+    return new ConflictException(
+      problem(409, ProblemType.conflict, 'Conflict', { detail }),
     )
   }
 }

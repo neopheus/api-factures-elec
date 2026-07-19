@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common'
 import type { Response } from 'express'
 import { z } from 'zod'
+import { SuspensionGuard } from '../admin/suspension.guard.js'
 import { ApiKeyGuard } from '../auth/api-key.guard.js'
 import type { AuthenticatedUser } from '../auth/auth.types.js'
 import { CsrfGuard } from '../auth/csrf.guard.js'
@@ -59,9 +60,14 @@ export class InvoicesController {
   // nouvelle facture si l'abonnement du tenant n'est pas valide (`fail-open`
   // uniquement en driver 'none' ou enforcement 'off', jamais silencieusement
   // ailleurs).
+  // SuspensionGuard (Task 4, phase 5 it.2, spec §4) EN DERNIER : dépend lui
+  // aussi de `req.tenantId` — bloque en 403 (jamais 402, motif tenant-
+  // suspended) si l'opérateur a suspendu le tenant. Contrairement à
+  // BillingGuard, AUCUNE échappatoire de configuration (driver/enforcement) :
+  // s'applique toujours, cf. commentaire de classe `SuspensionGuard`.
   @Post()
   @HttpCode(201)
-  @UseGuards(ApiKeyGuard, BillingGuard)
+  @UseGuards(ApiKeyGuard, BillingGuard, SuspensionGuard)
   ingest(
     @CurrentTenant() tenantId: string,
     @Body() body: unknown,

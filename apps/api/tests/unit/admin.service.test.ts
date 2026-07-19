@@ -14,12 +14,19 @@ describe('AdminService', () => {
   let supervision: {
     tenantStats: ReturnType<typeof vi.fn>
     tenantDetail: ReturnType<typeof vi.fn>
+    suspend: ReturnType<typeof vi.fn>
+    unsuspend: ReturnType<typeof vi.fn>
   }
   let service: AdminService
 
   beforeEach(() => {
     query = vi.fn()
-    supervision = { tenantStats: vi.fn(), tenantDetail: vi.fn() }
+    supervision = {
+      tenantStats: vi.fn(),
+      tenantDetail: vi.fn(),
+      suspend: vi.fn(),
+      unsuspend: vi.fn(),
+    }
     service = new AdminService(
       { query } as unknown as pg.Pool,
       supervision as unknown as AdminSupervisionRepository,
@@ -140,6 +147,37 @@ describe('AdminService', () => {
       const result = await service.tenantDetail('unknown-id')
 
       expect(result).toBeNull()
+    })
+  })
+
+  // Task 4 (spec §3) : purs délégateurs (même motif que listTenants/
+  // tenantDetail ci-dessus) — le mapping HTTP (404/409) vit dans
+  // AdminController, la logique SQL/transaction dans le repository.
+  describe('suspendTenant', () => {
+    it('delegates to AdminSupervisionRepository.suspend and forwards its outcome unchanged', async () => {
+      const outcome = { outcome: 'suspended' as const, suspendedAt: new Date() }
+      supervision.suspend.mockResolvedValue(outcome)
+
+      const result = await service.suspendTenant('t1', 'a1', 'abus signalé')
+
+      expect(supervision.suspend).toHaveBeenCalledWith(
+        't1',
+        'a1',
+        'abus signalé',
+      )
+      expect(result).toBe(outcome)
+    })
+  })
+
+  describe('unsuspendTenant', () => {
+    it('delegates to AdminSupervisionRepository.unsuspend and forwards its outcome unchanged', async () => {
+      const outcome = { outcome: 'unsuspended' as const }
+      supervision.unsuspend.mockResolvedValue(outcome)
+
+      const result = await service.unsuspendTenant('t1', 'a1')
+
+      expect(supervision.unsuspend).toHaveBeenCalledWith('t1', 'a1')
+      expect(result).toBe(outcome)
     })
   })
 })

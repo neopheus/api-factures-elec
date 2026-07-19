@@ -3,13 +3,14 @@ import type { INestApplication } from '@nestjs/common'
 import pg from 'pg'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { generateApiKey } from '../../src/auth/api-key.js'
 import { hashPassword } from '../../src/auth/password.js'
 import { BillingRepository } from '../../src/billing/billing.repository.js'
 import { TenantContextService } from '../../src/db/tenant-context.service.js'
 import { InvoicesRepository } from '../../src/invoices/invoices.repository.js'
 import { createTestApp } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
-import { signupSession } from './helpers/session.js'
+import { extractCookie, signupSession } from './helpers/session.js'
 
 // Task 3 (spec §3, phase 5 it.2) : liste tenants enrichie (SD 1
 // find_admin_tenant_stats) + détail per-tenant RLS-scopé (GET
@@ -251,5 +252,150 @@ describe('admin supervision — liste enrichie + détail (e2e)', () => {
       .set('Cookie', cookie)
       .expect(404)
     expect(res.body.type).toBe('urn:factelec:problem:not-found')
+  })
+
+  // Task 4 (spec §3/§4) : suspend/unsuspend + SuspensionGuard sur l'émission.
+  // Suite SÉQUENTIELLE et DÉPENDANTE (motif billing-guard.e2e.test.ts) : un
+  // seul tenant/clé API partagé, chaque `it` fait progresser son état
+  // (suspendu ⇄ actif) — l'ordre de déclaration EST le scénario.
+  describe('suspend/unsuspend tenant + garde sur l’émission (Task 4)', () => {
+    let suspendTenantId: string
+    let apiKeyToken: string
+    let cookie: string[]
+    let csrf: string
+
+    function invoiceBody(number: string) {
+      return invoiceInput(number)
+    }
+
+    // Cookie/CSRF admin obtenus UNE SEULE FOIS ici (pas un `adminCookie()`
+    // par `it`, motif : `/admin/login` est throttlé 10/15min/IP — ce fichier
+    // en consommerait plus de 10 à lui seul avec un login par test, faisant
+    // échouer les derniers `it` en 429 avant même d'exercer le comportement
+    // testé). La session (TTL admin 2h, spec §8) reste valide pour toute la
+    // durée de cette suite.
+    beforeAll(async () => {
+      const t = await ownerPool.query(
+        "INSERT INTO tenants (name) VALUES ('Shop Suspend') RETURNING id",
+      )
+      suspendTenantId = t.rows[0].id
+      const key = await generateApiKey()
+      await ownerPool.query(
+        'INSERT INTO api_keys (tenant_id, prefix, secret_hash, label) VALUES ($1, $2, $3, $4)',
+        [suspendTenantId, key.prefix, key.secretHash, 'test-suspend'],
+      )
+      apiKeyToken = key.token
+      cookie = await adminCookie()
+      csrf = extractCookie(cookie, 'factelec_csrf')
+    })
+
+    it('POST /admin/tenants/:id/suspend SANS jeton CSRF → 403 forbidden', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/admin/tenants/${suspendTenantId}/suspend`)
+        .set('Cookie', cookie)
+        .send({ reason: 'sans csrf' })
+        .expect(403)
+      expect(res.body.type).toBe('urn:factelec:problem:forbidden')
+    })
+
+    it('POST suspend (motif valide) → 200 { suspendedAt }', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/admin/tenants/${suspendTenantId}/suspend`)
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', csrf)
+        .send({ reason: 'impayé grave' })
+        .expect(200)
+
+      expect(res.body.suspendedAt).toBeDefined()
+    })
+
+    it('POST suspend un tenant DÉJÀ suspendu → 409 conflict (idempotence)', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/admin/tenants/${suspendTenantId}/suspend`)
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', csrf)
+        .send({ reason: 'nouvelle tentative' })
+        .expect(409)
+      expect(res.body.type).toBe('urn:factelec:problem:conflict')
+    })
+
+    it('PENDANT la suspension : POST /invoices (clé API valide) → 403 tenant-suspended', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/invoices')
+        .set('Authorization', `Bearer ${apiKeyToken}`)
+        .send(invoiceBody('FA-SUSPEND-1'))
+        .expect(403)
+      expect(res.body.type).toBe('urn:factelec:problem:tenant-suspended')
+    })
+
+    it('PENDANT la suspension : GET /invoices reste 200 (lecture jamais bloquée)', async () => {
+      await request(app.getHttpServer())
+        .get('/invoices')
+        .set('Authorization', `Bearer ${apiKeyToken}`)
+        .expect(200)
+    })
+
+    it('POST unsuspend → 204', async () => {
+      await request(app.getHttpServer())
+        .post(`/admin/tenants/${suspendTenantId}/unsuspend`)
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', csrf)
+        .expect(204)
+    })
+
+    it('POST unsuspend un tenant NON suspendu → 409 conflict (idempotence)', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/admin/tenants/${suspendTenantId}/unsuspend`)
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', csrf)
+        .expect(409)
+      expect(res.body.type).toBe('urn:factelec:problem:conflict')
+    })
+
+    it('APRÈS la réactivation : POST /invoices → 201 (le garde laisse à nouveau passer)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/invoices')
+        .set('Authorization', `Bearer ${apiKeyToken}`)
+        .send(invoiceBody('FA-SUSPEND-2'))
+        .expect(201)
+      expect(res.body.status).toBeDefined()
+    })
+
+    it('journal admin_actions : 2 lignes (suspend_tenant puis unsuspend_tenant), tenant_id et detail corrects', async () => {
+      const { rows } = await ownerPool.query(
+        'SELECT action, tenant_id, detail FROM admin_actions WHERE tenant_id = $1 ORDER BY created_at ASC',
+        [suspendTenantId],
+      )
+      expect(rows).toHaveLength(2)
+      expect(rows[0]).toMatchObject({
+        action: 'suspend_tenant',
+        tenant_id: suspendTenantId,
+        detail: { reason: 'impayé grave' },
+      })
+      expect(rows[1]).toMatchObject({
+        action: 'unsuspend_tenant',
+        tenant_id: suspendTenantId,
+        detail: {},
+      })
+    })
+
+    it('404 problem pour un tenant inconnu (suspend et unsuspend)', async () => {
+      const unknown = '00000000-0000-0000-0000-000000000000'
+
+      const suspendRes = await request(app.getHttpServer())
+        .post(`/admin/tenants/${unknown}/suspend`)
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', csrf)
+        .send({ reason: 'peu importe' })
+        .expect(404)
+      expect(suspendRes.body.type).toBe('urn:factelec:problem:not-found')
+
+      const unsuspendRes = await request(app.getHttpServer())
+        .post(`/admin/tenants/${unknown}/unsuspend`)
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', csrf)
+        .expect(404)
+      expect(unsuspendRes.body.type).toBe('urn:factelec:problem:not-found')
+    })
   })
 })

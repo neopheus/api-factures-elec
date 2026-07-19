@@ -1,9 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common'
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm'
 import type pg from 'pg'
 import type { BillingSubscriptionStatus } from '../billing/billing.port.js'
 import { APP_POOL } from '../db/client.js'
-import { invoices, tenantBilling } from '../db/schema.js'
+import { adminActions, invoices, tenantBilling, tenants } from '../db/schema.js'
 // biome-ignore lint/style/useImportType: TenantContextService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { TenantContextService } from '../db/tenant-context.service.js'
 import type { LifecycleStatus } from '../invoices/lifecycle-status.js'
@@ -49,6 +49,22 @@ export interface AdminTenantDetail extends AdminTenantStats {
   invoices: AdminTenantInvoiceSummary[]
   billing: AdminTenantBillingMirror
 }
+
+// Résultats de suspend/unsuspend (Task 4, spec §3/§4) — union discriminée
+// plutôt qu'un booléen/exception : le contrôleur mappe chaque `outcome` sur
+// le code HTTP exact (404 tenant inconnu, 409 idempotence, 200/204 succès)
+// SANS avoir à redevenir de la logique SQL (0 ligne affectée par l'UPDATE
+// est ambigu — tenant inconnu OU déjà dans l'état cible — motif
+// `BillingRepository.applyEvent`, même CAS avec SELECT de départage).
+export type SuspendOutcome =
+  | { outcome: 'suspended'; suspendedAt: Date }
+  | { outcome: 'already_suspended' }
+  | { outcome: 'not_found' }
+
+export type UnsuspendOutcome =
+  | { outcome: 'unsuspended' }
+  | { outcome: 'not_suspended' }
+  | { outcome: 'not_found' }
 
 const LAST_INVOICES_LIMIT = 10
 
@@ -166,5 +182,115 @@ export class AdminSupervisionRepository {
     })
 
     return { ...stats, ...detail }
+  }
+
+  // Lue par `SuspensionGuard` (Task 4, spec §4) — requête directe indexée
+  // par PK, même coût que `BillingRepository.getState`. `tenant.run(tenantId,
+  // ...)` est REQUIS ici (pas un simple `pool.query` comme les 2 méthodes
+  // ci-dessus) : contrairement aux 2 SD cross-tenant, cette lecture cible LA
+  // table `tenants` elle-même, sous RLS FORCE avec la policy `tenant_self`
+  // (migration 0001 : `USING (id = current_setting('app.tenant_id'))`) — hors
+  // contexte tenant, `factelec_app` ne verrait JAMAIS la ligne (0 résultat
+  // silencieux, PAS une erreur), ce qui ferait passer TOUTE requête comme non
+  // suspendue. Poser `app.tenant_id = tenantId` (le tenant qu'on interroge)
+  // satisfait exactement la policy — aucune fuite cross-tenant possible
+  // puisqu'on ne lit jamais que sa propre ligne.
+  async isSuspended(tenantId: string): Promise<boolean> {
+    return this.tenant.run(tenantId, async (db) => {
+      const rows = await db
+        .select({ suspendedAt: tenants.suspendedAt })
+        .from(tenants)
+        .where(eq(tenants.id, tenantId))
+        .limit(1)
+      return (rows[0]?.suspendedAt ?? null) !== null
+    })
+  }
+
+  // Suspension opérateur (POST /admin/tenants/:id/suspend, spec §3) — UPDATE
+  // conditionnel (`suspended_at IS NULL`) puis INSERT admin_actions DANS LA
+  // MÊME TRANSACTION (`tenant.run` = un seul BEGIN/COMMIT, cf.
+  // tenant-context.ts) : soit les deux écritures s'appliquent, soit aucune —
+  // jamais une suspension journalisée à moitié. `admin_actions` n'a AUCUNE
+  // RLS (migration 0031, table plateforme append-only) : l'INSERT réussit
+  // sans lien avec `app.tenant_id`, posé ici uniquement pour satisfaire la
+  // policy `tenant_self` de `tenants`.
+  //
+  // 0 ligne affectée par l'UPDATE est ambigu (tenant inconnu OU déjà
+  // suspendu) — un SELECT de départage tranche (motif
+  // `BillingRepository.applyEvent`), SANS écrire l'action dans ce cas (rien
+  // à journaliser, aucun état n'a changé).
+  async suspend(
+    tenantId: string,
+    adminId: string,
+    reason: string,
+  ): Promise<SuspendOutcome> {
+    // Valeur posée AVANT l'UPDATE (pas relue via `.returning()`) : la colonne
+    // `suspended_at` est nullable dans le schéma, donc `.returning()` la
+    // typerait `Date | null` même quand ON SAIT qu'elle vient d'être posée
+    // non-null — utiliser directement `suspendedAt` évite le cast et garantit
+    // que la valeur journalisée en réponse HTTP est EXACTEMENT celle écrite.
+    const suspendedAt = new Date()
+    return this.tenant.run(tenantId, async (db) => {
+      const updated = await db
+        .update(tenants)
+        .set({ suspendedAt, suspendedReason: reason })
+        .where(and(eq(tenants.id, tenantId), isNull(tenants.suspendedAt)))
+        .returning({ id: tenants.id })
+      const row = updated[0]
+      if (!row) {
+        const existing = await db
+          .select({ id: tenants.id })
+          .from(tenants)
+          .where(eq(tenants.id, tenantId))
+          .limit(1)
+        return existing.length === 0
+          ? { outcome: 'not_found' }
+          : { outcome: 'already_suspended' }
+      }
+      await db.insert(adminActions).values({
+        adminId,
+        tenantId,
+        action: 'suspend_tenant',
+        detail: { reason },
+      })
+      return { outcome: 'suspended', suspendedAt }
+    })
+  }
+
+  // Réactivation (POST /admin/tenants/:id/unsuspend, spec §3) — symétrique de
+  // `suspend` : UPDATE conditionnel (`suspended_at IS NOT NULL`) + INSERT
+  // admin_actions même transaction, `detail: {}` (aucun motif à journaliser
+  // pour une réactivation, contrairement à la suspension). `suspended_reason`
+  // est effacé AVEC `suspended_at` (jamais conservé seul, motif commentaire
+  // schema.ts) : un motif orphelin laisserait croire qu'un tenant actif a
+  // encore une raison de suspension pendante.
+  async unsuspend(
+    tenantId: string,
+    adminId: string,
+  ): Promise<UnsuspendOutcome> {
+    return this.tenant.run(tenantId, async (db) => {
+      const updated = await db
+        .update(tenants)
+        .set({ suspendedAt: null, suspendedReason: null })
+        .where(and(eq(tenants.id, tenantId), isNotNull(tenants.suspendedAt)))
+        .returning({ id: tenants.id })
+      if (updated.length === 0) {
+        const existing = await db
+          .select({ id: tenants.id })
+          .from(tenants)
+          .where(eq(tenants.id, tenantId))
+          .limit(1)
+        return existing.length === 0
+          ? { outcome: 'not_found' }
+          : { outcome: 'not_suspended' }
+      }
+      await db.insert(adminActions).values({
+        adminId,
+        tenantId,
+        action: 'unsuspend_tenant',
+        detail: {},
+      })
+      return { outcome: 'unsuspended' }
+    })
   }
 }

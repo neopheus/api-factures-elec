@@ -1,14 +1,23 @@
-import { NotFoundException } from '@nestjs/common'
+import { ConflictException, NotFoundException } from '@nestjs/common'
 import type { ConfigService } from '@nestjs/config'
 import type { Response } from 'express'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdminController } from '../../src/admin/admin.controller.js'
 import type { AdminService } from '../../src/admin/admin.service.js'
 import type { AdminTenantDetail } from '../../src/admin/admin-supervision.repository.js'
-import type { SessionRequest } from '../../src/auth/auth.types.js'
+import type {
+  AuthenticatedAdmin,
+  SessionRequest,
+} from '../../src/auth/auth.types.js'
 import type { SessionService } from '../../src/auth/session.service.js'
 import { SESSION_COOKIE } from '../../src/auth/session-token.js'
 import type { EnvConfig } from '../../src/config/env.js'
+
+const FAKE_ADMIN: AuthenticatedAdmin = {
+  sessionId: 's1',
+  adminId: 'a1',
+  csrfHash: 'h',
+}
 
 function fakeConfig(): ConfigService<EnvConfig, true> {
   return {
@@ -28,6 +37,8 @@ describe('AdminController', () => {
     login: ReturnType<typeof vi.fn>
     listTenants: ReturnType<typeof vi.fn>
     tenantDetail: ReturnType<typeof vi.fn>
+    suspendTenant: ReturnType<typeof vi.fn>
+    unsuspendTenant: ReturnType<typeof vi.fn>
   }
   let sessions: {
     create: ReturnType<typeof vi.fn>
@@ -37,7 +48,13 @@ describe('AdminController', () => {
   let controller: AdminController
 
   beforeEach(() => {
-    admin = { login: vi.fn(), listTenants: vi.fn(), tenantDetail: vi.fn() }
+    admin = {
+      login: vi.fn(),
+      listTenants: vi.fn(),
+      tenantDetail: vi.fn(),
+      suspendTenant: vi.fn(),
+      unsuspendTenant: vi.fn(),
+    }
     sessions = {
       create: vi.fn(),
       revoke: vi.fn(),
@@ -174,6 +191,104 @@ describe('AdminController', () => {
       const result = await controller.tenantDetail(VALID_UUID)
 
       expect(result).toEqual(detail)
+    })
+  })
+
+  // Nouveau (Task 4, spec §3) : POST /admin/tenants/:id/suspend.
+  describe('suspendTenant', () => {
+    const VALID_UUID = '11111111-1111-1111-1111-111111111111'
+
+    it('rejects a malformed id with 404 WITHOUT calling the service (isUuid guard)', async () => {
+      await expect(
+        controller.suspendTenant('not-a-uuid', { reason: 'abus' }, FAKE_ADMIN),
+      ).rejects.toBeInstanceOf(NotFoundException)
+      expect(admin.suspendTenant).not.toHaveBeenCalled()
+    })
+
+    it('rejects an empty reason with 422 (zod, WITHOUT calling the service)', async () => {
+      await expect(
+        controller.suspendTenant(VALID_UUID, { reason: '' }, FAKE_ADMIN),
+      ).rejects.toThrow()
+      expect(admin.suspendTenant).not.toHaveBeenCalled()
+    })
+
+    it('404 when the service reports the tenant is unknown', async () => {
+      admin.suspendTenant.mockResolvedValue({ outcome: 'not_found' })
+
+      const err = await controller
+        .suspendTenant(VALID_UUID, { reason: 'abus' }, FAKE_ADMIN)
+        .catch((e) => e)
+
+      expect(err).toBeInstanceOf(NotFoundException)
+      expect(admin.suspendTenant).toHaveBeenCalledWith(VALID_UUID, 'a1', 'abus')
+    })
+
+    it('409 conflict when the tenant is already suspended (idempotence)', async () => {
+      admin.suspendTenant.mockResolvedValue({ outcome: 'already_suspended' })
+
+      const err = await controller
+        .suspendTenant(VALID_UUID, { reason: 'abus' }, FAKE_ADMIN)
+        .catch((e) => e)
+
+      expect(err).toBeInstanceOf(ConflictException)
+    })
+
+    it('returns { suspendedAt } on success, forwarding the admin id from @CurrentAdmin', async () => {
+      const suspendedAt = new Date('2026-07-19T12:00:00Z')
+      admin.suspendTenant.mockResolvedValue({
+        outcome: 'suspended',
+        suspendedAt,
+      })
+
+      const result = await controller.suspendTenant(
+        VALID_UUID,
+        { reason: 'impayé grave' },
+        FAKE_ADMIN,
+      )
+
+      expect(result).toEqual({ suspendedAt })
+      expect(admin.suspendTenant).toHaveBeenCalledWith(
+        VALID_UUID,
+        'a1',
+        'impayé grave',
+      )
+    })
+  })
+
+  // Nouveau (Task 4, spec §3) : POST /admin/tenants/:id/unsuspend.
+  describe('unsuspendTenant', () => {
+    const VALID_UUID = '11111111-1111-1111-1111-111111111111'
+
+    it('rejects a malformed id with 404 WITHOUT calling the service (isUuid guard)', async () => {
+      await expect(
+        controller.unsuspendTenant('not-a-uuid', FAKE_ADMIN),
+      ).rejects.toBeInstanceOf(NotFoundException)
+      expect(admin.unsuspendTenant).not.toHaveBeenCalled()
+    })
+
+    it('404 when the service reports the tenant is unknown', async () => {
+      admin.unsuspendTenant.mockResolvedValue({ outcome: 'not_found' })
+
+      await expect(
+        controller.unsuspendTenant(VALID_UUID, FAKE_ADMIN),
+      ).rejects.toBeInstanceOf(NotFoundException)
+    })
+
+    it('409 conflict when the tenant is not suspended (idempotence)', async () => {
+      admin.unsuspendTenant.mockResolvedValue({ outcome: 'not_suspended' })
+
+      await expect(
+        controller.unsuspendTenant(VALID_UUID, FAKE_ADMIN),
+      ).rejects.toBeInstanceOf(ConflictException)
+    })
+
+    it('returns void (204) on success, forwarding the admin id from @CurrentAdmin', async () => {
+      admin.unsuspendTenant.mockResolvedValue({ outcome: 'unsuspended' })
+
+      const result = await controller.unsuspendTenant(VALID_UUID, FAKE_ADMIN)
+
+      expect(result).toBeUndefined()
+      expect(admin.unsuspendTenant).toHaveBeenCalledWith(VALID_UUID, 'a1')
     })
   })
 })
