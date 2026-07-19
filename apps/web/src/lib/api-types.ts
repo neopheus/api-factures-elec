@@ -57,3 +57,20 @@ export interface BillingStatus {
   currentPeriodEnd: string | null
   hasCustomer: boolean
 }
+// MFA TOTP admin (Task 10, phase 5 it.2). `POST /admin/login` répond soit une
+// session (TOTP déjà enrôlé et vérifié), soit une demande d'enrôlement forcé
+// — dans ce dernier cas l'API ne pose AUCUNE session (spec §5).
+export interface AdminLoginSession {
+  admin: { id: string; email: string }
+}
+export interface AdminEnrollmentRequired {
+  enrollmentRequired: true
+  otpauthUrl: string
+  secret: string
+}
+export type AdminLoginResult = AdminLoginSession | AdminEnrollmentRequired
+// `POST /admin/totp/confirm` : seule et unique apparition des codes de
+// récupération en clair — jamais renvoyés par un autre endpoint ensuite.
+export interface AdminTotpConfirmResult {
+  recoveryCodes: string[]
+}

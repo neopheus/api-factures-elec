@@ -1,5 +1,7 @@
 import { API_BASE, apiFetch } from './api'
 import type {
+  AdminLoginResult,
+  AdminTotpConfirmResult,
   ApiKeyView,
   CreatedApiKey,
   InvoiceDetail,
@@ -50,10 +52,28 @@ export const apiKeysApi = {
 }
 
 export const adminApi = {
-  login: (email: string, password: string) =>
-    apiFetch<{ admin: { id: string; email: string } }>('/admin/login', {
+  // `code` : saisie unique du formulaire, non distinguée par l'admin — c'est
+  // au client de trancher entre TOTP (6 chiffres) et code de récupération
+  // (autre format, ex. `xxxx-xxxx`) puisque l'API attend deux champs séparés.
+  login: (email: string, password: string, code?: string) =>
+    apiFetch<AdminLoginResult>('/admin/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({
+        email,
+        password,
+        ...(code
+          ? /^\d{6}$/.test(code)
+            ? { totpCode: code }
+            : { recoveryCode: code }
+          : {}),
+      }),
+    }),
+  // Hors session (l'admin n'en a pas encore) : mot de passe redemandé par
+  // l'API, cf. spec §5. Seule occurrence des recovery codes en clair.
+  confirmTotp: (email: string, password: string, totpCode: string) =>
+    apiFetch<AdminTotpConfirmResult>('/admin/totp/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, totpCode }),
     }),
   tenants: () => apiFetch<TenantOverview[]>('/admin/tenants'),
 }

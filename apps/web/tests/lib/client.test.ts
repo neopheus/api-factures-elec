@@ -122,6 +122,65 @@ describe('adminApi', () => {
     })
   })
 
+  it('logs an admin in with a 6-digit code sent as totpCode', async () => {
+    const f = mockFetch({ admin: { id: '1', email: 'root@ex.com' } })
+    vi.stubGlobal('fetch', f)
+    await adminApi.login('root@ex.com', 'p', '123456')
+    const [, init] = f.mock.calls[0]!
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: 'root@ex.com',
+      password: 'p',
+      totpCode: '123456',
+    })
+  })
+
+  it('logs an admin in with a non-6-digit code sent as recoveryCode', async () => {
+    const f = mockFetch({ admin: { id: '1', email: 'root@ex.com' } })
+    vi.stubGlobal('fetch', f)
+    await adminApi.login('root@ex.com', 'p', 'ab12-cd34')
+    const [, init] = f.mock.calls[0]!
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: 'root@ex.com',
+      password: 'p',
+      recoveryCode: 'ab12-cd34',
+    })
+  })
+
+  it('surfaces a 202 enrollment-required response without a session', async () => {
+    const f = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enrollmentRequired: true,
+        otpauthUrl: 'otpauth://totp/Factelec:root@ex.com?secret=ABC',
+        secret: 'ABC',
+      }),
+      text: async () => '',
+    } as unknown as Response)
+    vi.stubGlobal('fetch', f)
+    expect(await adminApi.login('root@ex.com', 'p')).toEqual({
+      enrollmentRequired: true,
+      otpauthUrl: 'otpauth://totp/Factelec:root@ex.com?secret=ABC',
+      secret: 'ABC',
+    })
+  })
+
+  it('confirms TOTP enrollment and receives the recovery codes once', async () => {
+    const f = mockFetch({ recoveryCodes: ['aaaa-1111', 'bbbb-2222'] })
+    vi.stubGlobal('fetch', f)
+    expect(await adminApi.confirmTotp('root@ex.com', 'p', '123456')).toEqual({
+      recoveryCodes: ['aaaa-1111', 'bbbb-2222'],
+    })
+    const [url, init] = f.mock.calls[0]!
+    expect(String(url)).toBe(`${API_BASE}/admin/totp/confirm`)
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: 'root@ex.com',
+      password: 'p',
+      totpCode: '123456',
+    })
+  })
+
   it('lists tenants', async () => {
     const f = mockFetch([])
     vi.stubGlobal('fetch', f)
