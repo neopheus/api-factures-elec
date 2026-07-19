@@ -1,3 +1,5 @@
+import type { BillingStatus } from './api-types'
+
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000'
 
@@ -51,4 +53,25 @@ export async function apiFetch<T>(
     )
   }
   return payload as T
+}
+
+// Billing (Task 11, phase 5) : lecture du miroir d'abonnement + ouverture
+// des sessions hébergées Stripe (Checkout/Portal). Placées ici (et non
+// groupées comme `apiKeysApi`/`invoicesApi` dans `client.ts`) à la demande
+// explicite du brief Task 11 — seul le statut/checkout/portal billing vivent
+// dans ce module, tout le reste des ressources reste dans `client.ts`.
+export function getBillingStatus(): Promise<BillingStatus> {
+  return apiFetch<BillingStatus>('/billing/status')
+}
+
+export function createBillingCheckout(): Promise<{ url: string }> {
+  return apiFetch<{ url: string }>('/billing/checkout-session', {
+    method: 'POST',
+  })
+}
+
+export function createBillingPortal(): Promise<{ url: string }> {
+  return apiFetch<{ url: string }>('/billing/portal-session', {
+    method: 'POST',
+  })
 }

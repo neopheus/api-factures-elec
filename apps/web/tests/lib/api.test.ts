@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, apiFetch } from '../../src/lib/api.js'
+import {
+  API_BASE,
+  ApiError,
+  apiFetch,
+  createBillingCheckout,
+  createBillingPortal,
+  getBillingStatus,
+} from '../../src/lib/api.js'
 
 function mockFetch(res: Partial<Response> & { jsonBody?: unknown }) {
   return vi.fn().mockResolvedValue({
@@ -151,5 +158,58 @@ describe('apiFetch', () => {
       } as unknown as Response),
     )
     expect(await apiFetch('/invoices/1/formats/ubl')).toBe('plain body')
+  })
+})
+
+describe('getBillingStatus', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('fetches the billing mirror status', async () => {
+    const f = mockFetch({
+      jsonBody: {
+        status: 'active',
+        currentPeriodEnd: '2026-08-01T00:00:00.000Z',
+        hasCustomer: true,
+      },
+    })
+    vi.stubGlobal('fetch', f)
+    const result = await getBillingStatus()
+    expect(result).toEqual({
+      status: 'active',
+      currentPeriodEnd: '2026-08-01T00:00:00.000Z',
+      hasCustomer: true,
+    })
+    expect(String(f.mock.calls[0]![0])).toBe(`${API_BASE}/billing/status`)
+    expect(f.mock.calls[0]![1]?.method ?? 'GET').toBe('GET')
+  })
+})
+
+describe('createBillingCheckout', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('opens a hosted Checkout session', async () => {
+    const f = mockFetch({ jsonBody: { url: 'https://checkout.stripe.com/x' } })
+    vi.stubGlobal('fetch', f)
+    const result = await createBillingCheckout()
+    expect(result).toEqual({ url: 'https://checkout.stripe.com/x' })
+    expect(String(f.mock.calls[0]![0])).toBe(
+      `${API_BASE}/billing/checkout-session`,
+    )
+    expect(f.mock.calls[0]![1]?.method).toBe('POST')
+  })
+})
+
+describe('createBillingPortal', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('opens a hosted Customer Portal session', async () => {
+    const f = mockFetch({ jsonBody: { url: 'https://billing.stripe.com/p/x' } })
+    vi.stubGlobal('fetch', f)
+    const result = await createBillingPortal()
+    expect(result).toEqual({ url: 'https://billing.stripe.com/p/x' })
+    expect(String(f.mock.calls[0]![0])).toBe(
+      `${API_BASE}/billing/portal-session`,
+    )
+    expect(f.mock.calls[0]![1]?.method).toBe('POST')
   })
 })
