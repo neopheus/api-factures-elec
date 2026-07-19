@@ -99,7 +99,13 @@ export default defineConfig({
           // (headroom sous le plafond Docker) plutôt que de conclure
           // « vert » sur un run simplement plus chanceux — voir rapport
           // Task 7 pour les batteries de re-vérification post-fallback.
-          maxWorkers: 3,
+          //
+          // Surcharge CI (2026-07-19) : les runners GitHub ubuntu-latest
+          // (2 vCPU) saturent même à 3 conteneurs Postgres simultanés
+          // (hook timeouts 150 s en série constatés depuis le plan 2.3) —
+          // le job e2e de ci.yml pose VITEST_LIGHT_MAX_WORKERS=2. Le défaut
+          // local reste 3 (fallback binding m7 inchangé).
+          maxWorkers: Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? '3'),
         },
       },
     ],

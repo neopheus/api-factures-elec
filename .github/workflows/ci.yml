@@ -4,15 +4,23 @@ on:
     branches: [main]
   pull_request:
 jobs:
+  # Étage 1 — signal rapide (~5 min) : dépendances, lint, build, types,
+  # tests unitaires api + suites complètes invoice-core/web (sans
+  # Testcontainers). Pas de --coverage ici : les seuils ≥90 % du config
+  # vitest ne sont atteignables qu'avec les e2e — ils sont vérifiés par le
+  # job e2e ci-dessous.
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # Action tierce épinglée au SHA de commit (immutabilité supply-chain,
+      # règle semgrep third-party-action-not-pinned) — SHA = tag v6.0.9.
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
+      # xmllint requis même en unitaire (validations XSD invoice-core/api).
       - run: sudo apt-get update && sudo apt-get install -y libxml2-utils
       - run: pnpm install --frozen-lockfile
       # `pnpm audit` interroge l'ancien endpoint npm /-/npm/v1/security/audits,
@@ -25,9 +33,37 @@ jobs:
       - run: pnpm lint
       - run: pnpm build        # invoice-core (tsc) → apps/api (swc, y compris src/worker-main.ts) → apps/web (next build), ordre topologique pnpm
       - run: pnpm typecheck     # apps/api tsgo (couvre worker-main.ts) ; apps/web repli typescript 5.9.x local (next build fait autorité sur les types de routes)
-      # Testcontainers démarre Postgres ET Redis (Docker natif du runner ubuntu-latest,
-      # aucun service `redis:`/`postgres:` de job GitHub requis — cycle de vie du
-      # conteneur géré par le test lui-même). Le worker BullMQ n'est PAS démarré comme
-      # process CI séparé : les e2e le bootent en-process (helpers/worker.ts →
-      # createTestWorker) dans le même processus Vitest que l'API testée.
-      - run: pnpm test          # invoice-core + apps/api (Testcontainers Postgres[pgcrypto] + Redis) + apps/web (jsdom)
+      - run: pnpm --filter @factelec/invoice-core test
+      - run: pnpm --filter @factelec/web test
+      - run: pnpm --filter @factelec/api exec vitest run tests/unit
+
+  # Étage 2 — suite complète avec e2e Testcontainers (Postgres[pgcrypto] +
+  # Redis + workers BullMQ en-process) et seuils de couverture ≥90 %.
+  # VITEST_LIGHT_MAX_WORKERS=2 : les runners 2 vCPU saturent au-delà de
+  # 2 conteneurs Postgres simultanés (hook timeouts 150 s constatés en série
+  # depuis le plan 2.3 avec l'ancien réglage). Long (~30-60 min) mais le
+  # dépôt est public → minutes gratuites ; le job `checks` fournit le signal
+  # rapide pendant que celui-ci déroule.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      VITEST_LIGHT_MAX_WORKERS: "2"
+    steps:
+      - uses: actions/checkout@v7
+      # Action tierce épinglée au SHA de commit (immutabilité supply-chain,
+      # règle semgrep third-party-action-not-pinned) — SHA = tag v6.0.9.
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y libxml2-utils
+      - run: pnpm install --frozen-lockfile
+      # Testcontainers démarre Postgres ET Redis (Docker natif du runner
+      # ubuntu-latest, aucun service `redis:`/`postgres:` de job GitHub
+      # requis — cycle de vie du conteneur géré par le test lui-même). Le
+      # worker BullMQ n'est PAS démarré comme process CI séparé : les e2e le
+      # bootent en-process (helpers/worker.ts → createTestWorker) dans le
+      # même processus Vitest que l'API testée.
+      - run: pnpm test          # invoice-core + apps/api (--coverage, seuils ≥90) + apps/web (jsdom)
