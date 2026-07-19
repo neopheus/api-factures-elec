@@ -2811,16 +2811,23 @@ un **miroir** tenu à jour exclusivement par les événements webhook
 checkout (`attachCustomer`). Deux garanties structurelles :
 
 - **CAS anti-réordonnancement** — `applyEvent` n'écrit que si
-  `last_event_created` est `NULL` ou strictement antérieur à
-  `event.created` (`WHERE lastEventCreated IS NULL OR lastEventCreated <
-  occurredAt`) ; un événement Stripe livré en retard (webhooks non garantis
-  ordonnés) est rejeté silencieusement (`false`, aucune écriture), jamais
-  appliqué en écrasant un état plus récent.
-- **État complet, jamais un patch** — chaque événement appliqué **écrase**
-  `status`/`stripeSubscriptionId`/`currentPeriodEnd` avec les valeurs de
-  l'événement (y compris `null` explicite), jamais une fusion partielle :
-  le webhook Stripe porte l'état intégral de l'abonnement à l'instant
-  `event.created`, pas un diff.
+  `last_event_created` est `NULL` ou **antérieur ou égal** à `event.created`
+  (`WHERE lastEventCreated IS NULL OR lastEventCreated <= occurredAt` —
+  assoupli de `<` à `<=` par le correctif I1/amendement A1 : `event.created`
+  a la précision seconde et le couple `checkout.session.completed` +
+  `customer.subscription.created` arrive dans la même seconde, le second
+  portant la période) ; un événement STRICTEMENT antérieur reste rejeté
+  silencieusement (`false`, aucune écriture).
+- **État complet, sauf la période (tri-état, amendement A1)** — chaque
+  événement appliqué **écrase** `status`/`stripeSubscriptionId` avec les
+  valeurs de l'événement ; `currentPeriodEnd` suit un **tri-état** :
+  `Date` (portée → écrite), `null` explicite (portée-vide → effacée),
+  `undefined` (**non portée** par l'événement — `checkout.session.completed`,
+  `invoice.paid`, `invoice.payment_failed` — → **préservée**). Le driver lit
+  la période sur le champ legacy top-level `current_period_end` puis en
+  **fallback sur `items.data[0].current_period_end`** (le champ top-level a
+  disparu des API Stripe récentes — correctif I1). Le couple `<=` + tri-état
+  rend la convergence **ordre-indépendante** dans la seconde du checkout.
 
 **Traitement du webhook** (`POST /billing/webhook`, `BillingWebhookController`
 — aucun guard session/CSRF, l'authenticité vient de la signature HMAC
@@ -2884,7 +2891,7 @@ non maîtrisé. `portalSession` sans customer Stripe attaché (tenant jamais
 passé par un checkout) renvoie **409** `urn:factelec:problem:conflict`
 explicite.
 
-### Usage métré — sweep périodique, bucket quotidien J-1
+### Usage métré — sweep périodique, buckets quotidiens J-1..J-N (lookback)
 
 `BillingUsageService` (worker, `BILLING_USAGE_EVERY_MS`, défaut 1 h,
 planificateur BullMQ répétable `upsertJobScheduler` idempotent — clé
@@ -2892,9 +2899,13 @@ planificateur BullMQ répétable `upsertJobScheduler` idempotent — clé
 (`find_billing_subscribed_tenants`, SD migration `0030`, `EXECUTE`
 `factelec_worker` seul, statuts `trialing`/`active`/`past_due`) :
 
-1. Compte les documents traités la **veille UTC** (`day = J-1`) : factures
-   ingérées + transmissions e-reporting créées ce jour-là, tenant-scopé
-   (`tenant.run`, RLS).
+1. Compte les documents traités sur une **fenêtre de rattrapage** de
+   `BILLING_USAGE_LOOKBACK_DAYS` jours UTC (défaut 3, du plus ancien J-N au
+   plus récent J-1 — correctif I2 : sans lookback, un worker indisponible
+   plus de 24 h franchissant une frontière de jour UTC perdait
+   définitivement l'usage du jour non balayé ; même patron que
+   `CDV_TRANSMISSION_LOOKBACK_MS`) : factures ingérées + transmissions
+   e-reporting créées chaque jour, tenant-scopé (`tenant.run`, RLS).
 2. Enregistre ce compte (`recordUsage`, idempotent `(tenant, day)` —
    contrainte unique `billing_usage_reports_tenant_day_unique`, `ON
    CONFLICT DO NOTHING` : un rejeu du sweep ne double jamais un jour déjà
@@ -3222,7 +3233,8 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `STRIPE_PRICE_BASE` | ID du Price Stripe de l'abonnement de base (`pnpm billing:bootstrap`) — requis **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
 | `STRIPE_PRICE_METERED` | ID du Price Stripe métré gradué (`pnpm billing:bootstrap`) — requis **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
 | `BILLING_DASHBOARD_URL` | Base URL du dashboard pour `success_url`/`cancel_url`/`return_url` des sessions Checkout/Portal hébergées | `http://localhost:3001` |
-| `BILLING_USAGE_EVERY_MS` | Périodicité (ms) du sweep de report d'usage billing (`BillingUsageService`, worker) — chaque exécution traite le bucket **quotidien** J-1 UTC | `3600000` (1 h) |
+| `BILLING_USAGE_EVERY_MS` | Périodicité (ms) du sweep de report d'usage billing (`BillingUsageService`, worker) — chaque exécution traite les buckets **quotidiens** de la fenêtre de rattrapage | `3600000` (1 h) |
+| `BILLING_USAGE_LOOKBACK_DAYS` | Profondeur (jours UTC) de la fenêtre de rattrapage du sweep d'usage (J-1..J-N, idempotent par `(tenant, jour)` — correctif I2) | `3` (max 30) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par

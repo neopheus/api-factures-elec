@@ -401,6 +401,14 @@ describe('BillingRepository (e2e, Postgres réel)', () => {
     const tenantId = await newTenant('Billing None Attached')
     await repo.attachCustomer(tenantId, 'cus_none_attached')
 
+    // Verrou anti-vide (revue fix I2) : prouve que la ligne EXISTE bien en
+    // 'none' AVANT d'asserter l'exclusion — sinon une régression
+    // d'attachCustomer (aucune insertion) ferait passer le test à vide.
+    expect(await repo.getState(tenantId)).toMatchObject({
+      status: 'none',
+      stripeCustomerId: 'cus_none_attached',
+    })
+
     const subscribed = await workerRepo.listSubscribedTenants()
 
     expect(subscribed.map((s) => s.tenantId)).not.toContain(tenantId)
