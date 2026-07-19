@@ -503,8 +503,9 @@ du projet) + miroir local `tenant_billing` piloté par **webhooks signés**
 webhook) ; garde d'émission 402 (`BillingGuard`, matrice
 driver×enforcement×statut, câblé sur `POST /invoices` et `POST
 /ereporting/retransmissions` **uniquement** — les lectures ne sont jamais
-bloquées) ; sweep quotidien de report d'usage métré (idempotent par
-tenant×jour) ; script `pnpm billing:bootstrap` (catalogue sandbox
+bloquées) ; sweep périodique (défaut horaire) de report d'usage métré, à
+bucket quotidien J-1, idempotent par tenant×jour ; script
+`pnpm billing:bootstrap` (catalogue sandbox
 idempotent par `lookup_key`) ; page dashboard `/billing` (5 états,
 redirections hébergées). `BILLING_ENFORCEMENT=off` par défaut — activer le
 blocage 402 est une **décision commerciale**, pas un oubli technique.
@@ -908,8 +909,9 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       câblé sur `POST /invoices` et `POST /ereporting/retransmissions`
       **uniquement** — aucune lecture jamais bloquée ; `driver='none'`
       neutralise le garde **inconditionnellement**. **Usage métré** : sweep
-      worker quotidien (veille UTC, idempotent par tenant×jour, isolation
-      d'erreur par tenant). **Script** `pnpm billing:bootstrap` (catalogue
+      worker périodique (défaut horaire, bucket quotidien J-1 UTC,
+      idempotent par tenant×jour, isolation d'erreur par tenant). **Script**
+      `pnpm billing:bootstrap` (catalogue
       sandbox idempotent par `lookup_key`, montants câblés en dur
       **uniquement** dans ce script). **Dashboard** : page `/billing` (5
       états, bannières `past_due`/bloqué, redirections Checkout/Portal
@@ -1127,7 +1129,8 @@ Dette explicitement reportée (aucune ne bloque le passage en phase 3) :
   abonnement mensuel unique + volume métré, sessions Checkout/Customer
   Portal 100 % hébergées Stripe, miroir local piloté par webhooks, garde
   d'émission 402 (`POST /invoices`, `POST /ereporting/retransmissions`),
-  sweep quotidien de report d'usage, script de bootstrap catalogue sandbox
+  sweep périodique (défaut horaire) de report d'usage à bucket quotidien
+  J-1, script de bootstrap catalogue sandbox
   et page dashboard `/billing` — voir § Billing Stripe (phase 5, itération
   1) dans `apps/api/README.md`. Restent différés (itérations suivantes) :
   vue facturation du super admin, `BILLING_ENFORCEMENT=on` par défaut

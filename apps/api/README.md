@@ -2884,7 +2884,7 @@ non maîtrisé. `portalSession` sans customer Stripe attaché (tenant jamais
 passé par un checkout) renvoie **409** `urn:factelec:problem:conflict`
 explicite.
 
-### Usage métré — sweep quotidien
+### Usage métré — sweep périodique, bucket quotidien J-1
 
 `BillingUsageService` (worker, `BILLING_USAGE_EVERY_MS`, défaut 1 h,
 planificateur BullMQ répétable `upsertJobScheduler` idempotent — clé
@@ -2954,11 +2954,23 @@ script est pensé pour la sandbox mais n'interdit pas un usage live délibéré.
 3. **`past_due`** — bannière d'alerte (paiement en retard, grâce dunning
    encore active côté garde) + bouton Portal.
 4. **`canceled`/`unpaid`/`incomplete`** — bannière d'alerte « émission
-   bloquée » (miroir exact des statuts refusés par `BillingGuard` à
-   `BILLING_ENFORCEMENT=on`) + bouton Checkout (re-souscription complète,
-   une simple mise à jour de moyen de paiement via Portal ne suffit pas).
-5. **Indisponible** — `GET /billing/status` répond 503
-   (`BILLING_DRIVER=none`) : message neutre, aucun bouton.
+   bloquée » (sous-ensemble des statuts refusés par `BillingGuard` à
+   `BILLING_ENFORCEMENT=on` — l'ensemble complet est `none`/`unpaid`/
+   `canceled`/`incomplete`, mais `none` reste présenté comme l'état 1
+   « jamais abonné », pas comme un blocage) + bouton Checkout
+   (re-souscription complète, une simple mise à jour de moyen de paiement
+   via Portal ne suffit pas).
+5. **Indisponible** (branche défensive, **actuellement inatteignable**) —
+   le panneau prévoit un état « Facturation indisponible » si `GET
+   /billing/status` répondait 503, mais `BillingService.status()` ne lit
+   **que** le miroir et répond **toujours 200** (y compris en
+   `BILLING_DRIVER=none`, où le statut affiché est simplement l'état 1
+   `none` → *S'abonner*, cf. § Garde d'émission ci-dessus et tableau des
+   endpoints). En `BILLING_DRIVER=none`, c'est le **clic** sur *S'abonner*
+   (`POST /billing/checkout-session`) qui échoue en **503**
+   `billing-disabled` — le panneau affiche alors l'erreur générique
+   « Redirection impossible » (catch générique de `redirectTo`), pas cet
+   état 5 dédié.
 
 Redirections par `window.location.assign` (navigation réelle vers les URLs
 hébergées Stripe renvoyées par l'API) — aucune donnée carte, aucun formulaire
@@ -3210,7 +3222,7 @@ Voir `.env.example` (aucun secret réel n'y figure). Table :
 | `STRIPE_PRICE_BASE` | ID du Price Stripe de l'abonnement de base (`pnpm billing:bootstrap`) — requis **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
 | `STRIPE_PRICE_METERED` | ID du Price Stripe métré gradué (`pnpm billing:bootstrap`) — requis **uniquement** si `BILLING_DRIVER=stripe` | — (requis si driver `stripe`) |
 | `BILLING_DASHBOARD_URL` | Base URL du dashboard pour `success_url`/`cancel_url`/`return_url` des sessions Checkout/Portal hébergées | `http://localhost:3001` |
-| `BILLING_USAGE_EVERY_MS` | Périodicité (ms) du sweep quotidien de report d'usage billing (`BillingUsageService`, worker) | `3600000` (1 h) |
+| `BILLING_USAGE_EVERY_MS` | Périodicité (ms) du sweep de report d'usage billing (`BillingUsageService`, worker) — chaque exécution traite le bucket **quotidien** J-1 UTC | `3600000` (1 h) |
 
 **`DATABASE_OWNER_URL` n'est jamais lue par le process API** (absente du
 schéma zod `envSchema`, `src/config/env.ts`) : elle n'est consommée que par
