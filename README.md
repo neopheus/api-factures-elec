@@ -77,10 +77,11 @@ API publique pour les systèmes custom.
 > subsiste en cas de `SIGTERM` du worker exactement entre marquage
 > `generating` et complétion, rattrapée par le balayage suivant ; **cycle de
 > vie des statuts CDV** — nomenclature DGFiP 14 statuts (200-213, socle
-> obligatoire {200,210,212,213}), machine à états à chronologie monotone
-> (**interprétation projet, à durcir contre la norme AFNOR XP Z12-012**,
-> aucune matrice de transitions n'étant publiée par la DGFiP), motif
-> obligatoire pour `refusee`/`suspendue`, endpoints
+> obligatoire {200,210,212,213}), machine à états **ancrée depuis le
+> 2026-07-19 sur les normes AFNOR XP Z12-012/XP Z12-014 (juillet 2025)** —
+> transmission ordonnée, traitement indépendant, `refusee`/`rejetee`
+> terminaux, `encaissee` ré-ouvrable (encaissements partiels) —, motif
+> obligatoire pour `refusee`/`rejetee`/`en_litige`/`suspendue`, endpoints
 > `POST/GET /invoices/:id/status` (rôles `owner`/`admin`/`accountant` + CSRF,
 > CAS anti-race → 409 sur changement concurrent, 422 transition invalide) et
 > **journal `invoice_status_events` append-only** (immuable par grants
@@ -213,7 +214,11 @@ API publique pour les systèmes custom.
 > (`encaissee` rendu entièrement terminal, sur-ensemble du mandat dur qui
 > n'exige que `¬(212→213)`) ; le swap ne touche **pas** au journal scellé
 > 2.2 (`verifyTenantChain` ne re-valide jamais les transitions historiques,
-> seules les futures transitions changent de garde). **Transmission des CDV
+> seules les futures transitions changent de garde). **[Mise à jour
+> 2026-07-19 : swap AFNOR effectué** — table ré-ancrée sur XP Z12-012 +
+> XP Z12-014 (juillet 2025), amendement A3 levé (encaissements partiels
+> normatifs `212→212`/`212→211`), `¬(212→213)` maintenu ; détail :
+> `apps/api/README.md` § Cycle de vie CDV.**]** **Transmission des CDV
 > de bout en bout** pour les **4 statuts obligatoires** (200/210/212/213)
 > vers **deux cibles indépendantes** (PPF réglementaire + destinataire résolu
 > par l'annuaire 2.4, succès partiel au grain facture×statut×cible) : le
@@ -246,10 +251,11 @@ API publique pour les systèmes custom.
 >
 > **Reprise — prochaine étape : phase 3 (suite)** : adhésion **OpenPeppol**
 > + PKI test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport
-> CDV réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne,
-> **achat de la norme AFNOR XP Z12-012** pour remplacer l'interprétation
-> projet de la matrice DAG (bloqueur go-live PDP restant — **ce même
-> bloqueur s'applique à l'immatriculation PDP côté e-reporting**). Le
+> CDV réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne.
+> L'**achat de la norme AFNOR XP Z12-012 est RÉSOLU (2026-07-19)** : normes
+> XP Z12-012/-013/-014 obtenues, **swap de la matrice CDV effectué** —
+> l'interprétation projet est levée, le bloqueur go-live matrice est clos
+> (côté facture comme côté immatriculation PDP e-reporting). Le
 > **câblage de la résolution de routage annuaire dans l'émetteur de
 > factures**, différé depuis 2.4, est **RÉSOLU en 3.3** (couture
 > `resolveRecipient` dans le worker de génération, best-effort strict, voir
@@ -379,9 +385,9 @@ API REST NestJS 11 (ESM), phases **1.3 + 1.4 + 2.1 + 2.2 + 2.3 + 2.4 + 3.1 +
 authentification utilisateur (sessions httpOnly + CSRF), signup self-service
 transactionnel, gestion des clés API par session, super admin plateforme
 minimal, **workers BullMQ de génération asynchrone**, **cycle de vie des
-statuts CDV** (désormais **matrice DAG data-driven**, 3.1 — remplace la
-chronologie monotone 2.1, bloqueur go-live devenu interprétation en attente
-d'AFNOR XP Z12-012), **transmission des CDV (Flux 6/CDAR)** vers PPF et
+statuts CDV** (matrice data-driven 3.1, **ancrée depuis le 2026-07-19 sur
+les normes AFNOR XP Z12-012/XP Z12-014** — l'interprétation projet est
+levée), **transmission des CDV (Flux 6/CDAR)** vers PPF et
 destinataire (3.1, machine de livraison distincte, ordonnanceur borné 24h,
 adaptateurs de transport réels/OpenPeppol différés au déploiement),
 **e-reporting DGFiP Flux 10** (10.3 B2C bout-en-bout, **10.1 B2Bi par facture
@@ -652,8 +658,9 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       → `201 { status: 'received' }`, **changement de contrat** vs 1.x),
       worker de génération dédié (idempotence, retries/backoff,
       réconciliation auto-cicatrisante), machine à états du cycle de vie CDV
-      (nomenclature DGFiP 14 statuts, interprétation projet à durcir contre
-      AFNOR XP Z12-012), endpoints de transition/historique, journal
+      (nomenclature DGFiP 14 statuts ; interprétation projet levée le
+      2026-07-19 par le swap AFNOR XP Z12-012/-014), endpoints de
+      transition/historique, journal
       `invoice_status_events` append-only (substrat valeur probante),
       dettes 1.3/1.4 soldées (`last_used_at`, purge des sessions expirées).
       Détail : `apps/api/README.md`.
@@ -715,7 +722,8 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       `208→204`/`206→205` autorisés), le bloqueur devenant une
       **interprétation projet en attente d'achat AFNOR XP Z12-012** (item
       Xavier) plutôt qu'une matrice fausse ; swap sans impact sur le journal
-      scellé 2.2. **Transmission des CDV de bout en bout** pour les 4
+      scellé 2.2 — **interprétation levée le 2026-07-19 : swap AFNOR
+      XP Z12-012/-014 effectué**. **Transmission des CDV de bout en bout** pour les 4
       statuts obligatoires vers PPF **et** destinataire (annuaire 2.4) :
       Flux 6 au format CDAR (aucun XSD DGFiP → validation structurelle
       honnête), machine de livraison distincte (`prepared→transmitted→
@@ -875,10 +883,9 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
 
 > **Point de reprise → phase 3 (suite)** : adhésion OpenPeppol + PKI
 > test/prod + SMP + stack AS4 (item Xavier), adaptateurs de transport CDV
-> réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne, **achat
-> de la norme AFNOR XP Z12-012** pour lever l'interprétation projet restante
-> de la matrice DAG (bloqueur go-live PDP, s'applique aussi à
-> l'immatriculation PDP côté e-reporting), correctif du sur-encaissement
+> réels (sftp/as2/as4/as4-peppol/api), point d'accès Peppol interne —
+> l'**achat AFNOR XP Z12-012 est RÉSOLU (2026-07-19, swap matrice CDV
+> effectué, bloqueur go-live matrice clos)** —, correctif du sur-encaissement
 > concurrent (TOCTOU, 3.2, verrou applicatif ou contrainte DB dédiée), et
 > **validation en pilote PPF de l'interprétation RE sur slot born-`rejetee`**
 > (3.4, amendement M-D4-1 — le déblocage fonctionne côté Factelec, mais
@@ -923,14 +930,15 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
 - **Validation et unicité du SIREN (KYB)** — seul le format est vérifié (9
   chiffres) ; ni la clé de contrôle (Luhn), ni l'existence, ni l'unicité
   réelle de l'entreprise ne sont vérifiées à ce jour.
-- **Matrice de cycle de vie CDV = interprétation projet en attente d'AFNOR**
-  (2.1 → **DAG paramétré depuis 3.1**) — la chronologie **monotone** 2.1
-  (fausse sur 4 règles métier) est remplacée par une matrice DAG corrigeant
-  ces 4 anomalies, mais **la table entière** reste une interprétation projet
-  jusqu'à l'**achat de la norme AFNOR XP Z12-012** (**item Xavier**), seule
-  source qui l'énumère formellement ; le remplacement futur ne touchera que
-  la table + les vecteurs de test (paramétrisation vérifiée). Détail :
-  `apps/api/README.md`.
+- **Matrice de cycle de vie CDV — RÉSOLU le 2026-07-19 (swap AFNOR
+  effectué)** : la table est ancrée sur les normes **XP Z12-012 et
+  XP Z12-014 (juillet 2025)**, pages primaires ré-extraites au moment du
+  swap ; la paramétrisation a tenu (seuls `ALLOWED_TRANSITIONS`,
+  `REASON_REQUIRED`, `TERMINAL_STATUSES` et les vecteurs de test ont bougé).
+  Restent hors socle, en backlog conditionnel : statuts émergents
+  « Annulée » (sans code), « ERREUR_ROUTAGE » (221, avec les adaptateurs
+  transport réels), « RECEVABLE »/« IRRECEVABLE » (500/501, niveau lot).
+  Détail : `apps/api/README.md`.
 - **Ancrage de tête WORM non effectif** (2.2) — le scellement du journal ne
   détecte pas la troncature de queue ni une réécriture complète cohérente
   par accès propriétaire (limite intrinsèque du hash-chain) ; seul
@@ -985,11 +993,13 @@ phase 3, mais **tous** doivent être traités avant une exposition réelle
   validation XSD F13/F14 s'exécute en **runtime**, à chaque publication et
   synchronisation, au même titre que le Flux 10 (2.3, prérequis déjà noté
   ci-dessus).
-- **Achat de la norme AFNOR XP Z12-012** (3.1, **NOUVEAU**, item Xavier) —
-  seule source qui énumère formellement la matrice de transitions CDV et
-  ses sémantiques ; la table `ALLOWED_TRANSITIONS` reste une interprétation
-  projet jusqu'à son acquisition (paramétrisation vérifiée pour absorber le
-  remplacement sans retoucher le code).
+- **Achat de la norme AFNOR XP Z12-012 — RÉSOLU (2026-07-19)** : normes
+  XP Z12-012/-013/-014 + annexe A de la 014 obtenues (PDF hors dépôt,
+  `normes-afnor/` gitignoré — licence AFNOR), swap de la matrice CDV
+  effectué le jour même. Constat : la norme n'énumère pas de matrice
+  `from→to` — la table est la traduction machine-à-états du modèle
+  « transmission ordonnée / traitement indépendant » (détail :
+  `apps/api/README.md` § Cycle de vie CDV).
 - **Adhésion OpenPeppol + PKI test/prod + SMP + stack AS4** (3.1,
   **NOUVEAU**, item Xavier) — préalable à tout adaptateur `as4-peppol` réel
   et au point d'accès Peppol interne (phase 3, suite).

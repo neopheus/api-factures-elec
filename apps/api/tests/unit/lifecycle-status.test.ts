@@ -28,7 +28,9 @@ describe('lifecycle-status (CDV state machine)', () => {
       mandatory: true,
     })
     expect(STATUS_META.rejetee.code).toBe(213)
-    // Socle obligatoire G7.44 = {200, 210, 212, 213}
+    // Socle obligatoire G7.44 = {200, 210, 212, 213} — confirmé par
+    // XP Z12-014 §4.2.1 p. 14 (« Déposée », « Rejetée », « Refusée »,
+    // « Encaissée » obligatoirement transmis au CdD PPF).
     const mandatory = LIFECYCLE_STATUSES.filter((s) => STATUS_META[s].mandatory)
       .map((s) => STATUS_META[s].code)
       .sort((a, b) => a - b)
@@ -41,97 +43,131 @@ describe('lifecycle-status (CDV state machine)', () => {
   })
 })
 
-describe('matrice CDV DAG (INTERPRÉTATION PROJET / AFNOR XP Z12-012 ; §3.6.4 Tableau 8)', () => {
-  it('CORRIGE les 4 anomalies du monotone (BLOQUEUR 2.1)', () => {
-    // interdit 212→213 (encaissée terminale — chemin heureux clos)
+describe('matrice CDV normative (AFNOR XP Z12-012 §5.1.1/5.3 + XP Z12-014 §4.2/4.3, extraits 2026-07-19)', () => {
+  it('CORRIGE les 4 anomalies du monotone (BLOQUEUR 2.1) — toujours satisfaites', () => {
+    // interdit 212→213 (mandat dur ledger 2.1, maintenu)
     expect(canTransition('encaissee', 'rejetee')).toBe(false)
-    // autorise les retours légitimes que le monotone rejetait
+    // retours légitimes que le monotone rejetait
     expect(canTransition('en_litige', 'approuvee')).toBe(true) // 207→205
     expect(canTransition('suspendue', 'prise_en_charge')).toBe(true) // 208→204
     expect(canTransition('approuvee_partiellement', 'approuvee')).toBe(true) // 206→205
   })
 
-  it('terminaux = {refusee(210), encaissee(212), rejetee(213)} — aucune sortie', () => {
-    for (const t of ['refusee', 'encaissee', 'rejetee'] as const) {
+  it('terminaux DE DROIT = {refusee(210), rejetee(213)} — « ne peut pas être suivi d’un autre statut » (XP Z12-014 §4.3.1 p. 22)', () => {
+    for (const t of ['refusee', 'rejetee'] as const) {
       expect(isTerminal(t)).toBe(true)
       expect(ALLOWED_TRANSITIONS[t]).toEqual([])
     }
+    // Encaissée n'est PLUS terminale : encaissements partiels successifs
+    // (XP Z12-014 §4.2.1 p. 18 « à chaque encaissement partiel ou total »).
+    expect(isTerminal('encaissee')).toBe(false)
   })
 
   it('backbone chronologique préservé (dépôt → traitement → approbation → paiement)', () => {
     expect(canTransition('deposee', 'prise_en_charge')).toBe(true) // saut de facultatifs
     expect(canTransition('prise_en_charge', 'approuvee')).toBe(true)
     expect(canTransition('completee', 'encaissee')).toBe(true)
-    expect(canTransition('deposee', 'rejetee')).toBe(true) // contrôle au dépôt
+    expect(canTransition('deposee', 'rejetee')).toBe(true) // rejet en réception encore possible
   })
 
   // ORACLE INDÉPENDANT (revue T1, MEDIUM anti-tautologie) : cette table est
-  // RETRANSCRITE À LA MAIN depuis la table du plan 3.1 (elle-même vérifiée
-  // arête par arête contre l'Annexe 2 V2.3 / §3.6.4 par la revue du plan) —
-  // elle ne DOIT PAS être dérivée d'ALLOWED_TRANSITIONS, sinon une typo de
-  // la table de prod passerait inaperçue (canTransition ≡ la table). C'est
-  // le filet du futur swap AFNOR XP Z12-012 : toute divergence table↔oracle
-  // casse ici.
+  // RETRANSCRITE À LA MAIN depuis les extraits primaires des normes AFNOR
+  // XP Z12-012 (juillet 2025) et XP Z12-014 (juillet 2025), ré-extraits des
+  // PDF le 2026-07-19 (leçon B1) — elle ne DOIT PAS être dérivée
+  // d'ALLOWED_TRANSITIONS, sinon une typo de la table de prod passerait
+  // inaperçue (canTransition ≡ la table). Modèle normatif traduit :
+  //   - transmission « dans cet ordre » (014 §4.2.1 p. 14), sauts autorisés
+  //     (statuts facultatifs), `rejetee` = alternative exclusive au succès
+  //     des contrôles (jamais après Reçue — p. 15-16) ;
+  //   - traitement « posés de façon indépendante » (p. 14) → maillage
+  //     complet des 7 statuts de traitement + refusee + encaissee ;
+  //   - refusee/rejetee sans sortie (p. 22) ;
+  //   - encaissee : self-loop partiels (p. 18) + paiement_transmis (solde).
+  const TRANSMISSION_DOWNSTREAM: Record<string, readonly string[]> = {
+    deposee: ['emise', 'recue', 'mise_a_disposition'],
+    emise: ['recue', 'mise_a_disposition'],
+    recue: ['mise_a_disposition'],
+    mise_a_disposition: [],
+  }
+  const PROCESSING = [
+    'prise_en_charge',
+    'approuvee',
+    'approuvee_partiellement',
+    'en_litige',
+    'suspendue',
+    'completee',
+    'paiement_transmis',
+  ] as const
   const EXPECTED_TRANSITIONS: Record<string, readonly string[]> = {
+    // Transmission : aval de l'ordre normatif + tout le traitement +
+    // encaissee + refusee (+ rejetee tant qu'un contrôle peut échouer).
     deposee: [
-      'emise',
-      'recue',
-      'mise_a_disposition',
-      'prise_en_charge',
+      ...TRANSMISSION_DOWNSTREAM.deposee!,
+      ...PROCESSING,
+      'encaissee',
       'refusee',
       'rejetee',
     ],
     emise: [
-      'recue',
-      'mise_a_disposition',
-      'prise_en_charge',
+      ...TRANSMISSION_DOWNSTREAM.emise!,
+      ...PROCESSING,
+      'encaissee',
       'refusee',
       'rejetee',
     ],
-    recue: ['mise_a_disposition', 'prise_en_charge', 'refusee', 'rejetee'],
-    mise_a_disposition: ['prise_en_charge', 'refusee', 'rejetee'],
+    // Reçue = contrôles de réception RÉUSSIS → plus jamais de rejetee
+    // (alternatives exclusives, XP Z12-014 p. 15-16).
+    recue: [
+      ...TRANSMISSION_DOWNSTREAM.recue!,
+      ...PROCESSING,
+      'encaissee',
+      'refusee',
+    ],
+    mise_a_disposition: [...PROCESSING, 'encaissee', 'refusee'],
+    // Traitement : indépendance totale entre statuts de traitement.
     prise_en_charge: [
-      'approuvee',
-      'approuvee_partiellement',
-      'en_litige',
-      'suspendue',
-      'completee',
+      ...PROCESSING.filter((s) => s !== 'prise_en_charge'),
+      'encaissee',
       'refusee',
-      'rejetee',
     ],
-    approuvee: ['completee', 'paiement_transmis', 'en_litige', 'refusee'],
-    approuvee_partiellement: [
-      'approuvee', // 206→205 mandaté (ledger 2.1)
-      'en_litige',
-      'suspendue',
-      'completee',
+    approuvee: [
+      ...PROCESSING.filter((s) => s !== 'approuvee'),
+      'encaissee', // Paiement Transmis « recommandé » = optionnel (§4.2.1 ét. 5)
       'refusee',
-      'rejetee',
+    ],
+    approuvee_partiellement: [
+      ...PROCESSING.filter((s) => s !== 'approuvee_partiellement'),
+      'encaissee',
+      'refusee',
     ],
     en_litige: [
-      'approuvee', // 207→205 mandaté (ledger 2.1)
-      'approuvee_partiellement',
-      'prise_en_charge',
-      'suspendue',
+      ...PROCESSING.filter((s) => s !== 'en_litige'),
+      'encaissee',
       'refusee',
     ],
     suspendue: [
-      'prise_en_charge', // 208→204 mandaté (ledger 2.1)
-      'approuvee',
-      'approuvee_partiellement',
-      'en_litige',
+      ...PROCESSING.filter((s) => s !== 'suspendue'),
+      'encaissee',
       'refusee',
     ],
-    completee: ['paiement_transmis', 'encaissee', 'refusee'],
-    paiement_transmis: ['encaissee'],
+    completee: [
+      ...PROCESSING.filter((s) => s !== 'completee'),
+      'encaissee',
+      'refusee',
+    ],
+    paiement_transmis: [
+      ...PROCESSING.filter((s) => s !== 'paiement_transmis'),
+      'encaissee',
+      'refusee',
+    ],
+    encaissee: ['encaissee', 'paiement_transmis'],
     refusee: [],
-    encaissee: [], // 212 terminal → ¬(212→213) mandaté ; cf. bannière A3
     rejetee: [],
   }
 
-  it('la table de prod correspond EXACTEMENT à l’oracle indépendant (anti-tautologie, filet AFNOR)', () => {
+  it('la table de prod correspond EXACTEMENT à l’oracle indépendant (anti-tautologie)', () => {
     // Comparaison ensembliste par statut : toute arête ajoutée/retirée/typotée
-    // dans ALLOWED_TRANSITIONS diverge de l’oracle retranscrit du plan.
+    // dans ALLOWED_TRANSITIONS diverge de l’oracle retranscrit de la norme.
     for (const from of LIFECYCLE_STATUSES) {
       expect([...ALLOWED_TRANSITIONS[from]].sort()).toEqual(
         [...EXPECTED_TRANSITIONS[from]!].sort(),
@@ -151,14 +187,40 @@ describe('matrice CDV DAG (INTERPRÉTATION PROJET / AFNOR XP Z12-012 ; §3.6.4 T
     }
   })
 
-  it('interdit les self-loops pour tous les statuts', () => {
+  it('interdit les self-loops pour tous les statuts SAUF encaissee (partiels, §4.2.1 p. 18)', () => {
     for (const s of LIFECYCLE_STATUSES) {
-      expect(canTransition(s, s)).toBe(false)
+      expect(canTransition(s, s)).toBe(s === 'encaissee')
     }
   })
 
+  it('jamais de retour du traitement vers la transmission (« dans cet ordre », §4.2.1 p. 14)', () => {
+    const transmission = [
+      'deposee',
+      'emise',
+      'recue',
+      'mise_a_disposition',
+    ] as const
+    for (const from of [...PROCESSING, 'encaissee'] as const) {
+      for (const to of transmission) {
+        expect(canTransition(from, to)).toBe(false)
+      }
+    }
+  })
+
+  it('rejetee IMPOSSIBLE après Reçue (alternatives exclusives, §4.2/4.3 p. 15-16 et 20)', () => {
+    expect(canTransition('recue', 'rejetee')).toBe(false)
+    expect(canTransition('mise_a_disposition', 'rejetee')).toBe(false)
+    for (const from of PROCESSING) {
+      expect(canTransition(from, 'rejetee')).toBe(false)
+    }
+    // …mais encore possible tant que les contrôles de réception n'ont pas
+    // réussi (rejet en réception par la PDP-R) :
+    expect(canTransition('deposee', 'rejetee')).toBe(true)
+    expect(canTransition('emise', 'rejetee')).toBe(true)
+  })
+
   it('interdit les transitions absurdes (garde Object.hasOwn, aucune traversée prototype)', () => {
-    expect(canTransition('encaissee', 'deposee')).toBe(false) // retour arrière depuis terminal
+    expect(canTransition('encaissee', 'deposee')).toBe(false) // retour arrière
     expect(() => assertTransition('encaissee', 'rejetee')).toThrow(
       InvalidLifecycleTransitionError,
     )
@@ -166,37 +228,56 @@ describe('matrice CDV DAG (INTERPRÉTATION PROJET / AFNOR XP Z12-012 ; §3.6.4 T
     expect(canTransition('toString', 'deposee')).toBe(false)
   })
 
-  it('motif requis inchangé (G7.25) : refusee & suspendue', () => {
+  it('motif requis : refusee, rejetee, en_litige (XP Z12-014) et suspendue (G7.25)', () => {
+    // refusee : « DOIT TOUJOURS être accompagné d'un motif » (§4.3.1 p. 21)
     expect(requiresReason('refusee')).toBe(true)
+    // rejetee : « auquel un motif doit être donné » (§4.2.2 p. 18, §4.3 p. 20)
+    expect(requiresReason('rejetee')).toBe(true)
+    // en_litige : « avec un motif, obligatoire » (§4.3.2/§4.3.3 ét. 4a)
+    expect(requiresReason('en_litige')).toBe(true)
+    // suspendue : G7.25 (Annexe 7 DGFiP), non infirmé par la norme
     expect(requiresReason('suspendue')).toBe(true)
     expect(requiresReason('approuvee')).toBe(false)
   })
 
-  // Les 3 « retours restaurés » (business-logic + mandat ledger 2.1,
-  // corrections dures, non normées AFNOR) — chacun asserté explicitement,
-  // aller ET retour, pour prouver qu'ils sont bien atteignables dans le sens
-  // documenté et interdits dans l'autre sens quand non déclarés.
-  it('207→205 : en_litige → approuvee restauré (dispute résolue → approbation)', () => {
-    expect(canTransition('en_litige', 'approuvee')).toBe(true)
+  // Arêtes normatives NOUVELLES du swap — chacune assertée explicitement
+  // avec son ancrage, aller ET (le cas échéant) sens interdit.
+  it('208→209 : suspendue → completee (réponse du VENDEUR, §4.2.1 ét. 4c)', () => {
+    expect(canTransition('suspendue', 'completee')).toBe(true)
   })
 
-  it('208→204 : suspendue → prise_en_charge restauré (suspension levée → reprise)', () => {
-    expect(canTransition('suspendue', 'prise_en_charge')).toBe(true)
+  it('205→212 : approuvee → encaissee direct (Paiement Transmis optionnel, §4.2.1 ét. 5)', () => {
+    expect(canTransition('approuvee', 'encaissee')).toBe(true)
   })
 
-  it('206→205 : approuvee_partiellement → approuvee restauré (partielle → totale)', () => {
-    expect(canTransition('approuvee_partiellement', 'approuvee')).toBe(true)
-  })
-
-  it('212 (encaissee) est intégralement terminal — interprétation stricte-que-le-mandat', () => {
-    // Le mandat dur (ledger 2.1) n'exige que ¬(212→213). Ce projet va plus
-    // loin et ferme TOUTE sortie de 212 (cf. bannière du module) : vérifié
-    // ici sur un échantillon représentatif au-delà du seul 212→213.
+  it('212→212 et 212→211 : encaissements partiels puis solde (§4.2.1 p. 18)', () => {
+    expect(canTransition('encaissee', 'encaissee')).toBe(true)
+    expect(canTransition('encaissee', 'paiement_transmis')).toBe(true)
+    // le mandat dur ¬(212→213) et la fermeture du reste tiennent toujours
     expect(canTransition('encaissee', 'rejetee')).toBe(false)
     expect(canTransition('encaissee', 'approuvee')).toBe(false)
     expect(canTransition('encaissee', 'en_litige')).toBe(false)
-    expect(canTransition('encaissee', 'paiement_transmis')).toBe(false)
     expect(canTransition('encaissee', 'refusee')).toBe(false)
+  })
+
+  it('203→205 : approbation directe sans prise en charge (indépendance, §4.2.1 p. 14)', () => {
+    expect(canTransition('mise_a_disposition', 'approuvee')).toBe(true)
+    expect(canTransition('mise_a_disposition', 'en_litige')).toBe(true)
+    expect(canTransition('mise_a_disposition', 'suspendue')).toBe(true)
+  })
+
+  // Les 3 « retours restaurés » du ledger 2.1, désormais couverts par
+  // l'indépendance normative des statuts de traitement.
+  it('207→205 : en_litige → approuvee (dispute résolue → approbation)', () => {
+    expect(canTransition('en_litige', 'approuvee')).toBe(true)
+  })
+
+  it('208→204 : suspendue → prise_en_charge (suspension levée → reprise)', () => {
+    expect(canTransition('suspendue', 'prise_en_charge')).toBe(true)
+  })
+
+  it('206→205 : approuvee_partiellement → approuvee (partielle → totale)', () => {
+    expect(canTransition('approuvee_partiellement', 'approuvee')).toBe(true)
   })
 
   it('complétude : chaque statut non-terminal a au moins une arête sortante (pas d’état mort)', () => {
@@ -257,17 +338,17 @@ describe('lifecycle-status (contrat inchangé)', () => {
     expect(typed.name).toBe('InvalidLifecycleTransitionError')
   })
 
-  it('requiresReason is false for every other status (exhaustive sample)', () => {
+  it('requiresReason is false for every other status (exhaustive)', () => {
+    const withReason = new Set(['refusee', 'rejetee', 'en_litige', 'suspendue'])
     for (const status of LIFECYCLE_STATUSES) {
-      if (status === 'refusee' || status === 'suspendue') continue
-      expect(requiresReason(status)).toBe(false)
+      expect(requiresReason(status)).toBe(withReason.has(status))
     }
   })
 
-  it('TERMINAL_STATUSES (encaissee incluse) matches isTerminal exhaustively', () => {
+  it('TERMINAL_STATUSES = {refusee, rejetee} matches isTerminal exhaustively', () => {
     for (const status of LIFECYCLE_STATUSES) {
       expect(isTerminal(status)).toBe(
-        status === 'refusee' || status === 'encaissee' || status === 'rejetee',
+        status === 'refusee' || status === 'rejetee',
       )
     }
   })
