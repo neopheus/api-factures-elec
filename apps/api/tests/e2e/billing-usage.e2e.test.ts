@@ -142,10 +142,25 @@ describe('sweep quotidien de report d’usage billing (e2e)', () => {
   }
 
   it('compte les factures créées à J-1 (UTC), reporte au driver, marque la ligne reportée ; un second sweep ne duplique rien', async () => {
-    const d = new Date()
-    d.setUTCDate(d.getUTCDate() - 1)
-    const day = d.toISOString().slice(0, 10)
+    // Fenêtre de rattrapage I2 (BILLING_USAGE_LOOKBACK_DAYS, défaut 3, non
+    // surchargé par billing-fake-env.ts) : le sweep balaie désormais J-3,
+    // J-2 ET J-1, PAS seulement J-1 (comportement pré-I2). Seules les
+    // factures de J-1 sont seedées ci-dessous — J-3/J-2 restent SANS
+    // document : `recordUsage` y écrit quand même une ligne count=0 (le
+    // sweep ne sait pas a priori qu'un jour de la fenêtre est vide tant
+    // qu'il ne l'a pas compté ; ces lignes count=0 sont le comportement
+    // ACTUEL assumé pour un jour balayé sans activité — noté M14 dans la
+    // revue, délibérément HORS PÉRIMÈTRE de ce correctif I2).
+    const d1 = new Date()
+    d1.setUTCDate(d1.getUTCDate() - 1)
+    const day = d1.toISOString().slice(0, 10)
     const dayTimestamp = new Date(`${day}T12:00:00.000Z`)
+    const d2 = new Date()
+    d2.setUTCDate(d2.getUTCDate() - 2)
+    const dayMinus2 = d2.toISOString().slice(0, 10)
+    const d3 = new Date()
+    d3.setUTCDate(d3.getUTCDate() - 3)
+    const dayMinus3 = d3.toISOString().slice(0, 10)
 
     // Seed COMPLET avant le démarrage du worker (cf. commentaire de tête) :
     // tenant abonné + les 2 factures déjà antidatées à J-1.
@@ -188,6 +203,19 @@ describe('sweep quotidien de report d’usage billing (e2e)', () => {
       expect(row.rows[0].count).toBe(2)
       expect(row.rows[0].reported_at).not.toBeNull()
 
+      // Fenêtre I2 : J-3 et J-2, sans document, sont TOUT DE MÊME balayés —
+      // une ligne count=0 par jour, elle aussi reportée/marquée (M14, hors
+      // périmètre, cf. commentaire de tête du test).
+      const olderRows = await ownerPool.query(
+        'SELECT day, count, reported_at FROM billing_usage_reports WHERE tenant_id = $1 AND day IN ($2, $3) ORDER BY day',
+        [tenantId, dayMinus3, dayMinus2],
+      )
+      expect(olderRows.rows).toHaveLength(2)
+      expect(olderRows.rows[0]).toMatchObject({ day: dayMinus3, count: 0 })
+      expect(olderRows.rows[1]).toMatchObject({ day: dayMinus2, count: 0 })
+      expect(olderRows.rows[0].reported_at).not.toBeNull()
+      expect(olderRows.rows[1].reported_at).not.toBeNull()
+
       const port = worker.get(BILLING_PORT) as FakeBillingDriver
       expect(port.reported).toContainEqual({
         customerId: 'cus_billing_usage_sweep',
@@ -197,9 +225,10 @@ describe('sweep quotidien de report d’usage billing (e2e)', () => {
       const reportedLengthBefore = port.reported.length
 
       // Second sweep : idempotent — recordUsage (ON CONFLICT DO NOTHING) ne
-      // crée aucune nouvelle ligne, et la ligne déjà `reported_at` non-null
-      // n'est plus jamais retournée par findUnreportedUsage → aucun second
-      // appel à reportUsage pour ce tenant/jour.
+      // crée aucune nouvelle ligne pour AUCUN des 3 jours de la fenêtre, et
+      // les lignes déjà `reported_at` non-null ne sont plus jamais
+      // retournées par findUnreportedUsage → aucun second appel à
+      // reportUsage pour ce tenant.
       const secondSweep = await maintenanceQueue.add(BILLING_USAGE_JOB, {})
       await waitFor(async () => (await secondSweep.getState()) === 'completed')
 
@@ -207,7 +236,9 @@ describe('sweep quotidien de report d’usage billing (e2e)', () => {
         'SELECT count(*)::int AS n FROM billing_usage_reports WHERE tenant_id = $1',
         [tenantId],
       )
-      expect(rowsAfter.rows[0].n).toBe(1)
+      // 3 lignes (J-3, J-2, J-1) — PAS 1 : c'est exactement le changement de
+      // comportement I2 que ce test verrouille.
+      expect(rowsAfter.rows[0].n).toBe(3)
       expect(port.reported).toHaveLength(reportedLengthBefore)
     } finally {
       await maintenanceQueue.close()

@@ -135,6 +135,27 @@ describe('BillingWebhookService', () => {
     expect(repo.applyEvent).toHaveBeenCalledWith(TENANT, evt)
   })
 
+  it('constructWebhookEvent throw une Error générique (PAS BillingSignatureError) → handle REJETTE (promesse rejetée, PAS { handled: false }) — M10', async () => {
+    const port = fakePort({
+      constructWebhookEvent: vi.fn(() => {
+        throw new Error('stripe SDK erreur inattendue')
+      }),
+    })
+    const repo = fakeRepo()
+    const service = new BillingWebhookService(port as never, repo as never)
+
+    // Contrat du commentaire de tête de billing-webhook.service.ts : SEULE
+    // une BillingSignatureError est traduite en { handled: false, reason:
+    // 'signature' } — toute autre erreur du port doit remonter TELLE QUELLE
+    // (500 via le filtre global côté controller), jamais avalée en résultat
+    // { handled: false }.
+    await expect(service.handle(raw, signature)).rejects.toThrow(
+      'stripe SDK erreur inattendue',
+    )
+    expect(repo.findTenantByCustomer).not.toHaveBeenCalled()
+    expect(repo.applyEvent).not.toHaveBeenCalled()
+  })
+
   it('applyEvent → false (événement hors ordre) → { handled: false, reason: "stale" }', async () => {
     const port = fakePort()
     const repo = fakeRepo({ applyEvent: vi.fn().mockResolvedValue(false) })

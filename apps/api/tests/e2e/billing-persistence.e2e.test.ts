@@ -391,6 +391,21 @@ describe('BillingRepository (e2e, Postgres réel)', () => {
     expect(subscribed.map((s) => s.tenantId)).not.toContain(canceled)
   })
 
+  it("7bis. listSubscribedTenants exclut une ligne EXISTANTE status='none' (attachCustomer SANS abonnement) — M5", async () => {
+    // Cas distinct du 7 ci-dessus : `none` y était un tenant SANS AUCUNE
+    // ligne (absence par construction). Ici la ligne EXISTE (créée par
+    // attachCustomer, statut initial 'none', migration 0030) : c'est le
+    // filtre SQL `status IN ('trialing','active','past_due')` de
+    // `find_billing_subscribed_tenants()` (0030_billing.sql) qui doit
+    // l'exclure — pas la simple absence de ligne.
+    const tenantId = await newTenant('Billing None Attached')
+    await repo.attachCustomer(tenantId, 'cus_none_attached')
+
+    const subscribed = await workerRepo.listSubscribedTenants()
+
+    expect(subscribed.map((s) => s.tenantId)).not.toContain(tenantId)
+  })
+
   it('8. SD 1 exige le rôle factelec_app : EXECUTE refusé (42501) sous factelec_worker', async () => {
     await expect(
       workerRepo.findTenantByCustomer('peu-importe'),

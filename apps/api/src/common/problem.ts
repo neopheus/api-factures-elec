@@ -18,10 +18,10 @@ export const ProblemType = {
   rateLimited: `${BASE}:rate-limited`,
   internal: `${BASE}:internal-error`,
   // Billing (phase 5, spec Stripe 2026-07-19) : `paymentRequired` réservé au
-  // garde d'enforcement (Task 8, pas encore câblé ici) ; `billingDisabled`
-  // couvre les 2 endpoints POST de ce module quand BILLING_DRIVER=none
-  // (BillingDisabledError, 503 — le driver n'est pas configuré, pas une
-  // faute du client).
+  // garde d'enforcement (BillingGuard, câblé sur invoices/ereporting depuis
+  // la phase 5 Task 8) ; `billingDisabled` couvre les 2 endpoints POST de ce
+  // module quand BILLING_DRIVER=none (BillingDisabledError, 503 — le driver
+  // n'est pas configuré, pas une faute du client).
   paymentRequired: `${BASE}:subscription-required`,
   billingDisabled: `${BASE}:billing-disabled`,
 } as const

@@ -6,8 +6,14 @@ import { BillingUsageService } from '../../src/worker/billing-usage.service.js'
 // exercé en e2e, Postgres réel, motif ereporting-sweep.service.test.ts qui
 // délègue déjà period.ts au test dédié) : ici on prouve jour cible (J-1 UTC,
 // horloge figée), l'enchaînement recordUsage→findUnreportedUsage→
-// reportUsage→markUsageReported, et l'isolation d'erreur PAR TENANT (brief
-// Task 9).
+// reportUsage→markUsageReported, l'isolation d'erreur PAR TENANT (brief
+// Task 9) et la fenêtre de rattrapage J-N..J-1 (I2, revue finale). L'IDEMPOTENCE
+// de `recordUsage` pour un jour déjà enregistré (ON CONFLICT DO NOTHING) N'EST
+// PAS re-prouvée ici : c'est un contrat du REPOSITORY (mock ici, forcément
+// no-op), déjà exercé contre un Postgres réel par
+// billing-persistence.e2e.test.ts (cas 6) et par le second sweep de
+// billing-usage.e2e.test.ts — un mock ne ferait que réaffirmer sa propre
+// implémentation.
 
 function fakeRepo(
   subscribed: { tenantId: string; stripeCustomerId: string }[] = [
@@ -26,6 +32,15 @@ function fakePort() {
   return {
     reportUsage: vi.fn().mockResolvedValue(undefined),
   }
+}
+
+// Miroir CdvTransmissionSweepService : `config.get('BILLING_USAGE_LOOKBACK_DAYS',
+// {infer:true})` lu UNE fois au constructeur. Défaut 1 ici (PAS 3, le défaut
+// prod) pour que les vecteurs d'orchestration existants — écrits avant I2 et
+// n'exerçant volontairement qu'UN jour — restent inchangés ; le lookback réel
+// (3 j) est prouvé par un vecteur DÉDIÉ ci-dessous.
+function fakeConfig(lookbackDays = 1) {
+  return { get: () => lookbackDays }
 }
 
 // Mock du même motif que BillingService (billing.service.test.ts) : `run`
@@ -82,6 +97,7 @@ describe('BillingUsageService.sweep', () => {
       repo as never,
       tenantContext as never,
       port as never,
+      fakeConfig() as never,
     )
 
     await service.sweep()
@@ -102,6 +118,7 @@ describe('BillingUsageService.sweep', () => {
       repo as never,
       tenantContext as never,
       port as never,
+      fakeConfig() as never,
     )
 
     const result = await service.sweep()
@@ -124,6 +141,7 @@ describe('BillingUsageService.sweep', () => {
       repo as never,
       tenantContext as never,
       port as never,
+      fakeConfig() as never,
     )
 
     const result = await service.sweep()
@@ -145,6 +163,7 @@ describe('BillingUsageService.sweep', () => {
       repo as never,
       tenantContext as never,
       port as never,
+      fakeConfig() as never,
     )
 
     const result = await service.sweep()
@@ -184,6 +203,7 @@ describe('BillingUsageService.sweep', () => {
       repo as never,
       tenantContext as never,
       port as never,
+      fakeConfig() as never,
     )
 
     const result = await service.sweep()
@@ -201,11 +221,35 @@ describe('BillingUsageService.sweep', () => {
       repo as never,
       tenantContext as never,
       port as never,
+      fakeConfig() as never,
     )
 
     const result = await service.sweep()
 
     expect(repo.recordUsage).not.toHaveBeenCalled()
     expect(result).toEqual({ tenants: 0, reported: 0 })
+  })
+
+  it('fenêtre de rattrapage (lookback 3, I2) : recordUsage balaie J-3, J-2, J-1, du plus ANCIEN au plus récent', async () => {
+    const repo = fakeRepo([{ tenantId: 't1', stripeCustomerId: 'cus_t1' }])
+    const tenantContext = fakeTenantContext({ t1: { invoices: 1 } })
+    const port = fakePort()
+    const service = new BillingUsageService(
+      repo as never,
+      tenantContext as never,
+      port as never,
+      fakeConfig(3) as never,
+    )
+
+    await service.sweep()
+
+    // Horloge figée au 2026-07-19T10:00:00Z (beforeEach) → J-1=07-18,
+    // J-2=07-17, J-3=07-16. `toHaveBeenNthCalledWith` prouve à la fois
+    // l'ordre (plus ancien → plus récent, motif CDV_TRANSMISSION_LOOKBACK_MS)
+    // et l'absence de trou/doublon dans la fenêtre.
+    expect(repo.recordUsage).toHaveBeenCalledTimes(3)
+    expect(repo.recordUsage).toHaveBeenNthCalledWith(1, 't1', '2026-07-16', 1)
+    expect(repo.recordUsage).toHaveBeenNthCalledWith(2, 't1', '2026-07-17', 1)
+    expect(repo.recordUsage).toHaveBeenNthCalledWith(3, 't1', '2026-07-18', 1)
   })
 })
