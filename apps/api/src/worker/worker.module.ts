@@ -7,6 +7,8 @@ import { AnnuaireTransportModule } from '../annuaire/annuaire-transport.module.j
 import { ConsentSignatureModule } from '../annuaire/consent-signature.module.js'
 import { ArchiveModule } from '../archive/archive.module.js'
 import { ArchiveService } from '../archive/archive.service.js'
+import { BillingRepository } from '../billing/billing.repository.js'
+import { BillingPortModule } from '../billing/billing-port.module.js'
 import { CdvTransmissionModule } from '../cdv/cdv-transmission.module.js'
 import { CdvTransmissionRepository } from '../cdv/cdv-transmission.repository.js'
 import { CdvTransmissionService } from '../cdv/cdv-transmission.service.js'
@@ -25,6 +27,8 @@ import { AnnuaireSweepService } from './annuaire-sweep.service.js'
 import { AnnuaireSyncProcessor } from './annuaire-sync.processor.js'
 import { ArchiveRetryScheduler } from './archive-retry.scheduler.js'
 import { ArchiveRetryService } from './archive-retry.service.js'
+import { BillingUsageScheduler } from './billing-usage.scheduler.js'
+import { BillingUsageService } from './billing-usage.service.js'
 import { CdvStuckRetryService } from './cdv-stuck-retry.service.js'
 import { CdvTransmissionProcessor } from './cdv-transmission.processor.js'
 import { CdvTransmissionScheduler } from './cdv-transmission.scheduler.js'
@@ -75,6 +79,16 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     // `CDV_TRANSMISSION` à ce process worker (Task 7) — même motif que les
     // deux imports ci-dessus.
     CdvTransmissionModule,
+    // `@Global()` (billing-port.module.ts, Task 3, plan phase 5) : importer
+    // ICI expose `BILLING_PORT` à ce process worker (Task 9, sweep d'usage) —
+    // même motif que les trois imports ci-dessus. `BillingModule` (câblage
+    // HTTP checkout/portal/webhook) n'est PAS importé ici : ses controllers
+    // sont hors de propos pour un `NestFactory.createApplicationContext`
+    // (worker-main.ts, sans HTTP), et `BillingRepository` est fourni
+    // directement en provider ci-dessous — motif `EreportingRepository`/
+    // `AnnuaireRepository`/`CdvTransmissionRepository`, jamais importés via
+    // leur module HTTP respectif non plus.
+    BillingPortModule,
   ],
   providers: [
     InvoicesRepository,
@@ -110,6 +124,9 @@ import { WorkerQueueModule } from './worker-queue.module.js'
     CdvTransmissionProcessor,
     RecipientRoutingRetryService,
     RoutingRetryScheduler,
+    BillingRepository,
+    BillingUsageService,
+    BillingUsageScheduler,
   ],
 })
 export class WorkerModule {}
