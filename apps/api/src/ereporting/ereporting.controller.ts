@@ -15,6 +15,7 @@ import { CsrfGuard } from '../auth/csrf.guard.js'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { Roles, RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
+import { BillingGuard } from '../billing/billing.guard.js'
 import { isUuid } from '../common/uuid.js'
 import { parseBody } from '../common/validation.js'
 import type { EreportingStatusEventRow } from './ereporting.repository.js'
@@ -91,9 +92,15 @@ export class EreportingController {
   // 202 (pas 200/201) : la génération/transmission RE reste ASYNCHRONE
   // (BullMQ) — l'opérateur observe le résultat via GET /ereporting/transmissions
   // (déjà livré 2.3).
+  // BillingGuard (Task 8, plan phase 5) en DERNIER : dépend de `req.tenantId`,
+  // déjà posé par TenantAuthGuard — bloque en 402 la retransmission (mutation
+  // d'ÉMISSION) si l'abonnement du tenant n'est pas valide. N'affecte pas le
+  // verrou d'architecture dual-auth (`dual-auth-composition.arch.test.ts`) :
+  // celui-ci exige TenantAuthGuard/RolesGuard/CsrfGuard, PAS une liste
+  // fermée — un 4e garde ajouté après reste conforme.
   @Post('retransmissions')
   @HttpCode(202)
-  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard, BillingGuard)
   @Roles('owner', 'admin', 'accountant')
   async retransmit(
     @CurrentTenant() tenantId: string,

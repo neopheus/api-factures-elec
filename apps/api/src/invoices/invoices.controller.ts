@@ -20,6 +20,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js'
 import { Roles, RolesGuard } from '../auth/roles.guard.js'
 import { SessionGuard } from '../auth/session.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
+import { BillingGuard } from '../billing/billing.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
 import { parseBody, parseQuery } from '../common/validation.js'
 import { routingStatus as routingStatusEnum } from '../db/schema.js'
@@ -53,9 +54,14 @@ export class InvoicesController {
     private readonly lifecycle: LifecycleService,
   ) {}
 
+  // BillingGuard (Task 8, plan phase 5) APRÈS ApiKeyGuard : dépend de
+  // `req.tenantId`, posé par ApiKeyGuard — bloque en 402 le dépôt d'une
+  // nouvelle facture si l'abonnement du tenant n'est pas valide (`fail-open`
+  // uniquement en driver 'none' ou enforcement 'off', jamais silencieusement
+  // ailleurs).
   @Post()
   @HttpCode(201)
-  @UseGuards(ApiKeyGuard)
+  @UseGuards(ApiKeyGuard, BillingGuard)
   ingest(
     @CurrentTenant() tenantId: string,
     @Body() body: unknown,

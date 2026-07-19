@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common'
 import { RolesGuard } from '../auth/roles.guard.js'
 import { UsersModule } from '../users/users.module.js'
 import { BillingController } from './billing.controller.js'
+import { BillingGuard } from './billing.guard.js'
 import { BillingRepository } from './billing.repository.js'
 import { BillingService } from './billing.service.js'
 import { BillingPortModule } from './billing-port.module.js'
@@ -24,6 +25,10 @@ import { BillingWebhookService } from './billing-webhook.service.js'
 // séparée de `BillingController` car AUCUN guard (session/CSRF/rôles) ne
 // s'applique — l'authenticité vient de la signature Stripe, jamais de la
 // session. Câblés ici comme le reste du module HTTP billing.
+// `BillingGuard` (Task 8) : fourni ET exporté — il est posé par
+// `InvoicesController`/`EreportingController`, hors de ce module, qui
+// doivent donc importer `BillingModule` pour que Nest le résolve (motif
+// `TenantAuthGuard`/`RolesGuard` exportés par leurs modules respectifs).
 @Module({
   imports: [UsersModule, BillingPortModule],
   controllers: [BillingController, BillingWebhookController],
@@ -31,8 +36,9 @@ import { BillingWebhookService } from './billing-webhook.service.js'
     BillingRepository,
     BillingService,
     BillingWebhookService,
+    BillingGuard,
     RolesGuard,
   ],
-  exports: [BillingRepository],
+  exports: [BillingRepository, BillingGuard],
 })
 export class BillingModule {}
