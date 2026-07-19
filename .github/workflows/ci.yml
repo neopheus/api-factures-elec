@@ -47,6 +47,16 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # Redis de service sur le port par défaut : ~23 suites « light » bootent
+    # l'app Nest complète (BullMQ) et se connectent à REDIS_HOST par défaut
+    # (localhost:6379) SANS démarrer de conteneur Redis — satisfait en local
+    # par le docker compose de dev, absent du runner (ECONNREFUSED ::1:6379,
+    # run 29696476574 — cause réelle des échecs light historiques).
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
     env:
       VITEST_LIGHT_MAX_WORKERS: "2"
       # Démarrage à froid du runner : les premières vagues Testcontainers
