@@ -227,6 +227,64 @@ describe('StripeBillingDriver.constructWebhookEvent — normalisation (SDK mock�
     },
   )
 
+  it('customer.subscription.updated SANS current_period_end top-level mais AVEC items.data[0].current_period_end → fallback (amendement A1)', () => {
+    webhooksConstructEvent.mockReturnValue(
+      fakeEvent({
+        type: 'customer.subscription.updated',
+        object: {
+          id: 'sub_items_1',
+          customer: 'cus_items_1',
+          status: 'active',
+          items: { data: [{ current_period_end: 1788739200 }] },
+        },
+      }),
+    )
+    const driver = makeDriver()
+
+    const evt = driver.constructWebhookEvent(Buffer.from('{}'), 'sig')
+
+    expect(evt.currentPeriodEnd).toEqual(new Date(1788739200 * 1000))
+  })
+
+  it('customer.subscription.updated avec current_period_end top-level ET items.data[0].current_period_end → le top-level est PRIORITAIRE (compat legacy)', () => {
+    webhooksConstructEvent.mockReturnValue(
+      fakeEvent({
+        type: 'customer.subscription.updated',
+        object: {
+          id: 'sub_items_2',
+          customer: 'cus_items_2',
+          status: 'active',
+          current_period_end: 1788739200,
+          items: { data: [{ current_period_end: 1800000000 }] },
+        },
+      }),
+    )
+    const driver = makeDriver()
+
+    const evt = driver.constructWebhookEvent(Buffer.from('{}'), 'sig')
+
+    expect(evt.currentPeriodEnd).toEqual(new Date(1788739200 * 1000))
+  })
+
+  it('customer.subscription.updated sans AUCUNE source de période (ni top-level, ni items.data) → null (porté-vide)', () => {
+    webhooksConstructEvent.mockReturnValue(
+      fakeEvent({
+        type: 'customer.subscription.updated',
+        object: {
+          id: 'sub_items_3',
+          customer: 'cus_items_3',
+          status: 'active',
+          items: { data: [] },
+        },
+      }),
+    )
+    const driver = makeDriver()
+
+    const evt = driver.constructWebhookEvent(Buffer.from('{}'), 'sig')
+
+    expect(evt.currentPeriodEnd).toBeNull()
+  })
+
   it('customer.subscription.created → même normalisation que updated', () => {
     webhooksConstructEvent.mockReturnValue(
       fakeEvent({
@@ -290,7 +348,9 @@ describe('StripeBillingDriver.constructWebhookEvent — normalisation (SDK mock�
     expect(evt.status).toBe('active')
     expect(evt.customerId).toBe('cus_5')
     expect(evt.subscriptionId).toBe('sub_5')
-    expect(evt.currentPeriodEnd).toBeNull()
+    // undefined (amendement A1) : checkout.session.completed ne porte pas la
+    // période — applyEvent doit PRÉSERVER le miroir, pas l'écraser à null.
+    expect(evt.currentPeriodEnd).toBeUndefined()
   })
 
   it("checkout.session.completed gère une subscription développée (objet) plutôt qu'un id", () => {
@@ -344,7 +404,8 @@ describe('StripeBillingDriver.constructWebhookEvent — normalisation (SDK mock�
     expect(evt.status).toBe('active')
     expect(evt.customerId).toBe('cus_7')
     expect(evt.subscriptionId).toBe('sub_7')
-    expect(evt.currentPeriodEnd).toBeNull()
+    // undefined (amendement A1), même motif que checkout.session.completed.
+    expect(evt.currentPeriodEnd).toBeUndefined()
   })
 
   it('invoice.payment_failed → status past_due, subscriptionId null si absent', () => {
@@ -360,6 +421,8 @@ describe('StripeBillingDriver.constructWebhookEvent — normalisation (SDK mock�
 
     expect(evt.status).toBe('past_due')
     expect(evt.subscriptionId).toBeNull()
+    // undefined (amendement A1), même motif que checkout.session.completed.
+    expect(evt.currentPeriodEnd).toBeUndefined()
   })
 
   it('type non consommé (payment_intent.created) → status null, customerId extrait si string', () => {
@@ -376,7 +439,9 @@ describe('StripeBillingDriver.constructWebhookEvent — normalisation (SDK mock�
     expect(evt.status).toBeNull()
     expect(evt.customerId).toBe('cus_9')
     expect(evt.subscriptionId).toBeNull()
-    expect(evt.currentPeriodEnd).toBeNull()
+    // undefined (amendement A1) : cohérent avec status: null, jamais
+    // appliqué par applyEvent (garde défensive).
+    expect(evt.currentPeriodEnd).toBeUndefined()
   })
 
   it('type non consommé sans customer → customerId null', () => {

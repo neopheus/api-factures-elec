@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, eq, isNull, lt, or } from 'drizzle-orm'
+import { and, asc, eq, isNull, lte, or } from 'drizzle-orm'
 import type pg from 'pg'
 import { APP_POOL } from '../db/client.js'
 import { billingUsageReports, tenantBilling } from '../db/schema.js'
@@ -99,11 +99,15 @@ export class BillingRepository {
     })
   }
 
-  // CAS anti-réordonnancement (spec §4) : l'UPDATE ne s'applique QUE si aucun
-  // événement plus récent n'a déjà été appliqué (last_event_created NULL ou
-  // strictement antérieur à occurredAt). L'événement Stripe est l'état
-  // COMPLET (pas un patch partiel) : subscriptionId/currentPeriodEnd null
-  // dans l'événement écrasent explicitement les valeurs précédentes.
+  // CAS anti-réordonnancement (spec §4, assoupli par l'amendement A1) :
+  // l'UPDATE ne s'applique QUE si aucun événement STRICTEMENT plus récent
+  // n'a déjà été appliqué (last_event_created NULL, ou <= occurredAt — pas
+  // seulement <). L'événement Stripe est l'état COMPLET (pas un patch
+  // partiel) : subscriptionId/status écrasent explicitement les valeurs
+  // précédentes — SAUF currentPeriodEnd, dont le tri-état
+  // (BillingWebhookEvent.currentPeriodEnd) fait l'exception ciblée par
+  // l'amendement A1 : `undefined` PRÉSERVE la colonne (omise du SET),
+  // `null`/`Date` l'écrasent normalement comme les autres champs.
   //
   // 0 ligne mise à jour est ambigu (ligne absente OU événement en retard) :
   // on tranche par un SELECT — absente → INSERT (première application, y
@@ -118,6 +122,13 @@ export class BillingRepository {
     // arrivait quand même, on rejette plutôt que d'écrire un statut null.
     if (evt.status === null) return false
     const status = evt.status
+    // `undefined` = non porté (checkout.session.completed, invoice.*, type
+    // non consommé) → clé omise du SET, Drizzle ne l'inclut pas dans le SQL
+    // généré, la colonne existante n'est jamais touchée.
+    const currentPeriodEndPatch =
+      evt.currentPeriodEnd === undefined
+        ? {}
+        : { currentPeriodEnd: evt.currentPeriodEnd }
 
     return this.tenant.run(tenantId, async (db) => {
       const updated = await db
@@ -125,7 +136,7 @@ export class BillingRepository {
         .set({
           status,
           stripeSubscriptionId: evt.subscriptionId,
-          currentPeriodEnd: evt.currentPeriodEnd,
+          ...currentPeriodEndPatch,
           lastEventCreated: evt.occurredAt,
           updatedAt: new Date(),
         })
@@ -134,7 +145,15 @@ export class BillingRepository {
             eq(tenantBilling.tenantId, tenantId),
             or(
               isNull(tenantBilling.lastEventCreated),
-              lt(tenantBilling.lastEventCreated, evt.occurredAt),
+              // <= (pas <, amendement A1) : les événements de la MÊME
+              // seconde que le dernier appliqué s'appliquent aussi. Stripe
+              // délivre parfois checkout.session.completed puis
+              // customer.subscription.created dans la même seconde
+              // (précision event.created à la seconde), et c'est souvent le
+              // second qui porte la période — un `<` strict le rejetait à
+              // tort. Un événement identique ré-délivré (retry Stripe) se
+              // ré-applique sans changement observable : inoffensif.
+              lte(tenantBilling.lastEventCreated, evt.occurredAt),
             ),
           ),
         )
@@ -152,7 +171,8 @@ export class BillingRepository {
         tenantId,
         status,
         stripeSubscriptionId: evt.subscriptionId,
-        currentPeriodEnd: evt.currentPeriodEnd,
+        // Première application : rien à préserver, undefined devient null.
+        currentPeriodEnd: evt.currentPeriodEnd ?? null,
         lastEventCreated: evt.occurredAt,
       })
       return true

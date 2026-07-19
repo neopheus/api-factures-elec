@@ -186,6 +186,97 @@ describe('BillingRepository (e2e, Postgres réel)', () => {
     })
   })
 
+  it('3ter. applyEvent : currentPeriodEnd undefined (non porté, amendement A1) PRÉSERVE la colonne ; null (porté-vide) l’efface explicitement', async () => {
+    const tenantId = await newTenant('Billing 3ter')
+    const t1 = new Date('2026-07-19T09:00:00Z')
+    const t2 = new Date('2026-07-19T10:00:00Z')
+    const t3 = new Date('2026-07-19T11:00:00Z')
+    const periodP = new Date('2026-08-19T00:00:00Z')
+
+    // T1 : événement subscription.* qui porte la période P.
+    await repo.applyEvent(tenantId, {
+      customerId: 'cus_3ter',
+      occurredAt: t1,
+      subscriptionId: 'sub_3ter',
+      status: 'active',
+      currentPeriodEnd: periodP,
+    })
+    expect((await repo.getState(tenantId)).currentPeriodEnd).toEqual(periodP)
+
+    // T2 > T1 : événement qui NE PORTE PAS la notion de période (ex.
+    // invoice.paid) → currentPeriodEnd: undefined → PRÉSERVE P, contrairement
+    // au comportement pré-amendement A1 qui écrasait à null.
+    const preserved = await repo.applyEvent(tenantId, {
+      customerId: 'cus_3ter',
+      occurredAt: t2,
+      subscriptionId: 'sub_3ter',
+      status: 'active',
+      currentPeriodEnd: undefined,
+    })
+    expect(preserved).toBe(true)
+    expect((await repo.getState(tenantId)).currentPeriodEnd).toEqual(periodP)
+    expect((await repo.getState(tenantId)).status).toBe('active')
+
+    // T3 > T2 : événement subscription.* SANS aucune période exploitable
+    // (porté-vide explicite, null) → efface la colonne.
+    const erased = await repo.applyEvent(tenantId, {
+      customerId: 'cus_3ter',
+      occurredAt: t3,
+      subscriptionId: 'sub_3ter',
+      status: 'active',
+      currentPeriodEnd: null,
+    })
+    expect(erased).toBe(true)
+    expect((await repo.getState(tenantId)).currentPeriodEnd).toBeNull()
+  })
+
+  it('3quater. applyEvent : CAS assoupli à <= — deux événements de la même seconde s’appliquent tous les deux (couple checkout+subscription.created), un événement strictement antérieur reste rejeté', async () => {
+    const tenantId = await newTenant('Billing 3quater')
+    const tPrev = new Date('2026-07-19T08:00:00Z')
+    // Même horodatage EXACT (précision seconde d'event.created) pour les deux
+    // événements suivants — reproduit le couple checkout.session.completed +
+    // customer.subscription.created délivrés par Stripe dans la même seconde.
+    const tSame = new Date('2026-07-19T12:00:00Z')
+    const periodQ = new Date('2026-09-19T00:00:00Z')
+
+    // Événement "checkout-like" (ne porte pas la période) : première
+    // application, accepté par construction (ligne absente → INSERT).
+    const first = await repo.applyEvent(tenantId, {
+      customerId: 'cus_3quater',
+      occurredAt: tSame,
+      subscriptionId: 'sub_3quater',
+      status: 'active',
+      currentPeriodEnd: undefined,
+    })
+    expect(first).toBe(true)
+
+    // Événement "subscription-like" à la MÊME seconde exacte, portant la
+    // période Q : DOIT s'appliquer (CAS <=, pas seulement <) — un `<` strict
+    // rejetterait à tort ce second événement de la même seconde.
+    const second = await repo.applyEvent(tenantId, {
+      customerId: 'cus_3quater',
+      occurredAt: tSame,
+      subscriptionId: 'sub_3quater',
+      status: 'active',
+      currentPeriodEnd: periodQ,
+    })
+    expect(second).toBe(true)
+    expect((await repo.getState(tenantId)).currentPeriodEnd).toEqual(periodQ)
+
+    // Un événement STRICTEMENT antérieur (tPrev < tSame) reste rejeté : le
+    // relâchement du CAS ne concerne que l'égalité, pas l'ordre.
+    const stale = await repo.applyEvent(tenantId, {
+      customerId: 'cus_3quater',
+      occurredAt: tPrev,
+      subscriptionId: 'sub_3quater',
+      status: 'canceled',
+      currentPeriodEnd: null,
+    })
+    expect(stale).toBe(false)
+    expect((await repo.getState(tenantId)).currentPeriodEnd).toEqual(periodQ)
+    expect((await repo.getState(tenantId)).status).toBe('active')
+  })
+
   it("4. RLS : un tenant B ne voit jamais la ligne d'un tenant A (getState → none), ni via SQL brut sous son contexte", async () => {
     const tenantA = await newTenant('Billing RLS A')
     const tenantB = await newTenant('Billing RLS B')

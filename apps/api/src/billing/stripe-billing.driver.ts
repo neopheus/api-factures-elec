@@ -44,7 +44,18 @@ function extractCurrentPeriodEnd(
 ): Date | null {
   const legacy = (subscription as SubscriptionWithLegacyPeriod)
     .current_period_end
-  return typeof legacy === 'number' ? new Date(legacy * 1000) : null
+  if (typeof legacy === 'number') return new Date(legacy * 1000)
+  // Fallback (amendement A1, revue finale I1) : le champ top-level legacy a
+  // disparu des payloads Stripe récents (« billing periods per item ») — la
+  // période vit désormais sur le premier item de l'abonnement
+  // (`SubscriptionItem.current_period_end`, bien typé par le SDK 22.3.2,
+  // cf. Subscriptions.d.ts/SubscriptionItems.d.ts). Accès défensif (`?.`) :
+  // un webhook Stripe réel porte toujours `items`, mais on refuse de planter
+  // sur un shape incomplet (ex. objet partiel) plutôt que de renvoyer null.
+  const itemPeriodEnd = subscription.items?.data?.[0]?.current_period_end
+  return typeof itemPeriodEnd === 'number'
+    ? new Date(itemPeriodEnd * 1000)
+    : null
 }
 
 function extractInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
@@ -204,7 +215,10 @@ export class StripeBillingDriver implements BillingPort {
           // n'émettra le customer.subscription.created qu'ensuite.
           status: 'active',
           occurredAt,
-          currentPeriodEnd: null,
+          // undefined (amendement A1) : un checkout.session.completed ne
+          // PORTE PAS la notion de période — applyEvent doit PRÉSERVER la
+          // valeur déjà en miroir, pas l'écraser à null.
+          currentPeriodEnd: undefined,
         }
       }
       case 'invoice.paid':
@@ -215,7 +229,8 @@ export class StripeBillingDriver implements BillingPort {
           subscriptionId: extractInvoiceSubscriptionId(invoice),
           status: event.type === 'invoice.paid' ? 'active' : 'past_due',
           occurredAt,
-          currentPeriodEnd: null,
+          // undefined (amendement A1), même motif que checkout.session.completed.
+          currentPeriodEnd: undefined,
         }
       }
       default: {
@@ -232,7 +247,10 @@ export class StripeBillingDriver implements BillingPort {
           subscriptionId: null,
           status: null,
           occurredAt,
-          currentPeriodEnd: null,
+          // undefined (amendement A1) : cohérent avec status: null, jamais
+          // appliqué par applyEvent (garde défensive) — la question de
+          // préserver/écraser la période ne se pose même pas.
+          currentPeriodEnd: undefined,
         }
       }
     }
