@@ -33,7 +33,18 @@ export interface BillingWebhookEvent {
   occurredAt: Date // event.created
   subscriptionId: string | null
   status: BillingSubscriptionStatus | null // null = événement sans statut
-  currentPeriodEnd: Date | null
+  // Tri-état (amendement A1, 2026-07-19 — revue finale I1) : `undefined` =
+  // l'événement NE PORTE PAS la notion de période
+  // (`checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`,
+  // tout type non consommé) → `BillingRepository.applyEvent` PRÉSERVE la
+  // valeur déjà en miroir plutôt que de l'écraser. `null` = porté-vide (un
+  // `customer.subscription.*` sans aucune période exploitable, ni top-level
+  // ni `items.data[0]`) → efface explicitement la colonne. `Date` = la
+  // période lue depuis l'événement, écrite telle quelle. Ne JAMAIS confondre
+  // `undefined` et `null` ici : c'est exactement la distinction que corrige
+  // I1 (l'écrasement systématique à `null` rendait `currentPeriodEnd`
+  // intermittent/null en production).
+  currentPeriodEnd?: Date | null
 }
 
 export class BillingDisabledError extends Error {}

@@ -243,6 +243,22 @@ export const envSchema = z.object({
   // Sweep horaire idempotent (report du jour J-1 UTC, sauté si déjà fait) —
   // même philosophie que les autres *_EVERY_MS.
   BILLING_USAGE_EVERY_MS: z.coerce.number().int().positive().default(3_600_000),
+  // Fenêtre de rattrapage du sweep d'usage (revue finale I2) — motif
+  // CDV_TRANSMISSION_LOOKBACK_MS ci-dessus : sans elle, un worker down >24h
+  // qui franchit une frontière de jour UTC perd DÉFINITIVEMENT l'usage du
+  // jour non balayé (recordUsage n'est appelé QUE pour J-1, jamais rejoué en
+  // arrière) — sous-facturation silencieuse. Unité en JOURS (pas en ms,
+  // contrairement à CDV_TRANSMISSION_LOOKBACK_MS) : le sweep opère au grain
+  // jour (`countDocuments`/`recordUsage` sont journaliers), pas événement.
+  // Défaut 3 j (couvre un week-end de panne) ; borne max 30 (défensive,
+  // motif CDV_TRANSMISSION_JOB_ATTEMPTS) contre une mauvaise configuration
+  // qui ferait rebalayer des mois d'historique à chaque tick horaire.
+  BILLING_USAGE_LOOKBACK_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(30)
+    .default(3),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

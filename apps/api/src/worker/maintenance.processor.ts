@@ -113,10 +113,10 @@ export class MaintenanceProcessor extends WorkerHost {
       return
     }
     if (job.name === BILLING_USAGE_JOB) {
-      const { tenants, reported } = await this.billingUsage.sweep()
-      this.logger.log(
-        `billing usage sweep: ${tenants} tenant(s), ${reported} usage line(s) reported`,
-      )
+      // Pas de log ici (M13) : `BillingUsageService.sweep()` journalise déjà
+      // le même résumé (tenants/lignes reportées) — un second log ici serait
+      // un pur doublon, motif de la revue finale phase 5.
+      await this.billingUsage.sweep()
       return
     }
     this.logger.warn(`unknown maintenance job: ${job.name}`)

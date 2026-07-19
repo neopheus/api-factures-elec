@@ -262,5 +262,28 @@ describe('billing checkout/portal/status endpoints (e2e)', () => {
         hasCustomer: true,
       })
     })
+
+    it('événement sans clé currentPeriodEnd (ex. invoice.paid côté Stripe) → 200, le miroir PRÉSERVE la période existante (amendement A1)', async () => {
+      const { raw, signature } = signedWebhookBody({
+        customerId: `cus_fake_${tenantId}`,
+        occurredAt: '2026-07-19T15:00:00.000Z', // postérieur au dernier événement appliqué (13:00)
+        subscriptionId: 'sub_e2e_webhook',
+        status: 'active',
+        // currentPeriodEnd volontairement ABSENT du JSON (non "null" — la clé
+        // n'existe pas du tout, cf. FakeBillingDriver tri-état).
+      })
+
+      await postWebhook(raw, signature).expect(200, { received: true })
+
+      const status = await request(app.getHttpServer())
+        .get('/billing/status')
+        .set('Cookie', cookie)
+        .expect(200)
+      expect(status.body).toEqual({
+        status: 'active',
+        currentPeriodEnd: '2026-09-19T00:00:00.000Z', // PRÉSERVÉ, pas écrasé à null
+        hasCustomer: true,
+      })
+    })
   })
 })

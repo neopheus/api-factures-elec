@@ -397,12 +397,24 @@ describe('env billing (phase 5)', () => {
     expect(parsed.BILLING_ENFORCEMENT).toBe('off')
     expect(parsed.BILLING_DASHBOARD_URL).toBe('http://localhost:3001')
     expect(parsed.BILLING_USAGE_EVERY_MS).toBe(3_600_000)
+    // Fenêtre de rattrapage du sweep d'usage (I2, revue finale phase 5) —
+    // défaut 3 j, motif CDV_TRANSMISSION_LOOKBACK_MS.
+    expect(parsed.BILLING_USAGE_LOOKBACK_DAYS).toBe(3)
   })
 
   it('rejette un driver inconnu', () => {
     expect(() =>
       envSchema.parse({ ...BASE, BILLING_DRIVER: 'paypal' }),
     ).toThrow()
+  })
+
+  it('rejette un BILLING_USAGE_LOOKBACK_DAYS nul ou négatif (I2)', () => {
+    expect(() =>
+      envSchema.parse({ ...BASE, BILLING_USAGE_LOOKBACK_DAYS: '0' }),
+    ).toThrow(/BILLING_USAGE_LOOKBACK_DAYS/)
+    expect(() =>
+      envSchema.parse({ ...BASE, BILLING_USAGE_LOOKBACK_DAYS: '-1' }),
+    ).toThrow(/BILLING_USAGE_LOOKBACK_DAYS/)
   })
 
   it('accepte la configuration stripe complète', () => {

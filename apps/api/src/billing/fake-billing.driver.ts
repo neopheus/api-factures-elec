@@ -62,16 +62,24 @@ export class FakeBillingDriver implements BillingPort {
       occurredAt: string
       subscriptionId: string | null
       status: BillingWebhookEvent['status']
-      currentPeriodEnd: string | null
+      currentPeriodEnd?: string | null
     }
     return {
       customerId: parsed.customerId,
       occurredAt: new Date(parsed.occurredAt),
       subscriptionId: parsed.subscriptionId,
       status: parsed.status,
-      currentPeriodEnd: parsed.currentPeriodEnd
-        ? new Date(parsed.currentPeriodEnd)
-        : null,
+      // Tri-état (amendement A1) : la clé ABSENTE du JSON relaie `undefined`
+      // (non porté — cf. BillingWebhookEvent.currentPeriodEnd), distinct du
+      // `null` explicite (porté-vide). `JSON.parse` ne matérialise jamais une
+      // clé absente du texte source : `parsed.currentPeriodEnd === undefined`
+      // discrimine donc fidèlement les deux cas.
+      currentPeriodEnd:
+        parsed.currentPeriodEnd === undefined
+          ? undefined
+          : parsed.currentPeriodEnd === null
+            ? null
+            : new Date(parsed.currentPeriodEnd),
     }
   }
 }
