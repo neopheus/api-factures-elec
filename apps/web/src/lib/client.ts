@@ -1,12 +1,14 @@
 import { API_BASE, apiFetch } from './api'
 import type {
+  AdminAnomaly,
   AdminLoginResult,
+  AdminTenantDetail,
+  AdminTenantStats,
   AdminTotpConfirmResult,
   ApiKeyView,
   CreatedApiKey,
   InvoiceDetail,
   InvoicePage,
-  TenantOverview,
   UserProfile,
 } from './api-types'
 
@@ -75,5 +77,25 @@ export const adminApi = {
       method: 'POST',
       body: JSON.stringify({ email, password, totpCode }),
     }),
-  tenants: () => apiFetch<TenantOverview[]>('/admin/tenants'),
+  // Task 3 (spec §3) : contrat élargi `{ tenants }` — remplace l'ancien
+  // tableau nu `TenantOverview[]` consommé ici avant réparation (Task 11,
+  // le contrat serveur avait changé sous ce module en Task 3 sans que le
+  // web ne suive : runtime cassé, corrigé par ce module).
+  listTenants: () =>
+    apiFetch<{ tenants: AdminTenantStats[] }>('/admin/tenants'),
+  tenantDetail: (id: string) =>
+    apiFetch<AdminTenantDetail>(`/admin/tenants/${id}`),
+  // Motif requis côté serveur (1..500, `suspendSchema`) : aucune validation
+  // dupliquée ici, le formulaire appelant s'en charge côté UI (spec §3/§4).
+  suspend: (id: string, reason: string) =>
+    apiFetch<{ suspendedAt: string }>(`/admin/tenants/${id}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  unsuspend: (id: string) =>
+    apiFetch<void>(`/admin/tenants/${id}/unsuspend`, { method: 'POST' }),
+  anomalies: (limit?: number) =>
+    apiFetch<{ anomalies: AdminAnomaly[] }>(
+      `/admin/anomalies${limit != null ? `?limit=${limit}` : ''}`,
+    ),
 }
