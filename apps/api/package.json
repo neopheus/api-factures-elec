@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/main.js",
   "scripts": {
-    "build": "swc src --out-dir dist --strip-leading-paths",
+    "build": "swc src --out-dir dist --strip-leading-paths && cp -r src/db/migrations dist/db/migrations",
     "dev": "node --import tsx --watch src/main.ts",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
@@ -26,7 +26,6 @@
     "@nestjs/config": "4.0.4",
     "@nestjs/core": "11.1.28",
     "@nestjs/platform-express": "11.1.28",
-    "@nestjs/terminus": "11.1.1",
     "@nestjs/throttler": "6.5.0",
     "@node-rs/argon2": "2.0.2",
     "big.js": "7.0.1",

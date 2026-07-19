@@ -18,6 +18,12 @@ import { startTestRedis, type TestRedis } from './helpers/redis.js'
 // Depuis Task 2.1-1 (QueueModule), la readiness inclut aussi Redis : un Redis
 // de test réel est requis ici, sinon `/health/ready` renverrait 503 (ping
 // Redis en échec, cf. health.controller.ts).
+//
+// Task 9 (spec §6) : contrat ENRICHI — `{ status, db: {ok,latencyMs},
+// redis: {ok,latencyMs}, migrations: {ok} }`, réponse écrite directement
+// (plus via terminus/ProblemDetailsFilter) : 200 si tout est sain, 503 sinon,
+// le CORPS reste la même forme enrichie dans les deux cas (jamais un
+// problem+json générique pour CETTE route).
 describe('health (e2e)', () => {
   let db: TestDb
   let redis: TestRedis
@@ -40,12 +46,16 @@ describe('health (e2e)', () => {
       .expect({ status: 'ok' })
   })
 
-  it('GET /health/ready returns 200 with the database AND redis checks up', async () => {
+  it('GET /health/ready returns 200, db/redis.ok=true avec des latencyMs numériques, migrations.ok=true (journal appliqué au complet par startTestDb)', async () => {
     const res = await request(app.getHttpServer()).get('/health/ready')
+
     expect(res.status).toBe(200)
-    expect(res.body.status).toBe('ok')
-    expect(res.body.details.database.status).toBe('up')
-    expect(res.body.info.redis.status).toBe('up')
+    expect(res.body).toEqual({
+      status: 'ok',
+      db: { ok: true, latencyMs: expect.any(Number) },
+      redis: { ok: true, latencyMs: expect.any(Number) },
+      migrations: { ok: true },
+    })
   })
 })
 
@@ -98,17 +108,20 @@ describe('health (e2e) — Redis down', () => {
     await db.stop()
   })
 
-  it('GET /health/ready fails fast (503) — not a hang — when Redis is unreachable', async () => {
-    // Le filtre global (ProblemDetailsFilter, `common/http-exception.filter.ts`)
-    // intercepte TOUTE exception et la reformate en application/problem+json
-    // générique — le détail terminus (`error.redis`, `details.database`) ne
-    // fuit jamais au client, par conception (« AUCUNE information interne ...
-    // ne fuit »). On vérifie donc uniquement le statut HTTP et l'enveloppe
-    // problem+json, pas le détail interne du check.
+  it('GET /health/ready fails fast (503) — not a hang — when Redis is unreachable ; db/migrations restent renseignés et à true, aucune fuite de message', async () => {
     const res = await request(app.getHttpServer()).get('/health/ready')
+
     expect(res.status).toBe(503)
-    expect(res.body.status).toBe(503)
-    expect(res.type).toBe('application/problem+json')
+    expect(res.body.status).toBe('degraded')
+    expect(res.body.redis.ok).toBe(false)
+    expect(typeof res.body.redis.latencyMs).toBe('number')
+    expect(res.body.db).toEqual({ ok: true, latencyMs: expect.any(Number) })
+    expect(res.body.migrations).toEqual({ ok: true })
+    // AUCUNE fuite de détail (spec §6) : ni message d'erreur brut, ni champ
+    // hors contrat (status/db/redis/migrations SEULEMENT).
+    expect(Object.keys(res.body).sort()).toEqual(
+      ['db', 'migrations', 'redis', 'status'].sort(),
+    )
   }, 10_000)
 
   it('GET /health stays trivial (liveness, aucune dépendance Redis)', async () => {
@@ -125,7 +138,8 @@ describe('health (e2e) — Redis down', () => {
 // Redis de test réel est démarré et branché pour isoler la panne : sans
 // override Redis, le check Redis échouerait aussi (contre le Redis par
 // défaut localhost:6379, absent en CI) et masquerait ce qu'on veut vérifier
-// ici — que le check DB, seul en échec, produit bien 503 (pas 500).
+// ici — que le check DB (et migrations, qui dépend AUSSI du pool), seuls en
+// échec, produisent bien 503 (pas 500).
 describe('health (e2e) — DB down', () => {
   let redis: TestRedis
   let app: INestApplication
@@ -149,11 +163,15 @@ describe('health (e2e) — DB down', () => {
     await redis.stop()
   })
 
-  it('GET /health/ready fails fast (503) — not a hang, not a 500 — when the DB is unreachable', async () => {
+  it('GET /health/ready fails fast (503) — not a hang, not a 500 — when the DB is unreachable ; migrations.ok bascule aussi à false (même pool), redis reste vrai', async () => {
     const res = await request(app.getHttpServer()).get('/health/ready')
+
     expect(res.status).toBe(503)
-    expect(res.body.status).toBe(503)
-    expect(res.type).toBe('application/problem+json')
+    expect(res.body.status).toBe('degraded')
+    expect(res.body.db.ok).toBe(false)
+    expect(typeof res.body.db.latencyMs).toBe('number')
+    expect(res.body.migrations).toEqual({ ok: false })
+    expect(res.body.redis).toEqual({ ok: true, latencyMs: expect.any(Number) })
   }, 10_000)
 
   it('GET /health stays trivial (liveness, aucune dépendance DB)', async () => {

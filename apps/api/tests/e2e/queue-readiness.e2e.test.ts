@@ -19,13 +19,16 @@ describe('/health/ready with Redis (e2e)', () => {
     await Promise.all([db.stop(), redis.stop()])
   })
 
+  // Contrat enrichi (Task 9, spec §6) — cf. health.e2e.test.ts pour la
+  // couverture exhaustive (down/degraded/503, aucune fuite de détail) : ce
+  // fichier (Task 2.1-1, readiness Redis) ne vérifie que le cas nominal.
   it('reports database AND redis up', async () => {
     const res = await request(app.getHttpServer())
       .get('/health/ready')
       .expect(200)
     expect(res.body.status).toBe('ok')
-    expect(res.body.info.database.status).toBe('up')
-    expect(res.body.info.redis.status).toBe('up')
+    expect(res.body.db.ok).toBe(true)
+    expect(res.body.redis.ok).toBe(true)
   })
 
   it('liveness stays trivial (no dependency)', async () => {

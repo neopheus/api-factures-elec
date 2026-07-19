@@ -7,18 +7,51 @@
 // hermétique à cette valeur (cf. commentaire dans ce describe).
 import './helpers/metrics-token-env.js'
 import type { INestApplication } from '@nestjs/common'
+import { Global, Module } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
 import { Test } from '@nestjs/testing'
 import pg from 'pg'
 import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ProblemDetailsFilter } from '../../src/common/http-exception.filter.js'
+import { APP_POOL } from '../../src/db/client.js'
 import { MetricsModule } from '../../src/metrics/metrics.module.js'
+import {
+  ANNUAIRE_SYNC_QUEUE,
+  CDV_TRANSMISSION_QUEUE,
+  EREPORTING_GENERATION_QUEUE,
+  INVOICE_GENERATION_QUEUE,
+  MAINTENANCE_QUEUE,
+} from '../../src/queue/queue.constants.js'
 import { createTestApp, listenOnce } from './helpers/app.js'
 import { startTestDb, type TestDb } from './helpers/postgres.js'
+import { startTestRedis, type TestRedis } from './helpers/redis.js'
 import { seedTenantWithKey } from './helpers/seed.js'
 
 const METRICS_TOKEN = 'e2e-metrics-token-1234567890'
+
+// APP_POOL factice, en module `@Global` DÉDIÉ (Task 9, spec §6) : un
+// provider déclaré directement dans `providers` du module RACINE passé à
+// `Test.createTestingModule` n'est PAS visible depuis un module IMPORTÉ (la
+// résolution DI suit le graphe `imports`/`exports`, jamais l'inverse) — vérifié
+// empiriquement (« Nest can't resolve dependencies … Symbol(APP_POOL) »).
+// `@Global()` propage l'export à TOUT le graphe compilé pour ce test, motif
+// DbModule (db/db.module.ts) lui-même. Nécessaire depuis que `MetricsModule`
+// provisionne `PgPoolMetricsService` (`@Inject(APP_POOL)`) — ce describe
+// (« token absent ») monte `MetricsModule` SANS jamais démarrer de Postgres
+// réel ; la valeur n'est d'ailleurs jamais exercée (aucune requête de ce
+// describe n'atteint /metrics avec succès, donc jamais collect()).
+@Global()
+@Module({
+  providers: [
+    {
+      provide: APP_POOL,
+      useValue: { totalCount: 0, idleCount: 0, waitingCount: 0 },
+    },
+  ],
+  exports: [APP_POOL],
+})
+class FakeAppPoolModule {}
 
 describe('GET /metrics (e2e light)', () => {
   describe('METRICS_TOKEN absent de l’env (route opt-in désactivée)', () => {
@@ -34,6 +67,7 @@ describe('GET /metrics (e2e light)', () => {
       // ({})` : ConfigService ignore délibérément process.env ET tout
       // fichier .env, METRICS_TOKEN est donc STRICTEMENT undefined ici, quel
       // que soit l'environnement réel du process de test.
+      //
       const mod = await Test.createTestingModule({
         imports: [
           ConfigModule.forRoot({
@@ -42,6 +76,7 @@ describe('GET /metrics (e2e light)', () => {
             skipProcessEnv: true,
             validate: () => ({}),
           }),
+          FakeAppPoolModule,
           MetricsModule,
         ],
       }).compile()
@@ -98,20 +133,31 @@ describe('GET /metrics (e2e light)', () => {
 
   describe('METRICS_TOKEN présent (scrape protégé, app complète)', () => {
     let db: TestDb
+    // Redis RÉEL (Testcontainers, motif health.e2e.test.ts) — requis Task 9 :
+    // `QueueMetricsService.collect()` appelle `queue.getJobCounts()` sur les 5
+    // files au scrape, une VRAIE commande Redis (LLEN/ZCARD), pas seulement
+    // une connexion différée comme pour le reste de l'app (lazyConnect +
+    // skipWaitingForReady/skipVersionCheck, cf. queue.module.ts). Reste LIGHT
+    // : aucun Worker BullMQ n'est démarré, `getJobCounts()` sur des files
+    // vides ne nécessite qu'un Redis JOIGNABLE, jamais un consommateur.
+    let redis: TestRedis
     let ownerPool: pg.Pool
     let app: INestApplication
     let apiKeyToken: string
 
     beforeAll(async () => {
-      db = await startTestDb()
+      ;[db, redis] = await Promise.all([startTestDb(), startTestRedis()])
       ownerPool = new pg.Pool({ connectionString: db.ownerUrl })
       ;({ token: apiKeyToken } = await seedTenantWithKey(ownerPool))
-      app = await createTestApp(db.appUrl)
+      app = await createTestApp(db.appUrl, {
+        host: redis.host,
+        port: redis.port,
+      })
     })
     afterAll(async () => {
       await app.close()
       await ownerPool.end()
-      await db.stop()
+      await Promise.all([db.stop(), redis.stop()])
     })
 
     it('token faux → 401 problem générique', async () => {
@@ -151,6 +197,40 @@ describe('GET /metrics (e2e light)', () => {
       // nombre d'identifiants distincts vus en prod.
       expect(res.text).toMatch(/route="\/invoices\/:id"/)
       expect(res.text).not.toContain(unknownId)
+    })
+
+    it('bon token → jauges bullmq_jobs{queue,state} présentes pour les 5 files de l’allowlist (collecte au scrape, Redis réel sans worker)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/metrics')
+        .set('Authorization', `Bearer ${METRICS_TOKEN}`)
+
+      expect(res.status).toBe(200)
+      expect(res.text).toContain('# TYPE bullmq_jobs gauge')
+      for (const queue of [
+        INVOICE_GENERATION_QUEUE,
+        MAINTENANCE_QUEUE,
+        EREPORTING_GENERATION_QUEUE,
+        ANNUAIRE_SYNC_QUEUE,
+        CDV_TRANSMISSION_QUEUE,
+      ]) {
+        // Files vides (aucun worker démarré) : état "waiting" à 0 pour
+        // chacune — prouve que `getJobCounts()` a bien répondu (Redis
+        // joignable), pas seulement que le collector a été enregistré.
+        expect(res.text).toContain(
+          `bullmq_jobs{queue="${queue}",state="waiting"} 0`,
+        )
+      }
+    })
+
+    it('bon token → jauge pg_pool{state} présente (total/idle/waiting), valeurs numériques cohérentes avec le pool applicatif', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/metrics')
+        .set('Authorization', `Bearer ${METRICS_TOKEN}`)
+
+      expect(res.status).toBe(200)
+      expect(res.text).toMatch(/pg_pool\{state="total"\} \d+/)
+      expect(res.text).toMatch(/pg_pool\{state="idle"\} \d+/)
+      expect(res.text).toMatch(/pg_pool\{state="waiting"\} \d+/)
     })
   })
 })

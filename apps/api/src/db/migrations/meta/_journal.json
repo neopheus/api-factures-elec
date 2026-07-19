@@ -232,6 +232,13 @@
       "when": 1784204452276,
       "tag": "0032_admin_totp_functions",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784204552276,
+      "tag": "0033_health_migrations_read_grant",
+      "breakpoints": true
     }
   ]
 }

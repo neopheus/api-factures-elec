@@ -96,6 +96,42 @@ describe('SessionGuard', () => {
     expect(req.authAdmin).toBeUndefined()
   })
 
+  it('session utilisateur → corrélation logs : req.log rebindé sur req.log.child({ tenantId }) (Task 9, spec §6)', async () => {
+    const subject: SessionSubject = {
+      sessionId: 's1',
+      userId: 'user-1',
+      adminId: null,
+      tenantId: 'tenant-1',
+      role: 'owner',
+      csrfHash: 'h',
+    }
+    find.mockResolvedValue(subject)
+    const { ctx, req } = mockContext({ [SESSION_COOKIE]: 'tok' })
+    const bound = { child: vi.fn() } as unknown as SessionRequest['log']
+    const child = vi.fn().mockReturnValue(bound)
+    req.log = { child } as unknown as SessionRequest['log']
+
+    await guard.canActivate(ctx)
+
+    expect(child).toHaveBeenCalledWith({ tenantId: 'tenant-1' })
+    expect(req.log).toBe(bound)
+  })
+
+  it('session utilisateur, req.log ABSENT (tests unit sans pino) → garde défensive, canActivate ne throw pas', async () => {
+    const subject: SessionSubject = {
+      sessionId: 's1',
+      userId: 'user-1',
+      adminId: null,
+      tenantId: 'tenant-1',
+      role: 'owner',
+      csrfHash: 'h',
+    }
+    find.mockResolvedValue(subject)
+    const { ctx } = mockContext({ [SESSION_COOKIE]: 'tok' })
+
+    await expect(guard.canActivate(ctx)).resolves.toBe(true)
+  })
+
   it('defaults the role to viewer when the joined role is null (defensive)', async () => {
     const subject: SessionSubject = {
       sessionId: 's1',
@@ -135,6 +171,25 @@ describe('SessionGuard', () => {
     })
     expect(req.authUser).toBeUndefined()
     expect(req.tenantId).toBeUndefined()
+  })
+
+  it('session admin → SessionGuard NE rebind PAS req.log (le binding adminId est posé par AdminGuard, placé après lui sur /admin/*)', async () => {
+    const subject: SessionSubject = {
+      sessionId: 's1',
+      userId: null,
+      adminId: 'admin-1',
+      tenantId: null,
+      role: null,
+      csrfHash: 'h',
+    }
+    find.mockResolvedValue(subject)
+    const { ctx, req } = mockContext({ [SESSION_COOKIE]: 'tok' })
+    const child = vi.fn()
+    req.log = { child } as unknown as SessionRequest['log']
+
+    await guard.canActivate(ctx)
+
+    expect(child).not.toHaveBeenCalled()
   })
 
   it('anti-oracle: missing cookie and an unknown/expired token produce the identical 401 problem body', async () => {
