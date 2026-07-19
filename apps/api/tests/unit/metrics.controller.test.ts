@@ -72,13 +72,31 @@ describe('MetricsController', () => {
     expect(render).not.toHaveBeenCalled()
   })
 
-  it('token faux (Bearer incorrect) → 401 générique', async () => {
+  it('token faux, longueur DIFFÉRENTE de l’attendu → 401 générique (court-circuit avant timingSafeEqual)', async () => {
     const { metrics, render } = fakeMetrics()
     const controller = new MetricsController(metrics, fakeConfig(TOKEN))
     const { req, res } = fakeReqRes()
 
     const err = await controller
       .scrape(req, res, 'Bearer wrong-token')
+      .catch((e) => e)
+
+    expect(err).toBeInstanceOf(UnauthorizedException)
+    expect(render).not.toHaveBeenCalled()
+  })
+
+  it('token faux, MÊME longueur que l’attendu (1 seul caractère diffère) → 401 générique (branche timingSafeEqual)', async () => {
+    // Couvre spécifiquement la comparaison à temps constant elle-même (pas
+    // le court-circuit de longueur du test précédent) : un token de même
+    // longueur que TOKEN, différent uniquement sur le dernier caractère.
+    const sameLengthWrongToken = `${TOKEN.slice(0, -1)}${TOKEN.endsWith('9') ? '0' : '9'}`
+    expect(sameLengthWrongToken.length).toBe(TOKEN.length)
+    const { metrics, render } = fakeMetrics()
+    const controller = new MetricsController(metrics, fakeConfig(TOKEN))
+    const { req, res } = fakeReqRes()
+
+    const err = await controller
+      .scrape(req, res, `Bearer ${sameLengthWrongToken}`)
       .catch((e) => e)
 
     expect(err).toBeInstanceOf(UnauthorizedException)

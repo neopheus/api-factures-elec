@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import {
   Controller,
   Get,
@@ -66,11 +67,25 @@ export class MetricsController {
         }),
       )
     }
-    // `authorization` absent ET token incorrect prennent la MÊME branche
-    // (comparaison stricte à `Bearer ${token}`) — un `undefined` ne peut
-    // jamais matcher une chaîne, pas de cas particulier à distinguer :
-    // même 401 générique, jamais d'oracle sur la présence de l'en-tête.
-    if (authorization !== `Bearer ${this.token}`) {
+    // Comparaison à TEMPS CONSTANT (motif `safeEqualHex`/
+    // `FakeBillingDriver.constructWebhookEvent`, revue Task 8) : un `!==`
+    // sur des chaînes s'arrête au premier octet différent — la latence
+    // observable varie donc avec le nombre de caractères corrects, ce qui
+    // permet de reconstituer le token par mesure de temps répétée. Surface
+    // aggravée ICI par `@SkipThrottle()` : rien ne borne le nombre
+    // d'essais qu'un attaquant peut envoyer à `/metrics`. `timingSafeEqual`
+    // exige des buffers de MÊME LONGUEUR (throw sinon) — la garde de
+    // longueur ci-dessous court-circuite en 401 AVANT tout appel, avec la
+    // MÊME issue que « longueur égale mais contenu différent » (`||`, pas
+    // de branche distincte) ; `authorization` absent devient une chaîne
+    // vide, dont la longueur ne peut jamais matcher `Bearer ${token}`,
+    // donc 401 générique lui aussi, jamais d'oracle sur sa présence.
+    const expected = Buffer.from(`Bearer ${this.token}`, 'utf8')
+    const presented = Buffer.from(authorization ?? '', 'utf8')
+    if (
+      expected.length !== presented.length ||
+      !timingSafeEqual(expected, presented)
+    ) {
       throw new UnauthorizedException(
         problem(401, ProblemType.unauthorized, 'Unauthorized'),
       )

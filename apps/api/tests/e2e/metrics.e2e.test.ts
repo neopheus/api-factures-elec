@@ -80,6 +80,12 @@ describe('GET /metrics (e2e light)', () => {
       expect(Object.keys(missing.body).sort()).toEqual(
         Object.keys(scrape.body).sort(),
       )
+      // Fige le FORMAT du `detail` du VRAI 404 Nest (`Cannot ${method}
+      // ${originalUrl}`) : si un futur bump de Nest change ce format, ce
+      // garde casse ICI plutôt que de laisser /metrics dériver
+      // silencieusement d'une indistinguabilité devenue fausse (revue
+      // Task 8).
+      expect(missing.body.detail).toBe('Cannot GET /this-route-does-not-exist')
     })
 
     it('même avec un Authorization Bearer présent → reste 404 (opt-in par absence d’env, pas par absence d’en-tête)', async () => {
