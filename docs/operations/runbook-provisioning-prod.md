@@ -519,8 +519,9 @@ erreur.
    driver (défaut `off` — le garde journalise sans jamais bloquer tant que
    non activé, `env.ts:243-246`).
 
-**VÉRIFICATION** : `stripe.billing.meters.list()`/`stripe.prices.list()`
-côté dashboard Stripe montrent `factelec_base`/`factelec_metered` ; un
+**VÉRIFICATION** : côté dashboard Stripe, `prices.list()` montre les
+lookup_keys `factelec_base`/`factelec_metered` et `billing.meters.list()`
+le meter `documents_processed` (« Documents traités ») ; un
 événement de test envoyé depuis le dashboard Stripe vers l'endpoint webhook
 prod répond `200` (visible dans les logs de livraison Stripe) — le
 compteur Prometheus `billing_webhook_events_total{outcome}` (§10)
