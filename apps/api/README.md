@@ -3692,6 +3692,10 @@ phase 5 it.2) — anti-brute-force/anti-abus, vérifiés en e2e (429 réel).
   `DATABASE_URL_WORKER`), au même titre que `factelec_app` au déploiement
   initial. Aucun script de provisioning dédié fourni (item Xavier). Voir §
   Consentement scellé, rôle worker & re-résolution ambiguous — 3.5.
+- **Vérification post-provisioning** : `pnpm verify:provisioning`
+  (`scripts/verify-provisioning.ts`, read-only, exit code ≠ 0 si un contrôle
+  échoue) — rôles/pgcrypto/migrations/RLS/grants worker/Redis/env critiques,
+  détaillé au runbook `docs/operations/runbook-provisioning-prod.md` §12.
 
 ## Tests
 

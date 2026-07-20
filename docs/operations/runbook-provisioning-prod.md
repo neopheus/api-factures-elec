@@ -15,10 +15,8 @@ Portée : premier environnement de production (PostgreSQL managé, Redis
 managé, Object Storage, containers api/worker/web). Exclu de ce runbook :
 `apply` Terraform réel, DNS/certificats, CI/CD de déploiement. Le squelette
 Terraform (`infra/`) et le script `verify-provisioning.ts` sont des
-livrables **compagnons** de ce même chantier phase 6 prep, planifiés en
-tâches séparées — **non encore présents sur le disque au moment où ces
-lignes sont écrites** ; s'ils existent quand vous lisez ceci, voir
-`infra/README.md` et §12 pour leur usage.
+livrables **compagnons** de ce même chantier phase 6 prep (tâches séparées,
+toutes deux livrées) — voir `infra/README.md` et §12 pour leur usage.
 
 ## Légende des placeholders
 
@@ -703,18 +701,22 @@ que le worker ne tourne pas).
 **BUT** : dernier contrôle avant d'ouvrir le trafic réel, combinant un
 contrôle automatisé et une checklist de smoke manuelle.
 
-**Script automatisé** — `apps/api/scripts/verify-provisioning.ts` : livrable
-**compagnon** de ce même chantier phase 6 prep (Task 3 du plan
-`docs/superpowers/plans/2026-07-20-phase6-prep-provisioning.md`), read-only,
-rôles/pgcrypto/migrations/RLS/grants/Redis/env critiques, exit code ≠ 0 si un
-contrôle échoue. **S'il n'existe pas encore au moment où ce runbook est
-suivi**, exécuter la checklist manuelle ci-dessous à la place — elle couvre
-les mêmes invariants un par un.
+**Script automatisé** — `apps/api/scripts/verify-provisioning.ts` (Task 3 du
+plan `docs/superpowers/plans/2026-07-20-phase6-prep-provisioning.md`),
+read-only, rôles/pgcrypto/migrations/RLS/grants/Redis/env critiques, exit
+code ≠ 0 si un contrôle échoue. `DATABASE_URL` (rôle applicatif) est
+**requise** ; `DATABASE_OWNER_URL` reste **optionnelle** — en son absence,
+les 3 contrôles d'attributs de rôles (`rolbypassrls`) sont SKIP (jamais
+ÉCHEC), tout le reste (pgcrypto, migrations, RLS FORCE, grants worker,
+Redis, env) tourne sous le seul rôle applicatif. Si, pour une raison
+quelconque, le script n'est pas exécutable dans l'environnement cible,
+exécuter la checklist manuelle ci-dessous à la place — elle couvre les
+mêmes invariants un par un.
 
-**COMMANDE** (une fois le script livré) :
+**COMMANDE** :
 
 ```bash
-DATABASE_OWNER_URL='...' pnpm --filter @factelec/api exec node --import tsx scripts/verify-provisioning.ts
+DATABASE_URL='...' DATABASE_OWNER_URL='...' pnpm --filter @factelec/api verify:provisioning
 ```
 
 **Checklist de smoke manuelle** :
@@ -733,8 +735,8 @@ DATABASE_OWNER_URL='...' pnpm --filter @factelec/api exec node --import tsx scri
 6. **Migrations** : `SELECT count(*) FROM drizzle.__drizzle_migrations`
    égale le nombre de fichiers `*.sql` du journal (§4).
 
-**VÉRIFICATION** : les 6 points de la checklist passent, **et** (une fois le
-script disponible) `verify-provisioning.ts` sort avec un code `0`.
+**VÉRIFICATION** : les 6 points de la checklist passent, **et**
+`verify-provisioning.ts` sort avec un code `0`.
 
 **PIÈGES/ROLLBACK** : un échec à l'étape 2 (facture jamais `generated`)
 pointe presque toujours vers le worker (§11 — `DATABASE_URL_WORKER`

@@ -17,7 +17,8 @@
     "db:migrate": "node --import tsx scripts/migrate.ts",
     "provision:tenant": "node --import tsx scripts/provision-tenant.ts",
     "provision:admin": "node --import tsx scripts/provision-admin.ts",
-    "billing:bootstrap": "node --import tsx scripts/billing-bootstrap.ts"
+    "billing:bootstrap": "node --import tsx scripts/billing-bootstrap.ts",
+    "verify:provisioning": "node --import tsx scripts/verify-provisioning.ts"
   },
   "dependencies": {
     "@factelec/invoice-core": "workspace:*",
