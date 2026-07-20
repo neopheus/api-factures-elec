@@ -1,0 +1,52 @@
+# Squelette de valeurs — AUCUN secret réel ici. Copier en `terraform.tfvars`
+# (ignoré par git, voir .gitignore) et remplacer chaque `<REMPLACER>` avant
+# tout `plan`/`apply` réel. Les mots de passe doivent être générés avec
+# `openssl rand -base64 32` (ou équivalent), jamais copiés depuis ce
+# fichier ni depuis apps/api/scripts/db-init/00-roles.sql (valeurs dev).
+
+# --- Général -------------------------------------------------------------
+
+project_id  = "<REMPLACER-ID-PROJET-SCALEWAY>"
+region      = "fr-par"
+zone        = "fr-par-1"
+environment = "production"
+
+# --- PostgreSQL managé -----------------------------------------------------
+
+rdb_instance_name  = "factelec-pg"
+rdb_node_type      = "DB-GP-S" # à ajuster — voir description de la variable.
+rdb_ha_enabled     = false
+rdb_volume_type    = "sbs_15k"
+rdb_volume_size_gb = 10
+
+rdb_owner_password  = "<REMPLACER-GÉNÉRÉ-32-CHARS>"
+rdb_app_password    = "<REMPLACER-GÉNÉRÉ-32-CHARS>"
+rdb_worker_password = "<REMPLACER-GÉNÉRÉ-32-CHARS>"
+
+# --- Redis managé ----------------------------------------------------------
+
+redis_cluster_name = "factelec-redis"
+redis_node_type    = "RED1-MICRO" # à ajuster — voir description de la variable.
+redis_version      = "7.2.5"      # à reconfirmer via `scw redis version list`.
+redis_cluster_size = 1
+redis_user_name    = "factelec"
+redis_password     = "<REMPLACER-GÉNÉRÉ-32-CHARS>"
+redis_tls_enabled  = true
+# CIDR de sortie réels des containers/LB — JAMAIS "0.0.0.0/0" (refusé par
+# une validation Terraform de toute façon). Exemple factice ci-dessous.
+redis_acl_allowed_cidrs = ["<REMPLACER-CIDR-SORTIE-CONTAINERS>/32"]
+
+# --- Object Storage WORM ----------------------------------------------------
+
+archive_bucket_name                = "<REMPLACER-NOM-BUCKET-UNIQUE-GLOBAL>"
+archive_object_lock_mode           = "COMPLIANCE"
+archive_object_lock_retention_days = 3650 # ~10 ans, à confirmer avec Xavier.
+
+# --- Containers --------------------------------------------------------------
+
+container_namespace_name = "factelec"
+container_api_image      = "rg.fr-par.scw.cloud/<REMPLACER-NAMESPACE>/api:<REMPLACER-TAG>"
+container_worker_image   = "rg.fr-par.scw.cloud/<REMPLACER-NAMESPACE>/worker:<REMPLACER-TAG>"
+container_web_image      = "rg.fr-par.scw.cloud/<REMPLACER-NAMESPACE>/web:<REMPLACER-TAG>"
+container_min_scale      = 1
+container_max_scale      = 3

@@ -10,3 +10,12 @@ var/
 *.sef.json
 .claude/settings.local.json
 normes-afnor/
+
+# Terraform (infra/) — le lock file SE committe, l'état et le cache local JAMAIS.
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/terraform.tfvars
+infra/*.auto.tfvars
+infra/crash.log
+infra/crash.*.log
