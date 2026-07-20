@@ -610,6 +610,130 @@ rouverte par le reset).
 
 ## 10. Observabilité
 
+**BUT** : activer le scrape Prometheus et le healthcheck du load balancer.
+
+- **`METRICS_TOKEN`** (≥16 caractères, imposé par le schéma `env.ts:277`) —
+  Bearer sur `GET /metrics`, comparaison à temps constant
+  (`timingSafeEqual`, `README.md:3215-3217`). **Absente → 404**
+  indiscernable d'une route absente (opt-in explicite).
+- **`GET /health`** — liveness pure, aucune dépendance externe,
+  `{ status: 'ok' }` (`README.md:3264`). À pointer par le healthcheck du
+  load balancer (redémarrage de container si down).
+- **`GET /health/ready`** — readiness enrichi : sondes DB/Redis/migrations,
+  chacune bornée 2 s, **503** si un composant est down
+  (`README.md:3243-3262`). À utiliser pour gater le trafic entrant
+  (readiness probe), pas pour décider un redémarrage brutal.
+
+**COMMANDE** :
+
+```bash
+curl -s https://api.<À-CHOISIR>/health
+curl -s https://api.<À-CHOISIR>/health/ready
+curl -s -H "Authorization: Bearer <GÉNÉRÉ-32-CHARS>" https://api.<À-CHOISIR>/metrics | head -5
+```
+
+**VÉRIFICATION** : `/health` → `{"status":"ok"}` ; `/health/ready` → `200`
+avec les 3 sondes `ok:true` ; `/metrics` → texte au format Prometheus
+(`http_request_duration_seconds`, `bullmq_jobs`, `pg_pool`,
+`billing_guard_denials_total`, `billing_webhook_events_total`).
+
+**PIÈGES** : `METRICS_TOKEN` de moins de 16 caractères est **rejeté au
+bootstrap** (échec de validation zod, le process ne démarre pas du tout) —
+générer un secret conforme dès le départ. Rétention des logs applicatifs :
+**décision infrastructure non couverte par le code** (pas de politique de
+rétention encodée) — à définir par Xavier au niveau du runtime de logs
+retenu.
+
 ## 11. Processus (api / worker / web)
 
+**BUT** : construire puis démarrer les 3 processus, dans l'ordre qui respecte
+les dépendances établies aux sections précédentes.
+
+**Build** (avant tout démarrage) :
+
+```bash
+pnpm --filter @factelec/api build     # swc → dist/, copie src/db/migrations
+pnpm --filter @factelec/web build     # next build
+```
+
+**Ordre de démarrage** : §3 (rôles) → §2/§4 (pgcrypto + migrations) → **puis
+seulement** les 3 process ci-dessous (`/health/ready` du process API
+dépendra du décompte de migrations dès son premier appel, §10) :
+
+| Process | Commande réelle | Script `package.json` | Env requis (en plus de §7) |
+| --- | --- | --- | --- |
+| **api** | `node dist/main.js` | `pnpm --filter @factelec/api start` | `DATABASE_URL` |
+| **worker** | `node dist/worker-main.js` | `pnpm --filter @factelec/api start:worker` | `DATABASE_URL` **et** `DATABASE_URL_WORKER` (§7, point dur) |
+| **web** | `next start -p 3001` | `pnpm --filter @factelec/web start` | Variables propres à `apps/web` (hors périmètre `envSchema` API — voir `apps/web/README.md`) |
+
+**Arrêt gracieux (SIGTERM)** : les deux process Nest appellent
+`enableShutdownHooks()` (`main.ts:46`, `worker-main.ts:13`) → `onModuleDestroy`
+ferme le pool Postgres proprement (`db.module.ts:48-52`, garde
+d'idempotence). Prévoir un délai de grâce **généreux** (≥30 s) côté
+orchestrateur avant `SIGKILL` : une génération interrompue exactement entre
+`generating` et complétion laisse une fenêtre résiduelle bornée reprise par
+`RECONCILIATION_GENERATING_STALE_MS` (15 min par défaut, §7-F) — le filet de
+sécurité existe, mais un arrêt trop brutal (délai de grâce trop court)
+multiplie les jobs interrompus à rattraper.
+
+**Dimensionnement initial** : **non déterminable depuis le code** (aucun
+test de charge/benchmark dans ce dépôt) — décision infrastructure à affiner
+par observation (`pg_pool{state}`/`bullmq_jobs{queue,state}` exposés en
+Prometheus, §10). Point de départ raisonnable non vérifié : 1 instance
+api + 1 instance worker + 1 instance web, taille container modeste,
+scaling horizontal guidé par les métriques une fois le trafic réel observé.
+
+**VÉRIFICATION** : `curl https://api.<À-CHOISIR>/health` → `200` pour l'api ;
+logs worker sans erreur `DATABASE_URL_WORKER requis` au démarrage ; `curl
+https://dashboard.<À-CHOISIR>` → page `apps/web` servie.
+
+**PIÈGES/ROLLBACK** : démarrer le worker **avant** d'avoir provisionné
+`factelec_worker`/`DATABASE_URL_WORKER` (§3/§7) le fait échouer au
+bootstrap immédiatement (throw explicite, aucune génération asynchrone
+possible tant que non corrigé) — sans affecter l'ingestion synchrone
+`POST /invoices` côté API (le statut reste `received`, jamais généré, tant
+que le worker ne tourne pas).
+
 ## 12. Vérification finale
+
+**BUT** : dernier contrôle avant d'ouvrir le trafic réel, combinant un
+contrôle automatisé et une checklist de smoke manuelle.
+
+**Script automatisé** — `apps/api/scripts/verify-provisioning.ts` : livrable
+**compagnon** de ce même chantier phase 6 prep (Task 3 du plan
+`docs/superpowers/plans/2026-07-20-phase6-prep-provisioning.md`), read-only,
+rôles/pgcrypto/migrations/RLS/grants/Redis/env critiques, exit code ≠ 0 si un
+contrôle échoue. **S'il n'existe pas encore au moment où ce runbook est
+suivi**, exécuter la checklist manuelle ci-dessous à la place — elle couvre
+les mêmes invariants un par un.
+
+**COMMANDE** (une fois le script livré) :
+
+```bash
+DATABASE_OWNER_URL='...' pnpm --filter @factelec/api exec node --import tsx scripts/verify-provisioning.ts
+```
+
+**Checklist de smoke manuelle** :
+
+1. **Signup** : `POST /auth/signup` avec un tenant de test → `201`, cookie
+   de session posé.
+2. **Dépôt facture** : `POST /invoices` avec une clé API émise par
+   `pnpm --filter @factelec/api provision:tenant` → `201 { status:
+   'received' }`, puis `GET /invoices/:id` bascule sur `status: 'generated'`
+   une fois le worker passé (5 formats du socle disponibles).
+3. **`/metrics`** avec le bon `METRICS_TOKEN` → `200`, contenu Prometheus
+   non vide (§10).
+4. **`/health`** et **`/health/ready`** → `200`, 3 sondes `ok:true` (§10).
+5. **Rôles/RLS** : `SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname
+   LIKE 'factelec_%'` → seul `factelec_owner` a `rolbypassrls=t` (§3).
+6. **Migrations** : `SELECT count(*) FROM drizzle.__drizzle_migrations`
+   égale le nombre de fichiers `*.sql` du journal (§4).
+
+**VÉRIFICATION** : les 6 points de la checklist passent, **et** (une fois le
+script disponible) `verify-provisioning.ts` sort avec un code `0`.
+
+**PIÈGES/ROLLBACK** : un échec à l'étape 2 (facture jamais `generated`)
+pointe presque toujours vers le worker (§11 — `DATABASE_URL_WORKER`
+manquante, ou `xmllint` absent de l'image worker si l'échec touche
+spécifiquement le pipeline e-reporting, §1). Ne pas ouvrir le trafic
+production tant que les 6 points ne sont pas verts.
