@@ -13,9 +13,12 @@ code évolue.
 
 Portée : premier environnement de production (PostgreSQL managé, Redis
 managé, Object Storage, containers api/worker/web). Exclu de ce runbook :
-`apply` Terraform réel, DNS/certificats, CI/CD de déploiement (squelette
-Terraform et script `verify-provisioning.ts` : livrables compagnons de ce même
-chantier, voir `infra/README.md` et §12).
+`apply` Terraform réel, DNS/certificats, CI/CD de déploiement. Le squelette
+Terraform (`infra/`) et le script `verify-provisioning.ts` sont des
+livrables **compagnons** de ce même chantier phase 6 prep, planifiés en
+tâches séparées — **non encore présents sur le disque au moment où ces
+lignes sont écrites** ; s'ils existent quand vous lisez ceci, voir
+`infra/README.md` et §12 pour leur usage.
 
 ## Légende des placeholders
 
@@ -36,7 +39,7 @@ des runtimes et outils requis.
 - **Node 22** — `.nvmrc` = `22` ; `package.json` racine :
   `"engines": {"node": ">=22"}`.
 - **pnpm 10.12.1** — épinglé par `"packageManager": "pnpm@10.12.1"`
-  (`package.json:7`), à activer via `corepack`.
+  (`package.json:8`, racine du monorepo), à activer via `corepack`.
 - **`libxml2`/`xmllint` sur le PATH du worker** — validation XSD **en
   runtime**, à chaque transmission Flux 10 e-reporting
   (`apps/api/README.md:1308-1319`) et à chaque publication/synchronisation
@@ -80,7 +83,7 @@ socle est disponible **avant** toute migration.
   migration `0010_ledger_fk_restrict.sql:6` exécute elle-même
   `CREATE EXTENSION IF NOT EXISTS pgcrypto;` (scellement du journal CDV,
   trigger `SECURITY DEFINER`) — vérifiée uniquement sur `postgres:17-alpine`
-  à ce jour (`README.md:1062-1064`), **jamais testée sur l'offre managée
+  à ce jour (`README.md` racine :1062-1064), **jamais testée sur l'offre managée
   Scaleway**. Sur certaines offres managées, `CREATE EXTENSION` est restreint
   à une allowlist gérée par le fournisseur : si `pgcrypto` n'y figure pas,
   `pnpm db:migrate` (§4) s'arrêtera **au milieu** de la séquence (migrations
@@ -119,7 +122,7 @@ dev/test) évite tout ordre partiel à retenir.
 
 - **`factelec_owner`** — `LOGIN`, **`BYPASSRLS`**, `CREATEDB`, propriétaire du
   schéma `public`. Utilisé **uniquement** par les migrations et les scripts
-  de provisioning CLI (`README.md:3299-3302`) — **jamais** par les process
+  de provisioning CLI (`apps/api/README.md:3299-3302`) — **jamais** par les process
   API/worker.
 - **`factelec_app`** — `LOGIN`, `NOSUPERUSER`, `NOBYPASSRLS`, `NOCREATEDB`.
   Rôle du process **API** (`DATABASE_URL`).
@@ -127,7 +130,7 @@ dev/test) évite tout ordre partiel à retenir.
   `NOCREATEDB`. Rôle du process **worker** (`DATABASE_URL_WORKER`, 3.5) —
   **doit exister avant tout déploiement** de cette version : le worker throw
   explicitement au bootstrap si `DATABASE_URL_WORKER` est absente
-  (`README.md:3341-3343`), et la migration `0029` échoue si le rôle n'existe
+  (`apps/api/README.md:3341-3343`), et la migration `0029` échoue si le rôle n'existe
   pas.
 
 Transposition prod de `apps/api/scripts/db-init/00-roles.sql` — **mots de
@@ -271,7 +274,7 @@ pas, la production doit tourner avec `ARCHIVE_DRIVER=local` (défaut).
 `./var/archive`, `archive.service`/`local-filesystem-archive-store.ts`) —
 **le filesystem du container**, en `chmod 0o444` après écriture. C'est une
 « immuabilité applicative locale (simulacre WORM), **pas** un WORM matériel »
-(`README.md:466-471`) : un processus avec les droits filesystem suffisants
+(`apps/api/README.md:466-471`) : un processus avec les droits filesystem suffisants
 peut toujours réécrire le fichier, contrairement à un vrai object-lock. Si
 la production démarre sans adaptateur S3, **monter un volume persistant** sur
 `ARCHIVE_LOCAL_DIR` est indispensable — sans quoi les archives probatoires
@@ -280,7 +283,7 @@ sont perdues à chaque redéploiement du container.
 **COMMANDE** (préparation infra, indépendante du code — peut être faite
 maintenant) : créer un bucket Object Storage Scaleway avec
 `object-lock`/rétention en mode **`COMPLIANCE`**, ~10 ans
-(`README.md:475`), policy IAM minimale (écriture par l'application
+(`apps/api/README.md:475`), policy IAM minimale (écriture par l'application
 uniquement, pas de suppression).
 
 **VÉRIFICATION** : configuration du bucket visible en console (object-lock
@@ -383,7 +386,7 @@ d'une exécution ponctuelle de script (CI de migration, poste opérateur).
 | `EREPORTING_TRANSMISSION_DRIVER` | Oui | `local` — `sftp`/`as2`/`as4`/`api` **activés au déploiement, non fournis** (`ereporting-transmission.module.ts:31-33`) | — | Préparé, activation différée. |
 | `EREPORTING_LOCAL_DIR` | Oui si driver `local` | Volume persistant | — | Défaut `./var/ereporting`. |
 | `EREPORTING_PA_ID` | Oui — `<ITEM-XAVIER>` | Matricule réel de la PA (post-immatriculation DGFiP) | Dossier d'immatriculation | Défaut `'PA00'` placeholder. Miroir attendu = `CDV_PA_MATRICULE` (env.ts:234-236). |
-| `EREPORTING_PA_SCHEME_ID` | Non | `0238` (défaut, schéma SIRENE) | — | À confirmer avec la DGFiP si le schéma diffère (README.md:1098-1100 — cas voisin `'9999'`). |
+| `EREPORTING_PA_SCHEME_ID` | Non | `0238` (défaut, schéma d'identifiant ICD de la PA, TT-7) | — | Garder le défaut — aucune indication contraire dans le code ou les README à ce jour. |
 | `EREPORTING_PA_NAME` | Oui | Raison sociale réelle de la PA | — | Défaut `'Factelec PA'` placeholder. |
 | `EREPORTING_SWEEP_EVERY_MS` | Non (défaut `3600000` = 1 h) | Garder le défaut | — | Ordonnanceur e-reporting. |
 | `EREPORTING_GENERATION_JOB_ATTEMPTS` | Non (défaut `3`, max `10`) | Garder le défaut | — | Distingue erreur opérationnelle (xmllint absent) du rejet sémantique. |
@@ -469,7 +472,7 @@ d'une exécution ponctuelle de script (CI de migration, poste opérateur).
   `.optional()`, `env.ts:23`). Un container worker démarré avec **seulement**
   `DATABASE_URL_WORKER` échoue au bootstrap (« Invalid environment
   configuration: DATABASE_URL »), **avant même** que `DbModule.forRoot`
-  (qui, lui, ne lit que `DATABASE_URL_WORKER`, `db.module.ts:36`) ne soit
+  (qui, lui, ne lit que `DATABASE_URL_WORKER`, `db.module.ts:38`) ne soit
   atteint. Positionner les **deux** clés sur le container worker (même
   valeur `DATABASE_URL` que celle de l'API — elle n'est jamais utilisée pour
   se connecter côté worker, seulement validée au format).
@@ -511,7 +514,7 @@ erreur.
    (outil dev uniquement) — copier le `whsec_...` généré dans
    `STRIPE_WEBHOOK_SECRET`.
 4. Positionner `BILLING_DRIVER=stripe` — la sélection du driver est **figée
-   au bootstrap du process**, jamais réévaluée à chaud (`README.md:3002-3004`).
+   au bootstrap du process**, jamais réévaluée à chaud (`apps/api/README.md:3002-3004`).
 5. `BILLING_ENFORCEMENT` : décision commerciale explicite, séparée du
    driver (défaut `off` — le garde journalise sans jamais bloquer tant que
    non activé, `env.ts:243-246`).
@@ -525,7 +528,7 @@ s'incrémente en conséquence.
 
 **PIÈGES/ROLLBACK** : le webhook accepte `POST /billing/webhook` **sans**
 guard session/CSRF — authenticité garantie **uniquement** par la signature
-HMAC (`stripe-signature` + `rawBody`, `README.md:2832`) : une divergence de
+HMAC (`stripe-signature` + `rawBody`, `apps/api/README.md:2832`) : une divergence de
 `STRIPE_WEBHOOK_SECRET` entre Stripe et l'API fait échouer silencieusement
 **tous** les événements en 400 (`rawBody`/signature invalides) — vérifier ce
 secret en priorité si `billing_webhook_events_total` reste plat après un
@@ -555,7 +558,7 @@ PROVISION_ADMIN_PASSWORD='<GÉNÉRÉ-32-CHARS>' \
 **Consigne TOFU (time-of-first-use) — pourquoi « immédiatement » n'est pas
 cosmétique** : `POST /admin/login` avec mot de passe valide mais admin **non
 enrôlé** (`totp_enabled_at IS NULL`) répond **202** `{ enrollmentRequired,
-otpauthUrl, secret }` **sans créer de session** (`README.md:3143-3146`) —
+otpauthUrl, secret }` **sans créer de session** (`apps/api/README.md:3143-3146`) —
 donc le mot de passe seul ne suffit **jamais** à obtenir une session. Le
 risque réel : quiconque connaît le mot de passe (fuite du canal de
 transmission `PROVISION_ADMIN_PASSWORD`, capture d'écran, etc.) peut
@@ -590,7 +593,7 @@ FROM platform_admins WHERE email = 'admin@<À-CHOISIR>';
 
 Attendu : `enrolled = t` immédiatement après la confirmation.
 
-**Runbook — codes de récupération épuisés** (`README.md:3169-3186`) :
+**Runbook — codes de récupération épuisés** (`apps/api/README.md:3169-3186`) :
 **aucun endpoint de régénération** (surface minimale assumée). Reset
 manuel, sous le rôle **owner** (jamais `factelec_app` — `platform_admins`
 est deny-all pour ce dernier) :
@@ -614,14 +617,14 @@ rouverte par le reset).
 
 - **`METRICS_TOKEN`** (≥16 caractères, imposé par le schéma `env.ts:277`) —
   Bearer sur `GET /metrics`, comparaison à temps constant
-  (`timingSafeEqual`, `README.md:3215-3217`). **Absente → 404**
+  (`timingSafeEqual`, `apps/api/README.md:3215-3217`). **Absente → 404**
   indiscernable d'une route absente (opt-in explicite).
 - **`GET /health`** — liveness pure, aucune dépendance externe,
-  `{ status: 'ok' }` (`README.md:3264`). À pointer par le healthcheck du
+  `{ status: 'ok' }` (`apps/api/README.md:3264`). À pointer par le healthcheck du
   load balancer (redémarrage de container si down).
 - **`GET /health/ready`** — readiness enrichi : sondes DB/Redis/migrations,
   chacune bornée 2 s, **503** si un composant est down
-  (`README.md:3243-3262`). À utiliser pour gater le trafic entrant
+  (`apps/api/README.md:3243-3262`). À utiliser pour gater le trafic entrant
   (readiness probe), pas pour décider un redémarrage brutal.
 
 **COMMANDE** :
@@ -668,7 +671,7 @@ dépendra du décompte de migrations dès son premier appel, §10) :
 
 **Arrêt gracieux (SIGTERM)** : les deux process Nest appellent
 `enableShutdownHooks()` (`main.ts:46`, `worker-main.ts:13`) → `onModuleDestroy`
-ferme le pool Postgres proprement (`db.module.ts:48-52`, garde
+ferme le pool Postgres proprement (`db.module.ts:51-57`, garde
 d'idempotence). Prévoir un délai de grâce **généreux** (≥30 s) côté
 orchestrateur avant `SIGKILL` : une génération interrompue exactement entre
 `generating` et complétion laisse une fenêtre résiduelle bornée reprise par
