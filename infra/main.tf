@@ -94,10 +94,15 @@ resource "scaleway_rdb_user" "worker" {
 # `tls_enabled` est piloté par variable mais NE DOIT jamais être désactivé
 # en prod (REDIS_TLS=true côté env API/worker, runbook §5 — parsing
 # explicite "true"/"1", z.coerce.boolean volontairement évité côté code).
-# ACL ouverte à 0.0.0.0/0 par défaut ici : Scaleway Redis managé n'est
-# joignable que via son endpoint privé/managé, mais resserrer cette ACL à
-# des IP/CIDR connus (LB, containers) reste une amélioration de sécurité à
-# apporter avant l'apply réel (item Xavier — topologie réseau finale).
+#
+# SÉCURITÉ — ACL réseau : PAS de valeur par défaut de type "0.0.0.0/0" dans
+# ce squelette (revue sécurité automatisée sur un commit précédent — un ACL
+# grand ouvert codé en dur est un anti-pattern même dans un squelette
+# jamais appliqué : il finit souvent recopié tel quel). `redis_acl_allowed_cidrs`
+# est une variable SANS default : `plan`/`apply` échouent tant que
+# l'opérateur n'a pas listé explicitement les CIDR de sortie réels des
+# containers/LB (item Xavier — topologie réseau finale, non déterminable
+# depuis ce dépôt). Ne jamais y mettre 0.0.0.0/0 en production.
 resource "scaleway_redis_cluster" "main" {
   name         = var.redis_cluster_name
   version      = var.redis_version
@@ -108,9 +113,12 @@ resource "scaleway_redis_cluster" "main" {
   tls_enabled  = var.redis_tls_enabled
   tags         = [var.environment, "factelec"]
 
-  acl {
-    ip          = "0.0.0.0/0"
-    description = "Ouvert temporairement — à resserrer avant l'apply réel (item Xavier, topologie réseau)."
+  dynamic "acl" {
+    for_each = var.redis_acl_allowed_cidrs
+    content {
+      ip          = acl.value
+      description = "CIDR de sortie applicatif autorisé (fourni via redis_acl_allowed_cidrs)."
+    }
   }
 }
 
@@ -219,11 +227,19 @@ locals {
     NODE_ENV = "production"
   }
 
-  # `load_balancer[0]` : attribut recommandé par le provider (endpoint_ip/
-  # endpoint_port sont dépréciés) — endpoint public par défaut de l'instance
-  # RDB tant qu'aucun private_network n'est attaché (doc provider).
-  database_host = scaleway_rdb_instance.postgresql.load_balancer[0].ip
-  database_port = scaleway_rdb_instance.postgresql.load_balancer[0].port
+  # Choix délibéré de `endpoint_ip`/`endpoint_port` plutôt que l'attribut
+  # `load_balancer[0].ip/.port` recommandé par le provider (celui-ci est
+  # marqué déprécié — avertissement non bloquant à `validate`) : vérifié en
+  # pratique (`terraform plan` à blanc sur ce squelette) que `load_balancer`
+  # est une liste VIDE tant que l'instance RDB n'existe pas encore,
+  # provoquant une erreur "Invalid index" sur `[0]` dès le premier `plan`
+  # d'une instance neuve — bloquant, pas seulement esthétique.
+  # `endpoint_ip`/`endpoint_port` sont des attributs scalaires calculés qui,
+  # eux, se résolvent proprement en "(known after apply)" avant création.
+  # À réévaluer si une future version du provider corrige ce comportement
+  # pour `load_balancer`.
+  database_host = scaleway_rdb_instance.postgresql.endpoint_ip
+  database_port = scaleway_rdb_instance.postgresql.endpoint_port
 }
 
 resource "scaleway_container" "api" {

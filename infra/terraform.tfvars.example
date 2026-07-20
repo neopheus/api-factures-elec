@@ -32,6 +32,9 @@ redis_cluster_size = 1
 redis_user_name    = "factelec"
 redis_password     = "<REMPLACER-GÉNÉRÉ-32-CHARS>"
 redis_tls_enabled  = true
+# CIDR de sortie réels des containers/LB — JAMAIS "0.0.0.0/0" (refusé par
+# une validation Terraform de toute façon). Exemple factice ci-dessous.
+redis_acl_allowed_cidrs = ["<REMPLACER-CIDR-SORTIE-CONTAINERS>/32"]
 
 # --- Object Storage WORM ----------------------------------------------------
 

@@ -124,6 +124,16 @@ variable "redis_tls_enabled" {
   default     = true
 }
 
+variable "redis_acl_allowed_cidrs" {
+  description = "Liste des CIDR autorisés à joindre le cluster Redis (ACL — runbook §5). PAS de default : à renseigner explicitement avec les CIDR de sortie réels des containers/LB (item Xavier, topologie réseau finale, non déterminable depuis ce dépôt). Ne JAMAIS y placer '0.0.0.0/0' en production — un ACL grand ouvert annule l'intérêt du mot de passe/TLS."
+  type        = list(string)
+
+  validation {
+    condition     = !contains(var.redis_acl_allowed_cidrs, "0.0.0.0/0")
+    error_message = "redis_acl_allowed_cidrs ne doit jamais contenir '0.0.0.0/0' — restreindre aux CIDR de sortie applicatifs réels."
+  }
+}
+
 # --- Object Storage WORM (runbook §6) -----------------------------------
 
 variable "archive_bucket_name" {
