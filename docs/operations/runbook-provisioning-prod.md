@@ -296,9 +296,317 @@ runbook. Si activé par erreur : redémarrage en échec immédiat, revenir à
 
 ## 7. Environnement API/worker
 
+**BUT** : positionner les **61 clés** validées par le schéma zod
+`envSchema` (`apps/api/src/config/env.ts:13-278`, comptées à la rédaction).
+Voir `.env.example` pour un squelette dev — **aucune valeur de ce fichier
+n'est réutilisable en prod**.
+
+**Hors schéma, à part** : `DATABASE_OWNER_URL` n'est **pas** une clé de
+`envSchema` — le commentaire du code est explicite : « L'URL du rôle owner
+n'est jamais chargée par le process API » (`env.ts:21-22`). Elle ne sert
+qu'aux scripts `migrate.ts`/`provision-tenant.ts`/`provision-admin.ts`,
+exécutés **hors** du chemin de requête HTTP — **ne jamais la déployer dans
+l'environnement des containers api/worker en service**, seulement dans celui
+d'une exécution ponctuelle de script (CI de migration, poste opérateur).
+
+### A. Cœur HTTP / runtime
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `NODE_ENV` | Oui | `production` | — | **Point dur** (non listé dans la spec, trouvé au code) : `NODE_ENV==='production'` est le SEUL signal qui active `secure: true` sur les cookies de session/CSRF (`src/auth/cookie.ts:11`). Oublier cette valeur = cookies envoyés sans flag `Secure` en HTTPS prod. |
+| `PORT` | Non (défaut `3000`) | Selon la convention du runtime Scaleway retenu (Containers serverless : `PORT` souvent injecté par la plateforme) | — | `app.listen(PORT)` (`main.ts:48`). |
+| `LOG_LEVEL` | Non (défaut `info`) | `info` | — | `fatal`…`silent`, pino. |
+
+### B. Base de données (rôle applicatif)
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `DATABASE_URL` | Oui (API **et** worker, voir points durs) | `postgres://factelec_app:<GÉNÉRÉ-32-CHARS>@<HÔTE-PG>:5432/factelec` | Secret manager (mot de passe généré §3) | Rôle `factelec_app`, soumis à la RLS. |
+| `DATABASE_URL_WORKER` | Oui pour `pnpm start:worker` (throw explicite sinon, `WorkerModule`) | `postgres://factelec_worker:<GÉNÉRÉ-32-CHARS>@<HÔTE-PG>:5432/factelec` | Secret manager (mot de passe généré §3) | Rôle `factelec_worker`, moindre privilège (3.5). Non lue par le process API. |
+
+### C. CORS / rate limit / proxy
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `CORS_ALLOWED_ORIGINS` | Oui | `https://<dashboard.À-CHOISIR>` (CSV si plusieurs origines) | — | Défaut `''` = **aucune** origine autorisée ; oubli = dashboard bloqué par CORS. |
+| `RATE_LIMIT_TTL` | Non (défaut `60`) | Garder le défaut sauf besoin observé | — | Secondes, fenêtre glissante. |
+| `RATE_LIMIT_LIMIT` | Non (défaut `120`) | Garder le défaut sauf besoin observé | — | Requêtes/fenêtre/IP. |
+| `TRUST_PROXY` | Oui — **point dur** | Nombre exact de sauts de proxy réels devant l'API sur la topologie Scaleway retenue (à vérifier en conditions réelles) | — | `0` (défaut) = connexion directe. Derrière un LB, doit valoir le nombre de sauts **exact** — trop haut = spoofing d'IP possible (`main.ts:35-44`, `env.ts:33-39`). |
+
+### D. Sessions / cookies
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `SESSION_TTL_HOURS` | Non (défaut `12`, max `720`) | Garder le défaut sauf décision produit | — | TTL absolu, sessions **utilisateur**. |
+| `ADMIN_SESSION_TTL_HOURS` | Non (défaut `2`, max `24`) | Garder le défaut | — | TTL dédié session **super admin** (5.2). |
+| `SESSION_COOKIE_DOMAIN` | Oui si dashboard et API sur des sous-domaines distincts — **point dur** | `.<À-CHOISIR>` (point de tête, ex. `.factelec.fr`) | — | Absent = cookie scopé à l'hôte courant (rompt le partage cross-subdomain dashboard↔API). |
+
+### E. Redis / BullMQ
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `REDIS_HOST` | Oui | `<HÔTE-REDIS>` (endpoint managé Scaleway) | — | Défaut `localhost` (dev). |
+| `REDIS_PORT` | Non (défaut `6379`) | Selon l'offre managée | — | — |
+| `REDIS_DB` | Non (défaut `0`) | `0` (voir §5, limite cluster) | — | `SELECT n`. |
+| `REDIS_PASSWORD` | Oui | — | Secret manager (fourni par Scaleway à la création) | Absent = aucune auth (dev seulement). |
+| `REDIS_TLS` | Oui | `true` | — | Parsé explicitement (`"true"`/`"1"` seuls) — **jamais** `z.coerce.boolean` (§5). |
+
+### F. Génération / réconciliation
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `GENERATION_JOB_ATTEMPTS` | Non (défaut `3`, max `10`) | Garder le défaut | — | Avant passage en `failed`. |
+| `SESSION_PURGE_EVERY_MS` | Non (défaut `3600000` = 1 h) | Garder le défaut | — | Purge des sessions expirées. |
+| `RECONCILIATION_STALE_MS` | Non (défaut `300000` = 5 min) | Garder le défaut | — | Factures `received` orphelines. |
+| `RECONCILIATION_SWEEP_EVERY_MS` | Non (défaut `60000` = 1 min) | Garder le défaut | — | Périodicité du balayage. |
+| `RECONCILIATION_GENERATING_STALE_MS` | Non (défaut `900000` = 15 min) | Garder le défaut | — | Factures `generating` bloquées (crash worker). |
+| `GENERATION_MAX_ATTEMPTS_CAP` | Non (défaut `5`, max `50`) | Garder le défaut | — | Cap avant DLQ (facture poison). |
+
+### G. Archivage WORM
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `ARCHIVE_DRIVER` | Oui | `local` — **`s3` fait planter le process, non fourni** (§6) | — | `archive.module.ts:19-21`. |
+| `ARCHIVE_LOCAL_DIR` | Oui si driver `local` en prod | Chemin sur **volume persistant** monté (§6) | — | Défaut `./var/archive`. |
+| `ARCHIVE_RETRY_EVERY_MS` | Non (défaut `300000` = 5 min) | Garder le défaut | — | Reprise `archive_status='failed'`. |
+
+### H. Routage destinataire
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `ROUTING_RETRY_EVERY_MS` | Non (défaut `300000` = 5 min) | Garder le défaut | — | Reprise `routing_status` `pending`/`unaddressable`. |
+
+### I. E-reporting Flux 10
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `EREPORTING_TRANSMISSION_DRIVER` | Oui | `local` — `sftp`/`as2`/`as4`/`api` **activés au déploiement, non fournis** (`ereporting-transmission.module.ts:31-33`) | — | Préparé, activation différée. |
+| `EREPORTING_LOCAL_DIR` | Oui si driver `local` | Volume persistant | — | Défaut `./var/ereporting`. |
+| `EREPORTING_PA_ID` | Oui — `<ITEM-XAVIER>` | Matricule réel de la PA (post-immatriculation DGFiP) | Dossier d'immatriculation | Défaut `'PA00'` placeholder. Miroir attendu = `CDV_PA_MATRICULE` (env.ts:234-236). |
+| `EREPORTING_PA_SCHEME_ID` | Non | `0238` (défaut, schéma SIRENE) | — | À confirmer avec la DGFiP si le schéma diffère (README.md:1098-1100 — cas voisin `'9999'`). |
+| `EREPORTING_PA_NAME` | Oui | Raison sociale réelle de la PA | — | Défaut `'Factelec PA'` placeholder. |
+| `EREPORTING_SWEEP_EVERY_MS` | Non (défaut `3600000` = 1 h) | Garder le défaut | — | Ordonnanceur e-reporting. |
+| `EREPORTING_GENERATION_JOB_ATTEMPTS` | Non (défaut `3`, max `10`) | Garder le défaut | — | Distingue erreur opérationnelle (xmllint absent) du rejet sémantique. |
+
+### J. Paiements (déclarées, non consommées)
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `PAYMENTS_SWEEP_EVERY_MS` | Non | Garder le défaut | — | **Non consommée** — le sweep paiements tourne sur `EREPORTING_SWEEP_EVERY_MS` (`env.ts:148-158`). |
+| `PAYMENTS_LOOKBACK_MS` | Non | Garder le défaut | — | **Non consommée** — fenêtre réelle = `computeDuePaymentPeriods`/`MAX_DUE_PERIODS` (`period.ts`). |
+
+### K. Annuaire Flux 13/14
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `ANNUAIRE_DRIVER` | Oui | `local` — `api`/`edi` **activés au déploiement, non fournis** (`annuaire-transport.module.ts:25-27`) | — | Préparé, activation différée (API PISTE-OAuth2 / EDI SFTP-AS2-AS4). |
+| `ANNUAIRE_LOCAL_DIR` | Oui si driver `local` | Volume persistant | — | Défaut `./var/annuaire`. |
+| `ANNUAIRE_SYNC_EVERY_MS` | Non (défaut `86400000` = 24 h) | Garder le défaut | — | Synchro différentielle. |
+| `ANNUAIRE_COMPLETE_EVERY_MS` | Non (défaut `604800000` = 7 j) | Garder le défaut | — | Synchro complète. |
+| `ANNUAIRE_PUBLISH_JOB_ATTEMPTS` | Non (défaut `3`) | Garder le défaut | — | File `annuaire-sync`. |
+| `ANNUAIRE_REPUBLISH_SWEEP_EVERY_MS` | Non (défaut `300000` = 5 min) | Garder le défaut | — | Reprise drafts figés. |
+
+### L. Consentement annuaire
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `CONSENT_DRIVER` | Oui | `local` — `eidas` **activé au déploiement, non fourni** (`consent-signature.module.ts:32-34`) | — | Scellement structurel seul (pas de vérification cryptographique). |
+| `CONSENT_LOCAL_DIR` | Oui si driver `local` | Volume persistant | — | Défaut `./var/consent`. |
+
+### M. CDV Flux 6
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `CDV_TRANSMISSION_DRIVER` | Oui | `local` — `sftp`/`as2`/`as4`/`as4-peppol`/`api` **activés au déploiement, non fournis** (`cdv-transmission.module.ts:31-33`) | — | Préparé, activation différée (adhésion OpenPeppol = item Xavier pour `as4-peppol`). |
+| `CDV_LOCAL_DIR` | Oui si driver `local` | Volume persistant | — | Défaut `./var/cdv`. |
+| `CDV_SWEEP_EVERY_MS` | Non (défaut `3600000` = 1 h) | Garder le défaut | — | Ordonnanceur 24 h. |
+| `CDV_TRANSMISSION_LOOKBACK_MS` | Non (défaut `172800000` = 48 h) | Garder le défaut | — | Fenêtre de rattrapage. |
+| `CDV_TRANSMISSION_JOB_ATTEMPTS` | Non (défaut `3`, max `10`) | Garder le défaut | — | Erreur opérationnelle vs rejet fonctionnel. |
+| `CDV_STUCK_RETRY_EVERY_MS` | Non (défaut `300000` = 5 min) | Garder le défaut | — | Reprise `parked`. |
+| `CDV_PA_MATRICULE` | Oui — `<ITEM-XAVIER>` | Matricule ICD 0238 réel du PA (miroir `EREPORTING_PA_ID`) | Dossier d'immatriculation | Défaut `'0000'` placeholder. |
+
+### N. Billing Stripe
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `BILLING_DRIVER` | Oui | `stripe` (voir §8) | — | `none` = 100 % fonctionnel sans Stripe ; `stripe` exige les 4 clés `STRIPE_*` ci-dessous, throw fail-fast sinon (`billing-port.module.ts:33`). |
+| `BILLING_ENFORCEMENT` | Décision commerciale explicite | `off` jusqu'à décision go-live commercial, puis `on` | — | Découplé du driver ; `none` neutralise le garde même à `on`. |
+| `STRIPE_SECRET_KEY` | Oui si driver `stripe` | `<CLÉ-LIVE-STRIPE-sk_live_...>` | Dashboard Stripe (mode live) → secret manager | Jamais `sk_test_...` en prod. |
+| `STRIPE_WEBHOOK_SECRET` | Oui si driver `stripe` | `<whsec_...-LIVE>` | Dashboard Stripe (endpoint webhook live, §8) | **Pas** `stripe listen` (dev only). |
+| `STRIPE_PRICE_BASE` | Oui si driver `stripe` | ID `price_...` imprimé par `billing:bootstrap` (§8) | Sortie du script `billing:bootstrap` | — |
+| `STRIPE_PRICE_METERED` | Oui si driver `stripe` | ID `price_...` imprimé par `billing:bootstrap` (§8) | Sortie du script `billing:bootstrap` | — |
+| `BILLING_DASHBOARD_URL` | Oui si driver `stripe` | `https://<dashboard.À-CHOISIR>` | — | Défaut `http://localhost:3001` (dev) — `success_url`/`cancel_url`/`return_url` Stripe. |
+| `BILLING_USAGE_EVERY_MS` | Non (défaut `3600000` = 1 h) | Garder le défaut | — | Sweep de report d'usage métré. |
+| `BILLING_USAGE_LOOKBACK_DAYS` | Non (défaut `3`, max `30`) | Garder le défaut | — | **En jours**, pas en ms (seule exception du fichier). |
+
+### O. Observabilité
+
+| Clé | Obligatoire prod | Valeur recommandée | Source du secret | Note |
+| --- | --- | --- | --- | --- |
+| `METRICS_TOKEN` | Recommandé (optionnelle au schéma) | `<GÉNÉRÉ-32-CHARS>` (min. 16 imposé par le schéma) | Secret manager | Absente = `/metrics` répond **404** (opt-in explicite, aucune métrique exposée par défaut). |
+
+### Points durs — synthèse
+
+- **`TRUST_PROXY`** : à positionner au nombre **exact** de sauts de proxy
+  Scaleway devant l'API. Une valeur trop haute permet un spoofing d'IP côté
+  rate limiting (`main.ts:35-44`) — à valider en conditions réelles, pas
+  déductible du code seul.
+- **`SESSION_COOKIE_DOMAIN`** : requis dès que dashboard (`apps/web`) et API
+  sont sur des sous-domaines distincts (`credentials: true` côté CORS,
+  `main.ts:32`) — sinon le cookie de session ne sera pas partagé.
+- **`CORS_ALLOWED_ORIGINS`** : doit contenir l'origine exacte du dashboard
+  prod, sinon `apps/web` ne peut plus appeler l'API (bloqué par le
+  middleware CORS avant même l'authentification).
+- **3 URLs base de données, jamais confondues** : `DATABASE_URL` (rôle
+  `factelec_app`, process API), `DATABASE_URL_WORKER` (rôle
+  `factelec_worker`, process worker), `DATABASE_OWNER_URL` (rôle
+  `factelec_owner`, scripts de migration/provisioning **uniquement**,
+  **jamais** dans l'environnement d'un container en service).
+- **Le process worker a besoin des DEUX `DATABASE_URL*`** — piège non
+  documenté ailleurs, trouvé au code : `WorkerModule` importe
+  `AppConfigModule` (`worker.module.ts:57`), qui valide l'**intégralité** du
+  schéma `envSchema` — y compris `DATABASE_URL`, requis (`z.url()`, pas
+  `.optional()`, `env.ts:23`). Un container worker démarré avec **seulement**
+  `DATABASE_URL_WORKER` échoue au bootstrap (« Invalid environment
+  configuration: DATABASE_URL »), **avant même** que `DbModule.forRoot`
+  (qui, lui, ne lit que `DATABASE_URL_WORKER`, `db.module.ts:36`) ne soit
+  atteint. Positionner les **deux** clés sur le container worker (même
+  valeur `DATABASE_URL` que celle de l'API — elle n'est jamais utilisée pour
+  se connecter côté worker, seulement validée au format).
+- **Drivers `local` vs réels** : `ARCHIVE_DRIVER`, `EREPORTING_TRANSMISSION_DRIVER`,
+  `ANNUAIRE_DRIVER`, `CONSENT_DRIVER`, `CDV_TRANSMISSION_DRIVER` valent tous
+  `local` à ce jour en production — les 5 alternatives réelles (S3
+  object-lock, SFTP/AS2/AS4/API, PISTE-OAuth2/EDI, eIDAS, AS4-Peppol) sont
+  **activées au déploiement**, chacune fait planter le process concerné au
+  démarrage si sélectionnée sans adaptateur (vérifié module par module,
+  §6 et tableaux G/I/K/L/M ci-dessus).
+- **`EREPORTING_PA_ID`/`CDV_PA_MATRICULE`** : les deux doivent porter le
+  **même** matricule réel une fois l'immatriculation DGFiP obtenue (item
+  Xavier) — placeholders `'PA00'`/`'0000'` à ne jamais laisser en prod.
+
 ## 8. Billing Stripe
 
+**BUT** : basculer sur un compte Stripe **live** et provisionner le
+catalogue produit.
+
+**COMMANDE** — 1. bootstrap du catalogue (idempotent par `lookup_key`,
+`apps/api/scripts/billing-bootstrap.ts:61-123`, ne modifie jamais un objet
+existant) :
+
+```bash
+STRIPE_SECRET_KEY='sk_live_...' pnpm --filter @factelec/api billing:bootstrap
+```
+
+**Garde du script** (`billing-bootstrap.ts:132-141`) : si la clé **ne**
+commence **pas** par `sk_test_` — c'est-à-dire précisément le cas d'une clé
+`sk_live_...` en production — le script affiche un **avertissement non
+bloquant** (« pensé pour la sandbox... poursuite malgré tout ») puis
+continue. **Ce warning est attendu en production**, il n'indique aucune
+erreur.
+
+2. Copier les 2 IDs imprimés (`STRIPE_PRICE_BASE=...`,
+   `STRIPE_PRICE_METERED=...`) dans le secret manager.
+3. Créer l'endpoint webhook dans le dashboard Stripe (mode live) :
+   `https://api.<À-CHOISIR>/billing/webhook` — **pas** `stripe listen`
+   (outil dev uniquement) — copier le `whsec_...` généré dans
+   `STRIPE_WEBHOOK_SECRET`.
+4. Positionner `BILLING_DRIVER=stripe` — la sélection du driver est **figée
+   au bootstrap du process**, jamais réévaluée à chaud (`README.md:3002-3004`).
+5. `BILLING_ENFORCEMENT` : décision commerciale explicite, séparée du
+   driver (défaut `off` — le garde journalise sans jamais bloquer tant que
+   non activé, `env.ts:243-246`).
+
+**VÉRIFICATION** : `stripe.billing.meters.list()`/`stripe.prices.list()`
+côté dashboard Stripe montrent `factelec_base`/`factelec_metered` ; un
+événement de test envoyé depuis le dashboard Stripe vers l'endpoint webhook
+prod répond `200` (visible dans les logs de livraison Stripe) — le
+compteur Prometheus `billing_webhook_events_total{outcome}` (§10)
+s'incrémente en conséquence.
+
+**PIÈGES/ROLLBACK** : le webhook accepte `POST /billing/webhook` **sans**
+guard session/CSRF — authenticité garantie **uniquement** par la signature
+HMAC (`stripe-signature` + `rawBody`, `README.md:2832`) : une divergence de
+`STRIPE_WEBHOOK_SECRET` entre Stripe et l'API fait échouer silencieusement
+**tous** les événements en 400 (`rawBody`/signature invalides) — vérifier ce
+secret en priorité si `billing_webhook_events_total` reste plat après un
+événement de test. `BILLING_ENFORCEMENT=on` prématuré bloque
+(402) toute émission de facture pour un tenant sans abonnement actif — ne
+l'activer qu'après validation du flux Checkout/Portal.
+
 ## 9. Super admin + MFA (consigne TOFU)
+
+**BUT** : créer chaque super admin plateforme puis **enrôler son MFA TOTP
+immédiatement** — aucune fenêtre où le mot de passe est valide sans TOTP
+enrôlé.
+
+**Provisioning** — CLI **uniquement**, aucune inscription self-service
+(`provision-admin.ts:20-51`) : le mot de passe ne transite **jamais** par
+`argv` (visible via `ps`/historique shell) — lu depuis
+`PROVISION_ADMIN_PASSWORD` ou saisi en interactif.
+
+**COMMANDE** :
+
+```bash
+DATABASE_OWNER_URL='postgres://factelec_owner:<GÉNÉRÉ-32-CHARS>@<HÔTE-PG>:5432/factelec' \
+PROVISION_ADMIN_PASSWORD='<GÉNÉRÉ-32-CHARS>' \
+  pnpm --filter @factelec/api provision:admin 'admin@<À-CHOISIR>'
+```
+
+**Consigne TOFU (time-of-first-use) — pourquoi « immédiatement » n'est pas
+cosmétique** : `POST /admin/login` avec mot de passe valide mais admin **non
+enrôlé** (`totp_enabled_at IS NULL`) répond **202** `{ enrollmentRequired,
+otpauthUrl, secret }` **sans créer de session** (`README.md:3143-3146`) —
+donc le mot de passe seul ne suffit **jamais** à obtenir une session. Le
+risque réel : quiconque connaît le mot de passe (fuite du canal de
+transmission `PROVISION_ADMIN_PASSWORD`, capture d'écran, etc.) peut
+**lui-même** appeler `POST /admin/totp/confirm` et achever l'enrôlement **à
+la place de l'admin légitime** — prenant possession définitive du compte
+(nouveau secret TOTP + 10 codes de récupération connus de l'attaquant
+seul). D'où la consigne : transmettre le mot de passe et faire enrôler le
+TOTP **dans la foulée**, jamais en différé.
+
+**COMMANDE** (l'admin s'enrôle lui-même, hors session, dès le premier
+`POST /admin/login`) :
+
+```bash
+curl -s -X POST https://api.<À-CHOISIR>/admin/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@<À-CHOISIR>","password":"<MOT-DE-PASSE-ADMIN>"}'
+# → 202 { enrollmentRequired: true, otpauthUrl, secret } : scanner otpauthUrl
+# dans une app TOTP, puis confirmer :
+curl -s -X POST https://api.<À-CHOISIR>/admin/totp/confirm \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@<À-CHOISIR>","password":"<MOT-DE-PASSE-ADMIN>","totpCode":"123456"}'
+# → 200 { recoveryCodes: [...] } — les 10 codes ne sont AFFICHÉS QU'UNE FOIS,
+# à stocker immédiatement dans un coffre (jamais rejournalisés ensuite).
+```
+
+**VÉRIFICATION** :
+
+```sql
+SELECT email, totp_enabled_at IS NOT NULL AS enrolled
+FROM platform_admins WHERE email = 'admin@<À-CHOISIR>';
+```
+
+Attendu : `enrolled = t` immédiatement après la confirmation.
+
+**Runbook — codes de récupération épuisés** (`README.md:3169-3186`) :
+**aucun endpoint de régénération** (surface minimale assumée). Reset
+manuel, sous le rôle **owner** (jamais `factelec_app` — `platform_admins`
+est deny-all pour ce dernier) :
+
+```sql
+UPDATE platform_admins
+SET totp_secret = NULL, totp_enabled_at = NULL, recovery_codes = NULL
+WHERE email = 'admin@<À-CHOISIR>';
+```
+
+**PIÈGES/ROLLBACK** : le prochain `POST /admin/login` de cet admin relance
+l'enrôlement depuis zéro (**202** `enrollmentRequired`, nouveau secret,
+nouveau QR, 10 nouveaux codes à la confirmation) — exécuter ce reset
+**immédiatement** après l'avoir communiqué à l'admin légitime, même
+consigne TOFU qu'au provisioning initial (fenêtre mot-de-passe-sans-TOTP
+rouverte par le reset).
 
 ## 10. Observabilité
 
