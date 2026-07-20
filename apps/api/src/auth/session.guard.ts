@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common'
 import { ProblemType, problem } from '../common/problem.js'
+import { bindRequestLog } from '../logging/request-log.js'
 import type { SessionRequest } from './auth.types.js'
 import { SessionService } from './session.service.js'
 import { SESSION_COOKIE } from './session-token.js'
@@ -42,6 +43,10 @@ export class SessionGuard implements CanActivate {
         csrfHash: subject.csrfHash,
       }
       req.tenantId = subject.tenantId
+      // Corrélation logs (Task 9, spec §6) : session UTILISATEUR → tenantId.
+      // Le binding adminId d'une session admin est posé par AdminGuard (placé
+      // après ce garde sur /admin/*), pas ici — cf. request-log.ts.
+      bindRequestLog(req, { tenantId: subject.tenantId })
       return true
     }
     if (subject.adminId) {

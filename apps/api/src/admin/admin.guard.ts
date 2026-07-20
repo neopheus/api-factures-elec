@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import type { SessionRequest } from '../auth/auth.types.js'
 import { ProblemType, problem } from '../common/problem.js'
+import { bindRequestLog } from '../logging/request-log.js'
 
 // À placer APRÈS SessionGuard : exige une session de type admin
 // (req.authAdmin posé par SessionGuard, cf. auth/session.guard.ts).
@@ -22,6 +23,10 @@ export class AdminGuard implements CanActivate {
         }),
       )
     }
+    // Corrélation logs (Task 9, spec §6) : session ADMIN → adminId (le
+    // binding tenantId d'une session utilisateur est posé par SessionGuard,
+    // pas ici — cf. request-log.ts).
+    bindRequestLog(req, { adminId: req.authAdmin.adminId })
     return true
   }
 }

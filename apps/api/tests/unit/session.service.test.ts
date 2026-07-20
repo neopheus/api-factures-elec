@@ -68,6 +68,24 @@ describe('SessionService', () => {
     ])
   })
 
+  // Task 7 (spec §5/§8) : TTL par-création — session admin (ADMIN_SESSION_TTL_HOURS,
+  // 2h par défaut) au lieu du TTL standard (SESSION_TTL_HOURS, 12h ici).
+  it('create() honors an explicit ttlMs override instead of SESSION_TTL_HOURS', async () => {
+    query.mockResolvedValue({ rows: [] })
+    const adminTtlMs = 2 * 3_600_000
+
+    const before = Date.now()
+    const issued = await service.create({ adminId: 'admin-1' }, adminTtlMs)
+    const after = Date.now()
+
+    expect(issued.expiresAt.getTime()).toBeGreaterThanOrEqual(
+      before + adminTtlMs,
+    )
+    expect(issued.expiresAt.getTime()).toBeLessThanOrEqual(after + adminTtlMs)
+    // Bien le TTL admin (2h), PAS le TTL standard configuré (12h ici).
+    expect(issued.expiresAt.getTime()).toBeLessThan(before + service.ttlMs())
+  })
+
   it('find() returns null when find_session has no row (unknown token)', async () => {
     query.mockResolvedValue({ rows: [] })
 

@@ -22,6 +22,11 @@ const HEAVY_TESTS = [
   'tests/e2e/invoice-routing.e2e.test.ts',
   'tests/e2e/routing-retry.e2e.test.ts',
   'tests/e2e/billing-usage.e2e.test.ts',
+  // Task 5 (phase 5 it.2, spec §3) : relance admin des jobs échoués — démarre
+  // un VRAI worker BullMQ (generator stub qui throw) + Redis + Postgres,
+  // même profil lourd que les 12 suites ci-dessus (verrou HEAVY_TESTS posé
+  // DANS LE MÊME COMMIT que le fichier, motif brief Task 5).
+  'tests/e2e/admin-jobs-retry.e2e.test.ts',
 ]
 
 export default defineConfig({

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common'
 import type { Request } from 'express'
 import { ProblemType, problem } from '../common/problem.js'
+import { bindRequestLog } from '../logging/request-log.js'
 import { ApiKeyService } from './api-key.service.js'
 import type { WithApiKeyId } from './auth.types.js'
 
@@ -45,6 +46,8 @@ export class ApiKeyGuard implements CanActivate {
     }
     req.tenantId = auth.tenantId
     req.apiKeyId = auth.apiKeyId
+    // Corrélation logs (Task 9, spec §6) : cf. request-log.ts.
+    bindRequestLog(req, { tenantId: auth.tenantId })
     return true
   }
 }

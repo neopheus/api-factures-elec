@@ -1,7 +1,8 @@
 # `@factelec/web`
 
-Dashboard marchand (factures, clés API) + espace super admin minimal (liste des
-tenants). Next.js 16 **App Router**, ESM, TypeScript strict — SPA cliente
+Dashboard marchand (factures, clés API) + espace super admin (supervision des
+tenants, suspension motivée, relance de jobs, anomalies, login MFA TOTP —
+phase 5 it.2). Next.js 16 **App Router**, ESM, TypeScript strict — SPA cliente
 authentifiée consommant `@factelec/api` via `fetch`.
 
 ## Stack pinnée
@@ -79,8 +80,13 @@ des routes générées (`.next/types`).
 
 ## Limites v1
 
-- **Super admin minimal** : liste des tenants uniquement — pas
-  d'impersonation tracée, pas de MFA, pas d'audit trail (**phase 5**).
+- **Super admin** (phase 5 it.2) : supervision (liste enrichie, détail
+  per-tenant, suspension/réactivation motivée), relance des jobs échoués,
+  vue anomalies, login **MFA TOTP** (enrôlement forcé, codes de récupération
+  affichés une fois) — voir `apps/api/README.md` § Supervision admin, MFA
+  TOTP & observabilité pour le détail des contrats API consommés. Restent
+  différés : **impersonation tracée**, **audit trail consultable côté UI**
+  (le journal `admin_actions` existe côté base, non exposé par une page).
 - **Pas de SSR/RSC** pour les données métier : SPA cliente authentifiée, tout
   le rendu passe par `fetch` côté client après résolution de la session.
 - **Pas de création de facture via l'UI** : l'ingestion (`POST /invoices`)

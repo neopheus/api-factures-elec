@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common'
 import type { Response } from 'express'
 import { z } from 'zod'
+import { SuspensionGuard } from '../admin/suspension.guard.js'
 import { CsrfGuard } from '../auth/csrf.guard.js'
 import { CurrentTenant } from '../auth/current-tenant.decorator.js'
 import { Roles, RolesGuard } from '../auth/roles.guard.js'
@@ -97,10 +98,19 @@ export class EreportingController {
   // d'ÉMISSION) si l'abonnement du tenant n'est pas valide. N'affecte pas le
   // verrou d'architecture dual-auth (`dual-auth-composition.arch.test.ts`) :
   // celui-ci exige TenantAuthGuard/RolesGuard/CsrfGuard, PAS une liste
-  // fermée — un 4e garde ajouté après reste conforme.
+  // fermée — un 4e (ou 5e) garde ajouté après reste conforme.
+  // SuspensionGuard (Task 4, phase 5 it.2, spec §4) ENCORE APRÈS BillingGuard
+  // : même motif que invoices.controller.ts#ingest — bloque en 403 (jamais
+  // 402) si l'opérateur a suspendu le tenant, sans aucune échappatoire de
+  // configuration (cf. commentaire de classe SuspensionGuard).
   @Post('retransmissions')
   @HttpCode(202)
-  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard, BillingGuard)
+  // biome-ignore format: @UseGuards doit rester sur UNE SEULE ligne source —
+  // dual-auth-composition.arch.test.ts scanne les décorateurs ligne par
+  // ligne (accumulation de lignes commençant par `@`) ; un retour à la ligne
+  // à l'intérieur de `@UseGuards(...)` casse la capture et fait disparaître
+  // cette route de la liste des routes dual-auth conformes détectées.
+  @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard, BillingGuard, SuspensionGuard)
   @Roles('owner', 'admin', 'accountant')
   async retransmit(
     @CurrentTenant() tenantId: string,

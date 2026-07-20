@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common'
+import { AdminModule } from '../admin/admin.module.js'
 import { AnnuaireModule } from '../annuaire/annuaire.module.js'
 import { AuthModule } from '../auth/auth.module.js'
 import { RolesGuard } from '../auth/roles.guard.js'
@@ -30,6 +31,11 @@ import { RecipientRoutingService } from './recipient-routing.service.js'
 // `BillingModule` (Task 8) : requis pour résoudre `BillingGuard`, posé sur
 // `@Post()` (dépôt facture) — `BillingModule` l'exporte déjà, aucun cycle
 // (il n'importe ni `InvoicesModule` ni ses imports, grep vérifié).
+// `AdminModule` (Task 4, phase 5 it.2) : requis pour résoudre
+// `SuspensionGuard`, posé APRÈS `BillingGuard` sur `@Post()` — `AdminModule`
+// l'exporte déjà (motif BillingModule/BillingGuard). Aucun cycle : il
+// n'importe que `UsersModule` (grep vérifié), jamais `InvoicesModule` ni ses
+// imports.
 @Module({
   imports: [
     AuthModule,
@@ -37,6 +43,7 @@ import { RecipientRoutingService } from './recipient-routing.service.js'
     QueueModule,
     AnnuaireModule,
     BillingModule,
+    AdminModule,
   ],
   controllers: [InvoicesController],
   providers: [

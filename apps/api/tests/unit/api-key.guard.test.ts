@@ -75,6 +75,26 @@ describe('ApiKeyGuard', () => {
     expect(req.apiKeyId).toBe('key-1')
   })
 
+  it('corrélation logs (Task 9, spec §6) : req.log rebindé sur req.log.child({ tenantId })', async () => {
+    authenticate.mockResolvedValue({ apiKeyId: 'key-1', tenantId: 'tenant-1' })
+    const { ctx, req } = mockContext('Bearer fk_x.y')
+    const bound = { child: vi.fn() } as unknown as TenantRequest['log']
+    const child = vi.fn().mockReturnValue(bound)
+    req.log = { child } as unknown as TenantRequest['log']
+
+    await guard.canActivate(ctx)
+
+    expect(child).toHaveBeenCalledWith({ tenantId: 'tenant-1' })
+    expect(req.log).toBe(bound)
+  })
+
+  it('req.log ABSENT (tests unit sans pino) → garde défensive, canActivate ne throw pas', async () => {
+    authenticate.mockResolvedValue({ apiKeyId: 'key-1', tenantId: 'tenant-1' })
+    const { ctx } = mockContext('Bearer fk_x.y')
+
+    await expect(guard.canActivate(ctx)).resolves.toBe(true)
+  })
+
   it.each(['bearer', 'BEARER', 'BeArEr'])(
     'accepts the scheme case-insensitively (RFC 7235): "%s fk_x.y"',
     async (scheme) => {

@@ -2,7 +2,6 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { InvoiceDetail } from '../../src/components/invoice-detail.js'
 import { RequireAuth } from '../../src/components/require-auth.js'
-import { TenantsTable } from '../../src/components/tenants-table.js'
 import { SessionProvider } from '../../src/lib/session-context.js'
 
 const replace = vi.fn()
@@ -16,7 +15,6 @@ vi.mock('../../src/lib/client.js', () => ({
     formatUrl: (id: string, k: string) =>
       `http://api/invoices/${id}/formats/${k}`,
   },
-  adminApi: { tenants: vi.fn() },
   authApi: { me: vi.fn(), logout: vi.fn() },
 }))
 const client = await import('../../src/lib/client.js')
@@ -67,28 +65,6 @@ describe('InvoiceDetail', () => {
       await screen.findByRole('heading', { name: 'FA-10' }),
     ).toBeInTheDocument()
     expect(screen.queryAllByRole('link')).toHaveLength(0)
-  })
-})
-
-describe('TenantsTable', () => {
-  it('lists tenants for an admin', async () => {
-    vi.mocked(client.adminApi.tenants).mockResolvedValue([
-      {
-        id: 't1',
-        name: 'Shop A',
-        siren: null,
-        createdAt: 'x',
-        userCount: 2,
-        invoiceCount: 5,
-      },
-    ])
-    render(<TenantsTable />)
-    expect(await screen.findByText('Shop A')).toBeInTheDocument()
-  })
-  it('shows an error when access is denied', async () => {
-    vi.mocked(client.adminApi.tenants).mockRejectedValue(new Error('403'))
-    render(<TenantsTable />)
-    expect(await screen.findByRole('alert')).toHaveTextContent(/refusé/i)
   })
 })
 

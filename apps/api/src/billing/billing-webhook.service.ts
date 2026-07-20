@@ -1,4 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
+import { Counter } from 'prom-client'
+import { MetricsService } from '../metrics/metrics.service.js'
 import {
   BILLING_PORT,
   type BillingPort,
@@ -31,11 +33,35 @@ export interface BillingWebhookResult {
 @Injectable()
 export class BillingWebhookService {
   private readonly logger = new Logger(BillingWebhookService.name)
+  // Compteur d'observabilité (Task 9, spec §6) — `undefined` si sa création
+  // échoue (motif BillingGuard.denialCounter) : ne doit JAMAIS rendre le
+  // traitement du webhook Stripe inopérant pour une raison d'observabilité.
+  private readonly eventsCounter: Counter<'outcome'> | undefined
 
   constructor(
     @Inject(BILLING_PORT) private readonly port: BillingPort,
     private readonly repo: BillingRepository,
-  ) {}
+    @Inject(MetricsService) metrics: MetricsService,
+  ) {
+    try {
+      this.eventsCounter = new Counter({
+        name: 'billing_webhook_events_total',
+        help: 'Nombre d’événements webhook Stripe traités, par issue',
+        labelNames: ['outcome'],
+        registers: [metrics.registry],
+      })
+    } catch (err) {
+      this.logger.warn(
+        `compteur billing_webhook_events_total indisponible, traitement non affecté : ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    }
+  }
+
+  private record(outcome: BillingWebhookFailureReason | 'handled'): void {
+    this.eventsCounter?.inc({ outcome })
+  }
 
   async handle(raw: Buffer, signature: string): Promise<BillingWebhookResult> {
     let evt: BillingWebhookEvent
@@ -43,6 +69,7 @@ export class BillingWebhookService {
       evt = this.port.constructWebhookEvent(raw, signature)
     } catch (err) {
       if (err instanceof BillingSignatureError) {
+        this.record('signature')
         return { handled: false, reason: 'signature' }
       }
       throw err
@@ -50,6 +77,7 @@ export class BillingWebhookService {
 
     if (evt.customerId === null) {
       this.logger.warn('billing webhook: événement sans customerId — ignoré')
+      this.record('unknown-customer')
       return { handled: false, reason: 'unknown-customer' }
     }
 
@@ -58,6 +86,7 @@ export class BillingWebhookService {
       this.logger.warn(
         `billing webhook: customer Stripe inconnu (${evt.customerId}) — événement ignoré`,
       )
+      this.record('unknown-customer')
       return { handled: false, reason: 'unknown-customer' }
     }
 
@@ -65,6 +94,7 @@ export class BillingWebhookService {
     // délibérément, `applyEvent` ne doit JAMAIS être appelé avec un statut
     // null (garde défensive dupliquée côté BillingRepository.applyEvent).
     if (evt.status === null) {
+      this.record('no-status')
       return { handled: false, reason: 'no-status' }
     }
 
@@ -74,8 +104,10 @@ export class BillingWebhookService {
       // (plus ancien que le dernier appliqué) : idempotence côté émetteur,
       // 200 quand même — Stripe ne doit jamais retenter indéfiniment un
       // événement qu'on a déjà vu passer.
+      this.record('stale')
       return { handled: false, reason: 'stale' }
     }
+    this.record('handled')
     return { handled: true }
   }
 }

@@ -1,0 +1,21 @@
+-- Task 9 (phase 5 it.2, spec §6) : healthcheck enrichi — HealthController
+-- compare le nombre de migrations APPLIQUÉES (`drizzle.__drizzle_migrations`,
+-- table meta créée par le runtime `migrate()` de drizzle-orm — jamais par une
+-- migration applicative) au nombre de fichiers du journal, exposé en
+-- `migrations.ok` (booléen seul, spec §6 : aucune version/hash exposée).
+--
+-- `drizzle.__drizzle_migrations` est créée par le RÔLE OWNER (celui qui
+-- exécute `migrate()`, cf. scripts/migrate.ts et tests/e2e/helpers/
+-- postgres.ts) — AUCUN grant implicite n'existe par défaut vers
+-- `factelec_app` (le pool applicatif, APP_POOL, interrogé par
+-- HealthController) sur un schéma/table appartenant à un AUTRE rôle. Sans ce
+-- grant, `SELECT count(*) FROM drizzle.__drizzle_migrations` échouerait en
+-- « permission denied » et `migrations.ok` resterait FAUX en permanence,
+-- même sur un déploiement parfaitement à jour.
+--
+-- SELECT seul (jamais INSERT/UPDATE/DELETE) : factelec_app ne doit JAMAIS
+-- pouvoir altérer le journal de migrations, motif payments/admin_actions
+-- (append-only et moindre privilège systématiques dans ce projet).
+GRANT USAGE ON SCHEMA drizzle TO factelec_app;
+--> statement-breakpoint
+GRANT SELECT ON drizzle.__drizzle_migrations TO factelec_app;

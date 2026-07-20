@@ -7,9 +7,11 @@ import {
   Logger,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
+import { Counter } from 'prom-client'
 import type { TenantRequest } from '../auth/api-key.guard.js'
 import { ProblemType, problem } from '../common/problem.js'
 import type { EnvConfig } from '../config/env.js'
+import { MetricsService } from '../metrics/metrics.service.js'
 import type { BillingSubscriptionStatus } from './billing.port.js'
 import { BillingRepository } from './billing.repository.js'
 
@@ -37,8 +39,15 @@ export class BillingGuard implements CanActivate {
   private readonly logger = new Logger(BillingGuard.name)
   private readonly driver: EnvConfig['BILLING_DRIVER']
   private readonly enforcement: EnvConfig['BILLING_ENFORCEMENT']
+  // Compteur d'observabilité (Task 9, spec §6) — `undefined` si sa création
+  // échoue (nom déjà enregistré sur ce registre : structurellement
+  // impossible en usage normal, un seul BillingGuard par process, mais ne
+  // doit JAMAIS rendre le garde lui-même inopérant). Créé UNE FOIS au
+  // constructeur, jamais recréé par requête : `.inc()` au point d'usage est
+  // alors une opération prom-client sans label, qui ne peut plus throw.
+  private readonly denialCounter: Counter | undefined
 
-  // @Inject() explicite sur les deux dépendances (motif ApiKeyGuard/
+  // @Inject() explicite sur les dépendances (motif ApiKeyGuard/
   // TenantAuthGuard, auth/api-key.guard.ts, auth/tenant-auth.guard.ts) :
   // sans lui, SWC émet pour chaque paramètre de type classe un ternaire
   // design:paramtypes (`typeof X !== 'undefined' ? X : Object`) dont la
@@ -47,9 +56,23 @@ export class BillingGuard implements CanActivate {
   constructor(
     @Inject(BillingRepository) private readonly billing: BillingRepository,
     @Inject(ConfigService) config: ConfigService<EnvConfig, true>,
+    @Inject(MetricsService) metrics: MetricsService,
   ) {
     this.driver = config.get('BILLING_DRIVER', { infer: true })
     this.enforcement = config.get('BILLING_ENFORCEMENT', { infer: true })
+    try {
+      this.denialCounter = new Counter({
+        name: 'billing_guard_denials_total',
+        help: 'Nombre de requêtes bloquées par BillingGuard (402, enforcement on)',
+        registers: [metrics.registry],
+      })
+    } catch (err) {
+      this.logger.warn(
+        `compteur billing_guard_denials_total indisponible, garde non affecté : ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    }
   }
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -86,6 +109,7 @@ export class BillingGuard implements CanActivate {
       return true
     }
 
+    this.denialCounter?.inc()
     throw new HttpException(
       problem(402, ProblemType.paymentRequired, 'Subscription required'),
       402,

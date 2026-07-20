@@ -8,6 +8,8 @@ import { EreportingGenerationQueue } from './ereporting-generation.queue.js'
 import { invoiceGenerationJobOptions } from './invoice-generation.job-options.js'
 import { InvoiceGenerationQueue } from './invoice-generation.queue.js'
 import {
+  ANNUAIRE_SYNC_QUEUE,
+  CDV_TRANSMISSION_QUEUE,
   EREPORTING_GENERATION_QUEUE,
   INVOICE_GENERATION_QUEUE,
   MAINTENANCE_QUEUE,
@@ -101,6 +103,17 @@ import {
         defaultJobOptions: ereportingGenerationJobOptions(config),
       }),
     }),
+    // `annuaire-sync` / `cdv-transmission` (Task 5, phase 5 it.2, spec §3) :
+    // l'API n'est PRODUCTEUR d'aucune des deux (seul le worker enfile ET
+    // consomme, cf. worker-queue.module.ts) — enregistrées ICI en simple
+    // lecture/relance SEULEMENT, pour `AdminJobsService`
+    // (POST /admin/jobs/:queue/retry, allowlist = queue.constants.ts). Pas
+    // de `defaultJobOptions` : l'admin ne fait jamais `queue.add(...)` sur
+    // ces deux files depuis l'API, seulement `getFailed`/`job.retry()`, qui
+    // réutilisent les options DÉJÀ posées sur le job par son producteur
+    // d'origine (le worker) — aucune politique à dupliquer ici.
+    BullModule.registerQueue({ name: ANNUAIRE_SYNC_QUEUE }),
+    BullModule.registerQueue({ name: CDV_TRANSMISSION_QUEUE }),
   ],
   providers: [InvoiceGenerationQueue, EreportingGenerationQueue],
   exports: [BullModule, InvoiceGenerationQueue, EreportingGenerationQueue],

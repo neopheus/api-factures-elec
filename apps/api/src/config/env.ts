@@ -40,6 +40,16 @@ export const envSchema = z.object({
   // Durée de vie ABSOLUE de la session (aucun renouvellement glissant à la
   // lecture) : cf. session.service.ts / session.guard.ts.
   SESSION_TTL_HOURS: z.coerce.number().int().positive().max(720).default(12),
+  // TTL DÉDIÉ de la session super admin (phase 5 it.2, dette 1.4 soldée) :
+  // volontairement plus court que SESSION_TTL_HOURS (surface d'exposition
+  // réduite d'un compte à privilèges élevés) — borne max 24h (vs 720h côté
+  // marchand).
+  ADMIN_SESSION_TTL_HOURS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(24)
+    .default(2),
   // Domaine du cookie de session (ex: `.factelec.fr` en prod, pour partager le
   // cookie entre le dashboard et l'API sur des sous-domaines). Absent en dev.
   SESSION_COOKIE_DOMAIN: z.string().optional(),
@@ -259,6 +269,12 @@ export const envSchema = z.object({
     .positive()
     .max(30)
     .default(3),
+  // ── Observabilité Prometheus (phase 5 it.2) ──────────────────────────────
+  // Bearer attendu sur `Authorization` pour le scrape `GET /metrics`.
+  // Absente de l'env → l'endpoint répond 404 (opt-in explicite : pas de
+  // métriques exposées tant qu'aucun token n'est configuré, motif absence
+  // de secret par défaut plutôt qu'un défaut faible).
+  METRICS_TOKEN: z.string().min(16).optional(),
 })
 
 export type EnvConfig = z.infer<typeof envSchema>

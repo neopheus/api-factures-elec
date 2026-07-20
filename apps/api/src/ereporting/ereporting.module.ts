@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common'
+import { AdminModule } from '../admin/admin.module.js'
 import { AuthModule } from '../auth/auth.module.js'
 import { RolesGuard } from '../auth/roles.guard.js'
 import { TenantAuthGuard } from '../auth/tenant-auth.guard.js'
@@ -26,8 +27,11 @@ import { EreportingStatusService } from './ereporting-status.service.js'
 // `BillingModule` (Task 8) : requis pour résoudre `BillingGuard`, posé sur
 // `@Post('retransmissions')` — `BillingModule` l'exporte déjà, aucun cycle
 // (il n'importe ni `EreportingModule` ni ses imports, grep vérifié).
+// `AdminModule` (Task 4, phase 5 it.2) : requis pour résoudre
+// `SuspensionGuard`, posé APRÈS `BillingGuard` sur la même route — motif
+// exact ci-dessus, aucun cycle (AdminModule n'importe que `UsersModule`).
 @Module({
-  imports: [AuthModule, UsersModule, QueueModule, BillingModule],
+  imports: [AuthModule, UsersModule, QueueModule, BillingModule, AdminModule],
   controllers: [EreportingController],
   providers: [
     EreportingRepository,

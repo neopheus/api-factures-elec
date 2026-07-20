@@ -1,13 +1,10 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { InjectQueue } from '@nestjs/bullmq'
-import { Controller, Get, Inject } from '@nestjs/common'
-// biome-ignore lint/style/useImportType: HealthCheckService résolu par Nest via design:paramtypes.
-import {
-  HealthCheck,
-  HealthCheckError,
-  HealthCheckService,
-} from '@nestjs/terminus'
+import { Controller, Get, Inject, Logger, Res } from '@nestjs/common'
 import { SkipThrottle } from '@nestjs/throttler'
 import type { Queue } from 'bullmq'
+import type { Response } from 'express'
 import type pg from 'pg'
 import { APP_POOL } from '../db/client.js'
 import { INVOICE_GENERATION_QUEUE } from '../queue/queue.constants.js'
@@ -25,15 +22,42 @@ import { INVOICE_GENERATION_QUEUE } from '../queue/queue.constants.js'
 // (utile aux enfilements réels, Task 2+) n'est pas modifiée.
 const REDIS_PING_TIMEOUT_MS = 2_000
 
-// Même borne pour le check DB : le pool `pg` (`db/client.ts#createPool`) ne
-// pose aucun `connectionTimeoutMillis` (utile aux connexions applicatives
-// normales, qui ne doivent pas expirer sous charge) — contre un hôte
-// injoignable qui NE REFUSE PAS la connexion (paquets silencieusement
-// perdus, plutôt qu'un ECONNREFUSED immédiat), le handshake TCP peut se
-// bloquer plusieurs dizaines de secondes avant que le noyau n'abandonne.
-// Même motif que REDIS_PING_TIMEOUT_MS ci-dessus : borner uniquement la
-// RÉPONSE de la sonde, jamais la politique de connexion du pool partagé.
+// Même borne pour les checks DB (SELECT 1 ET comptage des migrations) : le
+// pool `pg` (`db/client.ts#createPool`) ne pose aucun `connectionTimeoutMillis`
+// (utile aux connexions applicatives normales, qui ne doivent pas expirer
+// sous charge) — contre un hôte injoignable qui NE REFUSE PAS la connexion
+// (paquets silencieusement perdus, plutôt qu'un ECONNREFUSED immédiat), le
+// handshake TCP peut se bloquer plusieurs dizaines de secondes avant que le
+// noyau n'abandonne. Même motif que REDIS_PING_TIMEOUT_MS ci-dessus : borner
+// uniquement la RÉPONSE de la sonde, jamais la politique de connexion du pool
+// partagé.
 const DB_PING_TIMEOUT_MS = 2_000
+
+// Journal drizzle-kit (nombre de migrations ATTENDUES) — résolu relativement
+// à CE fichier : `src/health/` et `dist/health/` (swc --out-dir dist
+// --strip-leading-paths, cf. package.json `build`, qui copie ÉGALEMENT
+// `src/db/migrations` vers `dist/db/migrations` pour préserver ce même
+// miroir 1:1) sont à la MÊME profondeur sous `src/db/migrations/meta/` que
+// leur pendant `dist/` — donc le même nombre de remontées `..` résout le
+// même chemin en dev (tsx, depuis src/), en test (vitest+swc, depuis src/)
+// ET en prod (depuis dist/). Motif ereporting-xsd-validator.ts (même
+// résolution `import.meta.dirname` + mirroring src/dist).
+const JOURNAL_PATH = resolve(
+  import.meta.dirname,
+  '../db/migrations/meta/_journal.json',
+)
+
+interface ComponentStatus {
+  ok: boolean
+  latencyMs: number
+}
+
+interface ReadinessBody {
+  status: 'ok' | 'degraded'
+  db: ComponentStatus
+  redis: ComponentStatus
+  migrations: { ok: boolean }
+}
 
 // Les probes liveness/readiness sont interrogées par l'orchestrateur
 // (Kubernetes, ELB, etc.) à haute fréquence et ne doivent JAMAIS être
@@ -42,115 +66,149 @@ const DB_PING_TIMEOUT_MS = 2_000
 @SkipThrottle()
 @Controller('health')
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name)
+
+  // Nombre de migrations ATTENDUES (entrées du journal drizzle-kit), lu UNE
+  // FOIS au démarrage (motif BillingGuard/MetricsController : config figée,
+  // jamais réévaluée par requête) — le journal est un artefact de build
+  // IMMUABLE, le relire à chaque requête serait un accès disque inutile sur
+  // une sonde interrogée en boucle. Un journal illisible/absent est un
+  // défaut de PACKAGING (dist non aligné avec src) — on préfère planter tôt
+  // au démarrage (motif SessionPurgeScheduler : « échouer tôt ») plutôt que
+  // de faire tourner un healthcheck structurellement incapable de répondre
+  // juste.
+  private readonly expectedMigrationsCount: number
+
   constructor(
-    private readonly health: HealthCheckService,
     @Inject(APP_POOL) private readonly pool: pg.Pool,
     @InjectQueue(INVOICE_GENERATION_QUEUE) private readonly queue: Queue,
-  ) {}
+  ) {
+    const journal = JSON.parse(readFileSync(JOURNAL_PATH, 'utf8')) as {
+      entries: unknown[]
+    }
+    this.expectedMigrationsCount = journal.entries.length
+  }
 
   @Get()
   liveness(): { status: 'ok' } {
     return { status: 'ok' }
   }
 
+  // Healthcheck enrichi (Task 9, spec §6) : réponse PUBLIQUE bornée — statuts
+  // booléens + latences SEULEMENT, jamais un message d'erreur brut (pas de
+  // fuite de détail interne). Un composant down → HTTP 503 + status
+  // 'degraded', les AUTRES champs restent renseignés (contrat DIFFÉRENT de
+  // l'ancienne implémentation terminus, qui reformattait tout rejet en
+  // application/problem+json générique via ProblemDetailsFilter, masquant la
+  // structure enrichie). Le corps de réponse est donc écrit directement via
+  // `@Res()` (motif MetricsController.scrape) plutôt que par une exception —
+  // aucune exception n'est levée ici, JAMAIS.
   @Get('ready')
-  @HealthCheck()
-  readiness() {
-    return this.health.check([
-      async () => {
-        // IMPORTANT (mandat contrôleur, Task 1 → dette explicitement
-        // reportée à Task 7) : terminus ne convertit en 503 QUE les rejets
-        // qui sont des `HealthCheckError` — tout autre type d'erreur est
-        // RE-LANCÉE telle quelle et finit en 500 via le filtre d'exception
-        // global (cf. le commentaire détaillé sur le check Redis
-        // ci-dessous, même mécanisme, vérifié empiriquement à l'identique
-        // pour Postgres : un pool injoignable rejette une erreur `pg`
-        // brute — jamais une `HealthCheckError` — donc SANS ce try/catch,
-        // `/health/ready` répondait 500 au lieu de 503 quand la DB est
-        // down). Même borne de temps que le ping Redis : cf.
-        // DB_PING_TIMEOUT_MS ci-dessus.
-        let timer: ReturnType<typeof setTimeout> | undefined
-        try {
-          const queryPromise = this.pool.query('SELECT 1')
-          // Absorbe un rejet tardif si la requête perd la course ci-dessous
-          // (connexion qui échoue seulement après le timeout) : sans ce
-          // `.catch`, ce serait un rejet non géré au niveau du process —
-          // même motif que `pingPromise.catch` sur le check Redis.
-          queryPromise.catch(() => undefined)
-          const timeout = new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error('database query timeout')),
-              DB_PING_TIMEOUT_MS,
-            )
-          })
-          await Promise.race([queryPromise, timeout])
-          return { database: { status: 'up' } }
-        } catch (err) {
-          const message =
-            err instanceof Error ? err.message : 'database check failed'
-          throw new HealthCheckError('database check failed', {
-            database: { status: 'down', message },
-          })
-        } finally {
-          if (timer) clearTimeout(timer)
-        }
-      },
-      async () => {
-        // queue.client est une Promise<RedisClient> (= IRedisClient, façade
-        // BullMQ 5.80.2 devant ioredis/node-redis/Bun). `ping` n'est PAS
-        // déclarée sur cette interface adapter (seules les commandes que
-        // BullMQ utilise en interne le sont) mais reste forwardée telle
-        // quelle par le proxy vers le client ioredis réel sous-jacent
-        // (cf. createIORedisClient) : l'assertion ci-dessous ne change donc
-        // rien à l'exécution, elle ne fait que combler ce trou de typage.
-        // Ping échoue (ou dépasse REDIS_PING_TIMEOUT_MS) → HealthCheckError →
-        // terminus marque `redis` down → 503.
-        //
-        // IMPORTANT : terminus (`HealthCheckExecutor.executeHealthIndicators`,
-        // @nestjs/terminus 11.1.1) ne traite QUE les rejets qui sont des
-        // `HealthCheckError` comme un échec « down » normal (503) — tout
-        // autre type d'erreur rejetée est explicitement RE-LANCÉE telle
-        // quelle (« Is not an expected error. Throw further! », lu aux
-        // sources) et finit en 500 via le filtre d'exception global. Vérifié
-        // empiriquement : un simple `throw new Error(...)` produisait bien
-        // 500, pas 503.
-        const client = await this.queue.client
-        const pingPromise = (
-          client as unknown as { ping(): Promise<string> }
-        ).ping()
-        // Absorbe un rejet tardif si le ping perd la course ci-dessous et
-        // échoue seulement après coup (retry ioredis en arrière-plan) : sans
-        // ce `.catch`, ce serait un rejet non géré au niveau du process.
-        pingPromise.catch(() => undefined)
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('redis ping timeout')),
-            REDIS_PING_TIMEOUT_MS,
-          )
-        })
-        try {
-          const pong = await Promise.race([pingPromise, timeout])
-          if (pong !== 'PONG') {
-            throw new HealthCheckError('redis check failed', {
-              redis: {
-                status: 'down',
-                message: 'unexpected redis ping response',
-              },
-            })
-          }
-          return { redis: { status: 'up' } }
-        } catch (err) {
-          if (err instanceof HealthCheckError) throw err
-          const message =
-            err instanceof Error ? err.message : 'redis check failed'
-          throw new HealthCheckError('redis check failed', {
-            redis: { status: 'down', message },
-          })
-        } finally {
-          if (timer) clearTimeout(timer)
-        }
-      },
+  async readiness(@Res() res: Response): Promise<void> {
+    const [db, redis, migrations] = await Promise.all([
+      this.checkDb(),
+      this.checkRedis(),
+      this.checkMigrations(),
     ])
+    const healthy = db.ok && redis.ok && migrations.ok
+    const body: ReadinessBody = {
+      status: healthy ? 'ok' : 'degraded',
+      db,
+      redis,
+      migrations,
+    }
+    res.status(healthy ? 200 : 503).json(body)
+  }
+
+  private async checkDb(): Promise<ComponentStatus> {
+    const start = performance.now()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const queryPromise = this.pool.query('SELECT 1')
+      // Absorbe un rejet tardif si la requête perd la course ci-dessous
+      // (connexion qui échoue seulement après le timeout) : sans ce
+      // `.catch`, ce serait un rejet non géré au niveau du process.
+      queryPromise.catch(() => undefined)
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('database query timeout')),
+          DB_PING_TIMEOUT_MS,
+        )
+      })
+      await Promise.race([queryPromise, timeout])
+      return { ok: true, latencyMs: Math.round(performance.now() - start) }
+    } catch (err) {
+      this.logger.warn(
+        `healthcheck DB en échec : ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return { ok: false, latencyMs: Math.round(performance.now() - start) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private async checkRedis(): Promise<ComponentStatus> {
+    const start = performance.now()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      // queue.client est une Promise<RedisClient> (= IRedisClient, façade
+      // BullMQ 5.80.9 devant ioredis/node-redis/Bun). `ping` n'est PAS
+      // déclarée sur cette interface adapter (seules les commandes que
+      // BullMQ utilise en interne le sont) mais reste forwardée telle quelle
+      // par le proxy vers le client ioredis réel sous-jacent — l'assertion
+      // ci-dessous ne change donc rien à l'exécution, elle ne fait que
+      // combler ce trou de typage.
+      const client = await this.queue.client
+      const pingPromise = (
+        client as unknown as { ping(): Promise<string> }
+      ).ping()
+      // Absorbe un rejet tardif (retry ioredis en arrière-plan) : même motif
+      // que checkDb ci-dessus.
+      pingPromise.catch(() => undefined)
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('redis ping timeout')),
+          REDIS_PING_TIMEOUT_MS,
+        )
+      })
+      const pong = await Promise.race([pingPromise, timeout])
+      return {
+        ok: pong === 'PONG',
+        latencyMs: Math.round(performance.now() - start),
+      }
+    } catch (err) {
+      this.logger.warn(
+        `healthcheck Redis en échec : ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return { ok: false, latencyMs: Math.round(performance.now() - start) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private async checkMigrations(): Promise<{ ok: boolean }> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const queryPromise = this.pool.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations',
+      )
+      queryPromise.catch(() => undefined)
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('migrations count query timeout')),
+          DB_PING_TIMEOUT_MS,
+        )
+      })
+      const result = await Promise.race([queryPromise, timeout])
+      const applied = Number(result.rows[0]?.count)
+      return { ok: applied === this.expectedMigrationsCount }
+    } catch (err) {
+      this.logger.warn(
+        `healthcheck migrations en échec : ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return { ok: false }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 }
