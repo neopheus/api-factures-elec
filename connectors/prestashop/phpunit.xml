@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         failOnWarning="true"
+         failOnDeprecation="true">
+    <testsuites>
+        <testsuite name="Factelec PrestaShop connector">
+            <!-- Ne couvre QUE tests/ (suffixe *Test.php par défaut) : les
+                 stubs PS de tests/stubs/ ne sont jamais exécutés comme des
+                 tests, seulement chargés via le classmap Composer. -->
+            <directory>tests</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <!-- factelec.php (glue PS) est volontairement HORS périmètre de
+                 couverture : non testé unitairement (documenté dans le
+                 brief), seule la logique pure de src/ est mesurée. -->
+            <directory>factelec/src</directory>
+        </include>
+    </source>
+</phpunit>

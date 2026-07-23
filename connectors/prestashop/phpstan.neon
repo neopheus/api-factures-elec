@@ -1,0 +1,15 @@
+parameters:
+    # Niveau max (8) sur la logique pure UNIQUEMENT (src/) — factelec.php est
+    # de la glue PrestaShop non analysée ici (dépend de classes coeur PS
+    # réelles — Module, Configuration, Db, Tools — non installées en CI ;
+    # seuls des stubs de test minimaux existent, cf. tests/stubs/, et le
+    # brief documente explicitement ce fichier comme non testé/analysé).
+    level: 8
+    paths:
+        - factelec/src
+    # Vérifie la compatibilité du LANGAGE avec le plancher réel du module
+    # (PHP 8.1, cf. composer.json "require") même si l'outillage CI tourne
+    # sous PHP 8.2 (contrainte de phpunit ^11, qui exige php >=8.2 — voir le
+    # commentaire de .github/workflows/ci-php.yml). Garantit qu'aucune
+    # syntaxe exclusive à 8.2+ ne s'introduit silencieusement dans src/.
+    phpVersion: 80100

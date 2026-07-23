@@ -930,6 +930,48 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       aux adaptateurs réels.
       Détail complet : `apps/api/README.md` § Révocation de consentement —
       3.6.
+- [x] **4.1 — API publique OpenAPI + connecteur PrestaShop v1** (terminé) :
+      premier axe orienté **intégrateurs tiers** (phase 4 — Connecteurs).
+      **Documentation API publique** : `GET /openapi.json` (OpenAPI 3.1,
+      sans authentification, décorateurs `@nestjs/swagger` scannant
+      EXPLICITEMENT le seul périmètre clé-API — santé + factures, `include`
+      explicite, jamais de deep-scan transitif ; 2 routes du même
+      contrôleur exclues malgré l'`include` : statut CDV en écriture
+      session-only, résolution de routage opérateur) verrouillé par un test
+      qui prouve l'absence des routes admin/session/webhook ;
+      `docs/api-publique.md` (obtention de clé, cycle
+      dépôt→génération→statuts, erreurs problem-details, limites de débit).
+      **`@factelec/connectors-sdk`** (nouveau paquet, contrat réutilisable
+      par tout connecteur) : mapping commande→facture (types TS + JSON
+      Schema 2020-12), 3 fixtures partagées (B2B SIREN, B2C, multi-taux
+      TVA) validées à la fois contre le schéma **et** contre l'API réelle
+      (e2e `POST /invoices` → 201). **Connecteur PrestaShop 8.x v1**
+      (`connectors/prestashop/`, PHP 8.1+, module zip
+      `factelec-prestashop-<version>.zip`, **premier code PHP du
+      monorepo**) : configuration BO (URL, clé API jamais réaffichée en
+      clair, identité vendeur, état déclencheur), client HTTP cURL natif
+      (TLS obligatoire hors localhost, **zéro dépendance runtime**),
+      mapping conforme au contrat sdk (SIREN acheteur si SIRET B2B
+      disponible, sinon B2C sans SIREN), émission automatique à la
+      validation de commande avec **idempotence stricte** (contrainte
+      `id_order` unique, jamais de double dépôt), panne réseau/API →
+      `pending_retry` tracé (jamais perdu silencieusement, catch `Throwable`
+      pas seulement les erreurs API) + renvoi manuel BO, suivi de statut à
+      la demande (cycle de vie CDV, liens de téléchargement des formats).
+      Qualité : phpstan niveau 8, php-cs-fixer PSR-12, PHPUnit sur la
+      logique pure (mapping/client/idempotence/suivi — glue PS documentée
+      comme non testée), CI GitHub dédiée (job gates PHP 8.2 + job lint de
+      syntaxe sous PHP 8.1 réel, plancher de compatibilité du module).
+      **Limites v1 explicites** : PrestaShop 8.x uniquement (pas 1.6/1.7),
+      pas de cron (renvoi manuel seulement), pas d'avoirs/rectificatives
+      (création manuelle dashboard), `vatCategory` simplifiée S/E (PS ne
+      modélise pas la distinction EN 16931 zéro-taux/exonéré/hors-champ),
+      `dueDate`/`businessProcessType` non mappés, `unitCode` fixe `C62`, clé
+      API stockée en configuration PrestaShop native (pas de coffre dédié).
+      **Différé** : WooCommerce (it.2), Shopify (it.3), publication
+      marketplaces, webhooks sortants Factelec→boutique (poll uniquement
+      en v1), avoirs déclenchés depuis la boutique. Détail complet :
+      `connectors/prestashop/README.md`.
 - [x] **5.1 — Billing Stripe (abonnement + usage, garde d'émission)**
       (terminé, itération 1) : premier axe de la **phase 5 (Commercialisation)**
       — modèle self-service, plan unique + volume métré, 100 % hébergé Stripe

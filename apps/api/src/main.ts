@@ -7,6 +7,7 @@ import { Logger } from 'nestjs-pino'
 import { AppModule } from './app.module.js'
 import { ProblemDetailsFilter } from './common/http-exception.filter.js'
 import type { EnvConfig } from './config/env.js'
+import { setupPublicOpenApi } from './openapi/openapi.setup.js'
 
 async function bootstrap(): Promise<void> {
   // `rawBody: true` : nécessaire au webhook Stripe (BillingWebhookController,
@@ -44,6 +45,11 @@ async function bootstrap(): Promise<void> {
   }
   app.useGlobalFilters(new ProblemDetailsFilter())
   app.enableShutdownHooks() // SIGTERM/SIGINT → onModuleDestroy (fermeture du pool DB, Task 5)
+  // Doc OpenAPI 3.1 du périmètre PUBLIC clé-API (phase 4 it.1, spec §2) :
+  // JSON seul, sans UI, `GET /openapi.json` — cf. openapi/openapi.setup.ts
+  // pour la liste explicite des modules inclus et la justification des
+  // exclusions.
+  setupPublicOpenApi(app)
 
   await app.listen(config.get('PORT', { infer: true }))
 }

@@ -5,6 +5,7 @@ import helmet from 'helmet'
 import { AppModule } from '../../../src/app.module.js'
 import { ProblemDetailsFilter } from '../../../src/common/http-exception.filter.js'
 import { APP_POOL, createPool } from '../../../src/db/client.js'
+import { setupPublicOpenApi } from '../../../src/openapi/openapi.setup.js'
 import { REDIS_CONNECTION } from '../../../src/queue/redis-connection.module.js'
 
 // supertest, quand on lui passe un http.Server NON-écoutant, fait un
@@ -81,6 +82,10 @@ export async function createTestApp(
   app.use(cookieParser())
   app.useGlobalFilters(new ProblemDetailsFilter())
   app.enableShutdownHooks()
+  // Motif main.ts : le harnais e2e monte l'app complète manuellement (pas
+  // bootstrap()) — la doc OpenAPI publique doit donc être posée ICI aussi
+  // pour que `GET /openapi.json` soit exerçable en e2e (openapi.e2e.test.ts).
+  setupPublicOpenApi(app)
   await app.init()
   await listenOnce(app)
   return app

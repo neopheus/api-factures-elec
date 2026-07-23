@@ -1,0 +1,41 @@
+{
+  "number": "PSHOP-B2B-0001",
+  "issueDate": "2026-07-23",
+  "dueDate": "2026-08-22",
+  "typeCode": "380",
+  "currency": "EUR",
+  "businessProcessType": "S1",
+  "seller": {
+    "name": "Ma Boutique SAS",
+    "siren": "552100554",
+    "vatId": "FR76552100554",
+    "address": {
+      "streetName": "12 rue de la Paix",
+      "city": "Paris",
+      "postalCode": "75002",
+      "countryCode": "FR"
+    }
+  },
+  "buyer": {
+    "name": "Client Pro SARL",
+    "siren": "421959135",
+    "vatId": "FR32421959135",
+    "address": {
+      "streetName": "5 avenue Foch",
+      "city": "Lyon",
+      "postalCode": "69006",
+      "countryCode": "FR"
+    }
+  },
+  "lines": [
+    {
+      "id": "1",
+      "name": "Abonnement logiciel — 1 an",
+      "quantity": "1",
+      "unitCode": "C62",
+      "unitPrice": "480.00",
+      "vatCategory": "S",
+      "vatRate": "20.00"
+    }
+  ]
+}

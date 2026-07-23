@@ -3,6 +3,7 @@
     "includes": [
       "**",
       "!**/docs",
+      "!**/connectors",
       "!**/dist",
       "!**/.next",
       "!**/coverage",

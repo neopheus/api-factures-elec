@@ -1,6 +1,6 @@
 {
   "name": "@factelec/api",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "private": true,
   "type": "module",
   "main": "./dist/main.js",
@@ -27,6 +27,7 @@
     "@nestjs/config": "4.0.4",
     "@nestjs/core": "11.1.28",
     "@nestjs/platform-express": "11.1.28",
+    "@nestjs/swagger": "11.4.6",
     "@nestjs/throttler": "6.5.0",
     "@node-rs/argon2": "2.0.2",
     "big.js": "7.0.1",
@@ -47,6 +48,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@factelec/connectors-sdk": "workspace:*",
     "@nestjs/testing": "11.1.28",
     "@swc/cli": "0.8.1",
     "@swc/core": "1.15.46",
