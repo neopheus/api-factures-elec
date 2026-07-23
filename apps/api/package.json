@@ -48,6 +48,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@factelec/connectors-sdk": "workspace:*",
     "@nestjs/testing": "11.1.28",
     "@swc/cli": "0.8.1",
     "@swc/core": "1.15.46",
