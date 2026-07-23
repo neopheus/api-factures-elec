@@ -64,6 +64,10 @@ spl_autoload_register(static function (string $class): void {
 use FactelecWoo\Api\ConnectionTestResult;
 use FactelecWoo\Api\FactelecClient;
 use FactelecWoo\Api\WpHttpTransport;
+use FactelecWoo\Emission\InvoiceLinkRepository;
+use FactelecWoo\Emission\OrderEmissionService;
+use FactelecWoo\Emission\SubmissionResult;
+use FactelecWoo\Mapping\OrderMapper;
 
 final class Factelec_Plugin
 {
@@ -82,6 +86,13 @@ final class Factelec_Plugin
     private const SETTINGS_PAGE_SLUG = 'factelec-settings';
     private const TEST_CONNECTION_ACTION = 'factelec_test_connection';
     private const TEST_CONNECTION_NONCE = 'factelec_test_connection_nonce';
+    private const RETRY_ACTION = 'factelec_retry_pending';
+    private const RETRY_NONCE = 'factelec_retry_pending_nonce';
+
+    // Source de journalisation wc_get_logger() (design §6.2) — jamais la
+    // clé API, seulement statut HTTP/type de problème/erreur réseau (cf.
+    // FactelecApiException/WpHttpTransport, aucun des deux ne l'inclut).
+    private const LOG_SOURCE = 'factelec';
 
     // Statut de commande WooCommerce déclencheur par défaut (design §2) —
     // stocké SANS le préfixe `wc-` : woocommerce_order_status_changed livre
@@ -148,6 +159,14 @@ final class Factelec_Plugin
         add_action('admin_menu', [self::class, 'registerSettingsPage']);
         add_action('admin_init', [self::class, 'registerSettings']);
         add_action('admin_post_' . self::TEST_CONNECTION_ACTION, [self::class, 'handleTestConnection']);
+        add_action('admin_post_' . self::RETRY_ACTION, [self::class, 'handleRetryAll']);
+        // 4 arguments acceptés (order_id, old_status, new_status, order) —
+        // signature réelle du hook générique woocommerce_order_status_changed
+        // (distinct des hooks spécifiques woocommerce_order_status_{statut}).
+        // WooCommerce fournit déjà l'objet WC_Order chargé : pas de
+        // résolution supplémentaire nécessaire ici, contrairement à
+        // PrestaShop (Order/Customer/Address/lignes séparés).
+        add_action('woocommerce_order_status_changed', [self::class, 'handleOrderStatusChanged'], 10, 4);
     }
 
     public static function renderMissingWooCommerceNotice(): void
@@ -240,6 +259,7 @@ final class Factelec_Plugin
         echo '<div class="wrap"><h1>' . esc_html__('Factelec — Facturation électronique', 'factelec') . '</h1>';
 
         self::renderTestConnectionNotice();
+        self::renderRetryNotice();
 
         echo '<form method="post" action="options.php">';
         settings_fields(self::SETTINGS_GROUP);
@@ -251,6 +271,12 @@ final class Factelec_Plugin
         wp_nonce_field(self::TEST_CONNECTION_ACTION, self::TEST_CONNECTION_NONCE);
         echo '<input type="hidden" name="action" value="' . esc_attr(self::TEST_CONNECTION_ACTION) . '">';
         submit_button(esc_html__('Tester la connexion', 'factelec'), 'secondary');
+        echo '</form>';
+
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        wp_nonce_field(self::RETRY_ACTION, self::RETRY_NONCE);
+        echo '<input type="hidden" name="action" value="' . esc_attr(self::RETRY_ACTION) . '">';
+        submit_button(esc_html__('Renvoyer les factures en attente', 'factelec'), 'secondary');
         echo '</form>';
 
         echo '</div>';
@@ -396,6 +422,138 @@ final class Factelec_Plugin
         exit;
     }
 
+    /**
+     * Hook `woocommerce_order_status_changed` : émission à la transition
+     * vers le statut déclencheur configuré (défaut `processing`, design
+     * §2). Toute la décision (idempotence, mapping, appel API, statut
+     * pending_retry) est déléguée à `OrderEmissionService::submitNewOrder()`
+     * — testée à 100 %, ne lève plus JAMAIS elle-même (tout Throwable y est
+     * capturé en interne). Ce catch-ci ne couvre donc qu'un échec
+     * totalement inattendu en amont de l'appel (résolution des réglages,
+     * état WordPress corrompu...) — ne doit JAMAIS faire échouer la
+     * transition de statut de commande côté WooCommerce, mais ne doit pas
+     * non plus être avalé en silence : journalisé via `wc_get_logger()`
+     * (source « factelec »), jamais la clé API.
+     */
+    public static function handleOrderStatusChanged(int $orderId, string $oldStatus, string $newStatus, \WC_Order $order): void
+    {
+        $settings = self::getSettings();
+        $triggerStatus = (string) $settings['trigger_status'];
+        if ($triggerStatus === '' || $newStatus !== $triggerStatus) {
+            return;
+        }
+
+        try {
+            self::emissionService()->submitNewOrder($orderId, $order, self::sellerConfigFromSettings($settings));
+        } catch (\Throwable $exception) {
+            self::logger()->error(
+                sprintf('Dépôt de la commande #%d impossible : %s', $orderId, $exception->getMessage()),
+                ['source' => self::LOG_SOURCE],
+            );
+        }
+    }
+
+    /**
+     * Bouton BO « Renvoyer les factures en attente » — capability PUIS
+     * nonce (même ordre que handleTestConnection()), rejoue
+     * `OrderEmissionService::retryOrder()` pour chaque liaison
+     * `pending_retry`. Une commande introuvable/supprimée ou une erreur
+     * totalement inattendue en amont de l'appel (retryOrder() lui-même ne
+     * lève plus jamais) ne doit jamais interrompre le traitement des AUTRES
+     * liaisons — journalisée, comptabilisée en échec, jamais avalée en
+     * silence.
+     */
+    public static function handleRetryAll(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Action non autorisée.', 'factelec'), '', ['response' => 403]);
+        }
+
+        check_admin_referer(self::RETRY_ACTION, self::RETRY_NONCE);
+
+        $settings = self::getSettings();
+        $sellerConfig = self::sellerConfigFromSettings($settings);
+        $service = self::emissionService();
+
+        $succeeded = 0;
+        $failed = 0;
+        foreach ((new InvoiceLinkRepository())->findPendingRetries() as $row) {
+            $orderId = (int) $row['order_id'];
+            $order = function_exists('wc_get_order') ? wc_get_order($orderId) : false;
+
+            if (!$order instanceof \WC_Order) {
+                self::logger()->error(
+                    sprintf('Renvoi Factelec : commande #%d introuvable.', $orderId),
+                    ['source' => self::LOG_SOURCE],
+                );
+                ++$failed;
+
+                continue;
+            }
+
+            try {
+                $result = $service->retryOrder($orderId, $order, $sellerConfig);
+                if ($result->status === SubmissionResult::STATUS_SUBMITTED) {
+                    ++$succeeded;
+                } else {
+                    ++$failed;
+                }
+            } catch (\Throwable $exception) {
+                self::logger()->error(
+                    sprintf('Renvoi Factelec de la commande #%d impossible : %s', $orderId, $exception->getMessage()),
+                    ['source' => self::LOG_SOURCE],
+                );
+                ++$failed;
+            }
+        }
+
+        $redirectUrl = add_query_arg(
+            [
+                'page' => self::SETTINGS_PAGE_SLUG,
+                'factelec_retry_succeeded' => $succeeded,
+                'factelec_retry_failed' => $failed,
+            ],
+            admin_url('admin.php'),
+        );
+
+        wp_safe_redirect($redirectUrl);
+        exit;
+    }
+
+    private static function emissionService(): OrderEmissionService
+    {
+        $settings = self::getSettings();
+
+        return new OrderEmissionService(
+            new OrderMapper(),
+            new FactelecClient((string) $settings['api_url'], (string) $settings['api_key'], new WpHttpTransport()),
+            new InvoiceLinkRepository(),
+        );
+    }
+
+    /**
+     * @param array<string, string> $settings
+     * @return array{name: string, siren?: string, vatId?: string, street?: string, city?: string, postalCode?: string, countryCode: string}
+     */
+    private static function sellerConfigFromSettings(array $settings): array
+    {
+        return [
+            'name' => $settings['seller_name'],
+            'siren' => $settings['seller_siren'],
+            'vatId' => $settings['seller_vat_id'],
+            'street' => $settings['seller_street'],
+            'city' => $settings['seller_city'],
+            'postalCode' => $settings['seller_postal_code'],
+            'countryCode' => $settings['seller_country_code'],
+        ];
+    }
+
+    /** wc_get_logger() : canal de journalisation natif WooCommerce (admin > Statut > Journaux). */
+    private static function logger(): \WC_Logger_Interface
+    {
+        return wc_get_logger();
+    }
+
     private static function renderTestConnectionNotice(): void
     {
         if (!isset($_GET['factelec_test_result'])) {
@@ -411,6 +569,26 @@ final class Factelec_Plugin
         };
 
         printf('<div class="notice %1$s"><p>%2$s</p></div>', esc_attr($noticeClass), $message);
+    }
+
+    private static function renderRetryNotice(): void
+    {
+        if (!isset($_GET['factelec_retry_succeeded'], $_GET['factelec_retry_failed'])) {
+            return;
+        }
+
+        $succeeded = (int) $_GET['factelec_retry_succeeded'];
+        $failed = (int) $_GET['factelec_retry_failed'];
+
+        printf(
+            '<div class="notice notice-info"><p>%s</p></div>',
+            esc_html(sprintf(
+                /* translators: 1: nombre de factures renvoyées avec succès, 2: nombre toujours en échec */
+                __('%1$d facture(s) renvoyée(s) avec succès, %2$d toujours en échec.', 'factelec'),
+                $succeeded,
+                $failed,
+            )),
+        );
     }
 
     /**
