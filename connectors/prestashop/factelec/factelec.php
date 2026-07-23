@@ -52,6 +52,7 @@ use Factelec\Emission\InvoiceLinkRepository;
 use Factelec\Emission\OrderEmissionService;
 use Factelec\Emission\SubmissionResult;
 use Factelec\Mapping\OrderMapper;
+use Factelec\Tracking\InvoiceTrackingPresenter;
 
 class Factelec extends Module
 {
@@ -104,6 +105,14 @@ class Factelec extends Module
         if (!parent::install()
             || !$this->createInvoiceLinkTable()
             || !$this->registerHook('actionOrderStatusPostUpdate')
+            // Hook d'affichage du suivi dans le détail de commande BO (PS
+            // 1.7/8 — emplacement usuel des blocs d'information additionnels
+            // sous le panneau principal de commande). Choix non vérifié
+            // contre une instance PS réelle (aucun environnement disponible
+            // en CI, même limite documentée que pour les autres appels PS —
+            // tâches 3/4) ; `displayAdminOrderTabContent` serait une
+            // alternative si ce nom s'avérait incorrect en pratique.
+            || !$this->registerHook('displayAdminOrderMainBottom')
             || !Configuration::updateValue('FACTELEC_API_URL', '')
             || !Configuration::updateValue('FACTELEC_API_KEY', '')
             || !Configuration::updateValue(
@@ -222,6 +231,111 @@ class Factelec extends Module
                 3,
             );
         }
+    }
+
+    /**
+     * Hook PS (enregistré à install()) : bloc de suivi affiché dans le
+     * détail de commande BO — statut Factelec de la liaison + bouton
+     * « Actualiser » qui interroge `GET /invoices/:id` (statut de
+     * génération, cycle de vie CDV, formats disponibles). Toute la
+     * construction de la vue est déléguée à `InvoiceTrackingPresenter`
+     * (pure, testée à 100 %) ; ce hook ne fait que résoudre la liaison
+     * locale et, si demandé, appeler le client API — jamais testé lui-même.
+     *
+     * @param array<string, mixed> $params
+     */
+    public function hookDisplayAdminOrderMainBottom(array $params): string
+    {
+        $idOrder = (int) ($params['id_order'] ?? 0);
+        if ($idOrder <= 0) {
+            return '';
+        }
+
+        $link = (new InvoiceLinkRepository())->findByOrderId($idOrder);
+
+        $remoteStatus = null;
+        if ($link !== null && $link['invoice_id'] !== null && Tools::isSubmit('submitFactelecRefresh')) {
+            try {
+                $client = new FactelecClient(
+                    (string) Configuration::get('FACTELEC_API_URL'),
+                    (string) Configuration::get('FACTELEC_API_KEY'),
+                    new CurlTransport(),
+                );
+                $remoteStatus = $client->getInvoiceStatus($link['invoice_id']);
+            } catch (Throwable $exception) {
+                // Même motif que hookActionOrderStatusPostUpdate() : ne doit
+                // jamais faire échouer l'affichage de la page commande, mais
+                // jamais avaler l'échec en silence non plus.
+                PrestaShopLogger::addLog(
+                    sprintf(
+                        'Factelec : rafraîchissement du statut de la commande #%d impossible : %s',
+                        $idOrder,
+                        $exception->getMessage(),
+                    ),
+                    3,
+                );
+            }
+        }
+
+        $view = (new InvoiceTrackingPresenter())->present(
+            $link,
+            $remoteStatus,
+            (string) Configuration::get('FACTELEC_API_URL'),
+        );
+
+        return $this->renderTrackingView($view);
+    }
+
+    /**
+     * Rendu HTML minimal (même parti pris que getContent() : pas de
+     * HelperForm/Smarty) — voir InvoiceTrackingPresenter pour la
+     * justification du choix « URL directe + note » plutôt qu'un proxy de
+     * téléchargement pour les liens de formats.
+     *
+     * @param array{hasSubmission: bool, status: string, invoiceId: ?string, lastError: ?string, lifecycleStatus: ?string, downloadLinks: list<array{format: string, url: string}>} $view
+     */
+    private function renderTrackingView(array $view): string
+    {
+        if (!$view['hasSubmission']) {
+            return '<fieldset><legend>' . $this->l('Facturation électronique Factelec') . '</legend>'
+                . '<p>' . $this->l("Aucun dépôt Factelec pour cette commande (état déclencheur pas encore atteint).") . '</p>'
+                . '</fieldset>';
+        }
+
+        $statusLabel = match ($view['status']) {
+            InvoiceLinkRepository::STATUS_SUBMITTED => $this->l('déposée'),
+            InvoiceLinkRepository::STATUS_PENDING_RETRY => $this->l('en attente de renvoi'),
+            default => $view['status'],
+        };
+
+        $html = '<fieldset><legend>' . $this->l('Facturation électronique Factelec') . '</legend>'
+            . '<p>' . $this->l('Statut') . ' : ' . htmlspecialchars($statusLabel, ENT_QUOTES) . '</p>';
+
+        if ($view['invoiceId'] !== null) {
+            $html .= '<p>' . $this->l('Identifiant Factelec') . ' : ' . htmlspecialchars($view['invoiceId'], ENT_QUOTES) . '</p>';
+        }
+        if ($view['lastError'] !== null) {
+            $html .= '<p class="alert alert-danger">' . htmlspecialchars($view['lastError'], ENT_QUOTES) . '</p>';
+        }
+        if ($view['lifecycleStatus'] !== null) {
+            $html .= '<p>' . $this->l('Statut cycle de vie (DGFiP)') . ' : ' . htmlspecialchars($view['lifecycleStatus'], ENT_QUOTES) . '</p>';
+        }
+
+        if ($view['downloadLinks'] !== []) {
+            $html .= '<p><em>' . $this->l("Nécessite l'en-tête Authorization: Bearer <clé API> — non cliquable directement depuis un navigateur.") . '</em></p><ul>';
+            foreach ($view['downloadLinks'] as $link) {
+                $html .= '<li>' . htmlspecialchars($link['format'], ENT_QUOTES) . ' : '
+                    . '<code>' . htmlspecialchars($link['url'], ENT_QUOTES) . '</code></li>';
+            }
+            $html .= '</ul>';
+        }
+
+        if ($view['invoiceId'] !== null) {
+            $html .= '<form method="post"><button type="submit" name="submitFactelecRefresh">'
+                . $this->l('Actualiser') . '</button></form>';
+        }
+
+        return $html . '</fieldset>';
     }
 
     /**
