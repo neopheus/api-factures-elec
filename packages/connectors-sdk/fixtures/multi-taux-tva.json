@@ -1,0 +1,59 @@
+{
+  "number": "PSHOP-MULTI-0001",
+  "issueDate": "2026-07-23",
+  "dueDate": "2026-08-22",
+  "typeCode": "380",
+  "currency": "EUR",
+  "businessProcessType": "B1",
+  "seller": {
+    "name": "Ma Boutique SAS",
+    "siren": "552100554",
+    "vatId": "FR76552100554",
+    "address": {
+      "streetName": "12 rue de la Paix",
+      "city": "Paris",
+      "postalCode": "75002",
+      "countryCode": "FR"
+    }
+  },
+  "buyer": {
+    "name": "Client Pro SARL",
+    "siren": "421959135",
+    "vatId": "FR32421959135",
+    "address": {
+      "streetName": "5 avenue Foch",
+      "city": "Lyon",
+      "postalCode": "69006",
+      "countryCode": "FR"
+    }
+  },
+  "lines": [
+    {
+      "id": "1",
+      "name": "Ordinateur portable",
+      "quantity": "2",
+      "unitCode": "C62",
+      "unitPrice": "650.00",
+      "vatCategory": "S",
+      "vatRate": "20.00"
+    },
+    {
+      "id": "2",
+      "name": "Livre technique",
+      "quantity": "3",
+      "unitCode": "C62",
+      "unitPrice": "35.00",
+      "vatCategory": "S",
+      "vatRate": "5.50"
+    },
+    {
+      "id": "3",
+      "name": "Abonnement presse numérique",
+      "quantity": "1",
+      "unitCode": "C62",
+      "unitPrice": "120.00",
+      "vatCategory": "S",
+      "vatRate": "2.10"
+    }
+  ]
+}

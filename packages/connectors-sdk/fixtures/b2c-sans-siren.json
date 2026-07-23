@@ -1,0 +1,37 @@
+{
+  "number": "PSHOP-B2C-0001",
+  "issueDate": "2026-07-23",
+  "typeCode": "380",
+  "currency": "EUR",
+  "seller": {
+    "name": "Ma Boutique SAS",
+    "siren": "552100554",
+    "vatId": "FR76552100554",
+    "address": {
+      "streetName": "12 rue de la Paix",
+      "city": "Paris",
+      "postalCode": "75002",
+      "countryCode": "FR"
+    }
+  },
+  "buyer": {
+    "name": "Camille Durand",
+    "address": {
+      "streetName": "8 rue des Lilas",
+      "city": "Marseille",
+      "postalCode": "13001",
+      "countryCode": "FR"
+    }
+  },
+  "lines": [
+    {
+      "id": "1",
+      "name": "Casque audio sans fil",
+      "quantity": "1",
+      "unitCode": "C62",
+      "unitPrice": "89.90",
+      "vatCategory": "S",
+      "vatRate": "20.00"
+    }
+  ]
+}
