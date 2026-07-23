@@ -4,18 +4,19 @@ declare(strict_types=1);
 
 /**
  * Module PrestaShop Factelec — dépôt automatique de facture électronique à
- * la validation de commande (design connectors/prestashop, phase 4 it.1
- * tâche 3 : socle uniquement — hook d'émission et mapping arrivent en
- * tâche 4).
+ * la validation de commande (design connectors/prestashop, phase 4 it.1).
  *
  * GLUE PS NON TESTÉE UNITAIREMENT — décision assumée et documentée (brief
- * de la tâche) : ce fichier dépend directement des classes coeur PrestaShop
- * réelles (Module, Configuration, Db, Tools), non disponibles en CI. Des
- * stubs minimaux existent dans tests/stubs/ (seulement ce que CE fichier
- * référence) pour les tâches suivantes, mais aucun test PHPUnit n'exécute
- * factelec.php lui-même. La logique testable (client API HTTP) vit
- * exclusivement dans src/, couverte à ≥90 % avec un transport mocké — voir
- * tests/Api/.
+ * de la tâche 3, reconduite tâche 4) : ce fichier dépend directement des
+ * classes coeur PrestaShop réelles (Module, Configuration, Db, Tools,
+ * Order, Customer, Address, Currency), non disponibles en CI. Des stubs
+ * minimaux existent dans tests/stubs/ (seulement ce que CE fichier
+ * référence) pour les tests des tâches 3/4, mais aucun test PHPUnit
+ * n'exécute factelec.php lui-même. TOUTE la logique décisionnelle
+ * (mapping, idempotence, retry) vit dans src/ (Mapping/Emission), couverte
+ * à 100 % avec un transport HTTP mocké et une base en mémoire — voir
+ * tests/Mapping/ et tests/Emission/. Ce fichier se contente de résoudre les
+ * objets PS réels et de les transmettre à `OrderEmissionService`.
  */
 
 if (!defined('_PS_VERSION_')) {
@@ -47,6 +48,10 @@ spl_autoload_register(static function (string $class): void {
 use Factelec\Api\ConnectionTestResult;
 use Factelec\Api\CurlTransport;
 use Factelec\Api\FactelecClient;
+use Factelec\Emission\InvoiceLinkRepository;
+use Factelec\Emission\OrderEmissionService;
+use Factelec\Emission\SubmissionResult;
+use Factelec\Mapping\OrderMapper;
 
 class Factelec extends Module
 {
@@ -61,6 +66,20 @@ class Factelec extends Module
     // valeur par défaut à FACTELEC_TRIGGER_STATE (design §3 : "défaut
     // paiement accepté").
     private const DEFAULT_TRIGGER_STATE_CONFIG_KEY = 'PS_OS_PAYMENT';
+
+    // Identité vendeur (BG-4 "seller" du payload, design §3 tâche 4) —
+    // clé de config PS → nom de champ attendu par OrderMapper::map()
+    // ($sellerConfig). Source unique utilisée par install()/uninstall()/
+    // saveSettings()/renderForm()/resolveOrderContext().
+    private const SELLER_CONFIG_FIELDS = [
+        'FACTELEC_SELLER_NAME' => 'name',
+        'FACTELEC_SELLER_SIREN' => 'siren',
+        'FACTELEC_SELLER_VAT_ID' => 'vatId',
+        'FACTELEC_SELLER_STREET' => 'street',
+        'FACTELEC_SELLER_CITY' => 'city',
+        'FACTELEC_SELLER_POSTAL_CODE' => 'postalCode',
+        'FACTELEC_SELLER_COUNTRY_CODE' => 'countryCode',
+    ];
 
     public function __construct()
     {
@@ -82,15 +101,26 @@ class Factelec extends Module
 
     public function install(): bool
     {
-        return parent::install()
-            && $this->createInvoiceLinkTable()
-            && $this->registerHook('actionOrderStatusPostUpdate')
-            && Configuration::updateValue('FACTELEC_API_URL', '')
-            && Configuration::updateValue('FACTELEC_API_KEY', '')
-            && Configuration::updateValue(
+        if (!parent::install()
+            || !$this->createInvoiceLinkTable()
+            || !$this->registerHook('actionOrderStatusPostUpdate')
+            || !Configuration::updateValue('FACTELEC_API_URL', '')
+            || !Configuration::updateValue('FACTELEC_API_KEY', '')
+            || !Configuration::updateValue(
                 'FACTELEC_TRIGGER_STATE',
                 (int) Configuration::get(self::DEFAULT_TRIGGER_STATE_CONFIG_KEY),
-            );
+            )
+        ) {
+            return false;
+        }
+
+        foreach (array_keys(self::SELLER_CONFIG_FIELDS) as $configKey) {
+            if (!Configuration::updateValue($configKey, '')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public function uninstall(): bool
@@ -103,12 +133,21 @@ class Factelec extends Module
         $dropped = (bool) Db::getInstance()->execute(
             'DROP TABLE IF EXISTS `' . _DB_PREFIX_ . self::TABLE_NAME . '`',
         );
+        if (!$dropped) {
+            return false;
+        }
 
-        return $dropped
-            && Configuration::deleteByName('FACTELEC_API_URL')
-            && Configuration::deleteByName('FACTELEC_API_KEY')
-            && Configuration::deleteByName('FACTELEC_TRIGGER_STATE')
-            && parent::uninstall();
+        $configKeys = [
+            'FACTELEC_API_URL',
+            'FACTELEC_API_KEY',
+            'FACTELEC_TRIGGER_STATE',
+            ...array_keys(self::SELLER_CONFIG_FIELDS),
+        ];
+        foreach ($configKeys as $configKey) {
+            Configuration::deleteByName($configKey);
+        }
+
+        return parent::uninstall();
     }
 
     private function createInvoiceLinkTable(): bool
@@ -129,12 +168,96 @@ class Factelec extends Module
     }
 
     /**
+     * Hook PS (enregistré à install()) : état de commande atteignant
+     * FACTELEC_TRIGGER_STATE → dépôt de facture. Toute la décision
+     * (idempotence, mapping, appel API, statut pending_retry) est déléguée
+     * à OrderEmissionService::submitNewOrder() — testée à 100 %. Seule la
+     * résolution des objets PS réels (Order/Customer/Address/lignes/devise)
+     * a lieu ici, non testée.
+     *
+     * @param array<string, mixed> $params
+     */
+    public function hookActionOrderStatusPostUpdate(array $params): void
+    {
+        $triggerState = (int) Configuration::get('FACTELEC_TRIGGER_STATE');
+        $newStatusId = isset($params['newOrderStatus']) ? (int) $params['newOrderStatus']->id : 0;
+        if ($triggerState <= 0 || $newStatusId !== $triggerState) {
+            return;
+        }
+
+        $idOrder = (int) ($params['id_order'] ?? 0);
+        if ($idOrder <= 0) {
+            return;
+        }
+
+        try {
+            [$order, $customer, $address, $orderDetails, $currencyIsoCode, $sellerConfig] = $this->resolveOrderContext($idOrder);
+            $this->emissionService()->submitNewOrder(
+                $idOrder,
+                $order,
+                $customer,
+                $address,
+                $orderDetails,
+                $currencyIsoCode,
+                $sellerConfig,
+            );
+        } catch (Throwable) {
+            // Résolution des données commande impossible (commande/adresse/
+            // client introuvable, devise inconnue...) : ne doit JAMAIS faire
+            // échouer le changement de statut de commande côté PS. Limite
+            // connue de cette v1 — contrairement à un échec de l'API
+            // Factelec (capturé et tracé par OrderEmissionService), ce cas
+            // précis ne laisse aucune trace en base. Un échec de l'API reste
+            // lui géré normalement (pending_retry), ce catch ne couvre que
+            // la résolution PS elle-même.
+        }
+    }
+
+    /**
+     * Résout les objets PS réels d'une commande vers les entrées attendues
+     * par OrderMapper/OrderEmissionService (glue non testée — chaque appel
+     * ci-dessous est une API PrestaShop réelle standard : ObjectModel par
+     * id, Order::getOrderDetailList(), Currency::getIsoCodeById()).
+     *
+     * @return array{0: Order, 1: Customer, 2: Address, 3: list<array<string, mixed>>, 4: string, 5: array<string, mixed>}
+     */
+    private function resolveOrderContext(int $idOrder): array
+    {
+        $order = new Order($idOrder);
+        $customer = new Customer((int) $order->id_customer);
+        $address = new Address((int) $order->id_address_invoice);
+        /** @var list<array<string, mixed>> $orderDetails */
+        $orderDetails = $order->getOrderDetailList();
+        $currencyIsoCode = (string) Currency::getIsoCodeById((int) $order->id_currency);
+
+        $sellerConfig = [];
+        foreach (self::SELLER_CONFIG_FIELDS as $configKey => $payloadField) {
+            $sellerConfig[$payloadField] = (string) Configuration::get($configKey);
+        }
+
+        return [$order, $customer, $address, $orderDetails, $currencyIsoCode, $sellerConfig];
+    }
+
+    private function emissionService(): OrderEmissionService
+    {
+        return new OrderEmissionService(
+            new OrderMapper(),
+            new FactelecClient(
+                (string) Configuration::get('FACTELEC_API_URL'),
+                (string) Configuration::get('FACTELEC_API_KEY'),
+                new CurlTransport(),
+            ),
+            new InvoiceLinkRepository(),
+        );
+    }
+
+    /**
      * Formulaire de configuration BO : URL API + clé API (jamais réaffichée
      * en clair, design §4 — placeholder « configurée » si déjà présente) +
-     * état déclencheur + bouton « Tester la connexion ». Rendu HTML minimal
-     * (pas de HelperForm/Smarty) pour ne pas élargir la surface de stubs PS
-     * de ce socle — seuls Module/Configuration/Db/Tools sont référencés,
-     * comme documenté dans le brief de la tâche.
+     * état déclencheur + identité vendeur (tâche 4) + boutons « Tester la
+     * connexion » et « Renvoyer les factures en attente ». Rendu HTML
+     * minimal (pas de HelperForm/Smarty) pour ne pas élargir la surface de
+     * stubs PS de ce socle.
      */
     public function getContent(): string
     {
@@ -144,6 +267,8 @@ class Factelec extends Module
             $output .= $this->renderTestConnectionResult();
         } elseif (Tools::isSubmit('submitFactelecSettings')) {
             $output .= $this->saveSettings();
+        } elseif (Tools::isSubmit('submitFactelecRetry')) {
+            $output .= $this->retryPendingInvoices();
         }
 
         return $output . $this->renderForm();
@@ -165,7 +290,53 @@ class Factelec extends Module
         }
         Configuration::updateValue('FACTELEC_TRIGGER_STATE', $triggerState);
 
+        // Identité vendeur : rien de secret ici (contrairement à la clé
+        // API), un champ vide efface donc simplement la valeur enregistrée.
+        foreach (array_keys(self::SELLER_CONFIG_FIELDS) as $configKey) {
+            Configuration::updateValue($configKey, (string) Tools::getValue($configKey));
+        }
+
         return '<div class="alert alert-success">' . $this->l('Configuration enregistrée.') . '</div>';
+    }
+
+    private function retryPendingInvoices(): string
+    {
+        $pending = (new InvoiceLinkRepository())->findPendingRetries();
+        if ($pending === []) {
+            return '<div class="alert alert-info">' . $this->l('Aucune facture en attente de renvoi.') . '</div>';
+        }
+
+        $service = $this->emissionService();
+        $succeeded = 0;
+        $failed = 0;
+        foreach ($pending as $row) {
+            $idOrder = (int) $row['id_order'];
+            try {
+                [$order, $customer, $address, $orderDetails, $currencyIsoCode, $sellerConfig] = $this->resolveOrderContext($idOrder);
+                $result = $service->retryOrder(
+                    $idOrder,
+                    $order,
+                    $customer,
+                    $address,
+                    $orderDetails,
+                    $currencyIsoCode,
+                    $sellerConfig,
+                );
+                if ($result->status === SubmissionResult::STATUS_SUBMITTED) {
+                    ++$succeeded;
+                } else {
+                    ++$failed;
+                }
+            } catch (Throwable) {
+                ++$failed;
+            }
+        }
+
+        return '<div class="alert alert-info">' . sprintf(
+            $this->l('%d facture(s) renvoyée(s) avec succès, %d toujours en échec.'),
+            $succeeded,
+            $failed,
+        ) . '</div>';
     }
 
     private function renderTestConnectionResult(): string
@@ -205,6 +376,14 @@ class Factelec extends Module
 
         $formAction = htmlspecialchars((string) ($_SERVER['REQUEST_URI'] ?? ''), ENT_QUOTES);
 
+        $sellerFieldsHtml = '';
+        foreach (array_keys(self::SELLER_CONFIG_FIELDS) as $configKey) {
+            $value = (string) Configuration::get($configKey);
+            $sellerFieldsHtml .= '<p><label>' . htmlspecialchars($this->sellerFieldLabel($configKey), ENT_QUOTES) . '</label>'
+                . '<input type="text" name="' . htmlspecialchars($configKey, ENT_QUOTES) . '" value="'
+                . htmlspecialchars($value, ENT_QUOTES) . '"></p>';
+        }
+
         return '
         <form action="' . $formAction . '" method="post">
             <fieldset>
@@ -221,9 +400,28 @@ class Factelec extends Module
                     <label>' . $this->l('État de commande déclencheur') . '</label>
                     <input type="number" name="FACTELEC_TRIGGER_STATE" value="' . $triggerState . '">
                 </p>
-                <button type="submit" name="submitFactelecSettings">' . $this->l('Enregistrer') . '</button>
-                <button type="submit" name="submitFactelecTest">' . $this->l('Tester la connexion') . '</button>
             </fieldset>
+            <fieldset>
+                <legend>' . $this->l('Identité vendeur (figure sur chaque facture émise)') . '</legend>
+                ' . $sellerFieldsHtml . '
+            </fieldset>
+            <button type="submit" name="submitFactelecSettings">' . $this->l('Enregistrer') . '</button>
+            <button type="submit" name="submitFactelecTest">' . $this->l('Tester la connexion') . '</button>
+            <button type="submit" name="submitFactelecRetry">' . $this->l('Renvoyer les factures en attente') . '</button>
         </form>';
+    }
+
+    private function sellerFieldLabel(string $configKey): string
+    {
+        return match ($configKey) {
+            'FACTELEC_SELLER_NAME' => $this->l('Raison sociale'),
+            'FACTELEC_SELLER_SIREN' => $this->l('SIREN'),
+            'FACTELEC_SELLER_VAT_ID' => $this->l('Numéro de TVA intracommunautaire'),
+            'FACTELEC_SELLER_STREET' => $this->l('Adresse'),
+            'FACTELEC_SELLER_CITY' => $this->l('Ville'),
+            'FACTELEC_SELLER_POSTAL_CODE' => $this->l('Code postal'),
+            'FACTELEC_SELLER_COUNTRY_CODE' => $this->l('Code pays (ISO 3166-1 alpha-2, ex. FR)'),
+            default => $configKey,
+        };
     }
 }
