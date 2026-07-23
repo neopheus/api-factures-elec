@@ -2,12 +2,20 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { InjectQueue } from '@nestjs/bullmq'
 import { Controller, Get, Inject, Logger, Res } from '@nestjs/common'
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { SkipThrottle } from '@nestjs/throttler'
 import type { Queue } from 'bullmq'
 import type { Response } from 'express'
 import type pg from 'pg'
 import { APP_POOL } from '../db/client.js'
 import { INVOICE_GENERATION_QUEUE } from '../queue/queue.constants.js'
+import {
+  LIVENESS_OPERATION,
+  LIVENESS_RESPONSE,
+  READINESS_DEGRADED_RESPONSE,
+  READINESS_OPERATION,
+  READINESS_RESPONSE,
+} from './health.openapi-metadata.js'
 
 // Borne le ping Redis de la sonde readiness. Vérifié empiriquement : la
 // stratégie de reconnexion ioredis posée par BullMQ (cf. queue.module.ts,
@@ -64,6 +72,7 @@ interface ReadinessBody {
 // soumises au rate limiting global (`ThrottlerGuard`, `APP_GUARD`) : un 429
 // sur `/health` ferait passer un service sain pour indisponible.
 @SkipThrottle()
+@ApiTags('Santé')
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name)
@@ -90,6 +99,8 @@ export class HealthController {
   }
 
   @Get()
+  @ApiOperation(LIVENESS_OPERATION)
+  @ApiResponse(LIVENESS_RESPONSE)
   liveness(): { status: 'ok' } {
     return { status: 'ok' }
   }
@@ -104,6 +115,9 @@ export class HealthController {
   // `@Res()` (motif MetricsController.scrape) plutôt que par une exception —
   // aucune exception n'est levée ici, JAMAIS.
   @Get('ready')
+  @ApiOperation(READINESS_OPERATION)
+  @ApiResponse(READINESS_RESPONSE)
+  @ApiResponse(READINESS_DEGRADED_RESPONSE)
   async readiness(@Res() res: Response): Promise<void> {
     const [db, redis, migrations] = await Promise.all([
       this.checkDb(),

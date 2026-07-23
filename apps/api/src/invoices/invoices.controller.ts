@@ -10,6 +10,16 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common'
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiExcludeEndpoint,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger'
 import type { Response } from 'express'
 import { z } from 'zod'
 import { SuspensionGuard } from '../admin/suspension.guard.js'
@@ -26,6 +36,30 @@ import { ProblemType, problem } from '../common/problem.js'
 import { parseBody, parseQuery } from '../common/validation.js'
 import { routingStatus as routingStatusEnum } from '../db/schema.js'
 import { parseFormatKind } from './format-kind.js'
+import {
+  FORMAT_PARAM,
+  GET_FORMAT_OPERATION,
+  GET_FORMAT_RESPONSE,
+  GET_OPERATION,
+  GET_RESPONSE,
+  GET_STATUS_OPERATION,
+  GET_STATUS_RESPONSE,
+  ID_PARAM,
+  INGEST_BODY_OPTIONS,
+  INGEST_CONFLICT_RESPONSE,
+  INGEST_CREATED_RESPONSE,
+  INGEST_OPERATION,
+  INGEST_PAYMENT_REQUIRED_RESPONSE,
+  INGEST_SUSPENDED_RESPONSE,
+  INGEST_VALIDATION_RESPONSE,
+  INVOICE_NOT_FOUND_RESPONSE,
+  LIST_CURSOR_QUERY,
+  LIST_LIMIT_QUERY,
+  LIST_OPERATION,
+  LIST_RESPONSE,
+  LIST_ROUTING_STATUS_QUERY,
+  UNAUTHORIZED_RESPONSE,
+} from './invoices.openapi-metadata.js'
 // biome-ignore lint/style/useImportType: InvoicesService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
 import { InvoicesService } from './invoices.service.js'
 // biome-ignore lint/style/useImportType: LifecycleService est résolu par Nest via design:paramtypes (pas de @Inject() explicite ici) ; un import type-only effacerait la référence runtime et casserait la DI.
@@ -48,6 +82,7 @@ const listQuerySchema = z.object({
 // exclusivement machine (ApiKeyGuard, pas de CSRF — pas de cookie côté
 // machine) ; la lecture (GET) accepte clé API OU session utilisateur du même
 // tenant (TenantAuthGuard) — jamais une session admin (refusée par ce guard).
+@ApiTags('Factures')
 @Controller('invoices')
 export class InvoicesController {
   constructor(
@@ -68,6 +103,15 @@ export class InvoicesController {
   @Post()
   @HttpCode(201)
   @UseGuards(ApiKeyGuard, BillingGuard, SuspensionGuard)
+  @ApiBearerAuth('ApiKey')
+  @ApiOperation(INGEST_OPERATION)
+  @ApiBody(INGEST_BODY_OPTIONS)
+  @ApiResponse(INGEST_CREATED_RESPONSE)
+  @ApiResponse(UNAUTHORIZED_RESPONSE)
+  @ApiResponse(INGEST_PAYMENT_REQUIRED_RESPONSE)
+  @ApiResponse(INGEST_SUSPENDED_RESPONSE)
+  @ApiResponse(INGEST_CONFLICT_RESPONSE)
+  @ApiResponse(INGEST_VALIDATION_RESPONSE)
   ingest(
     @CurrentTenant() tenantId: string,
     @Body() body: unknown,
@@ -77,6 +121,13 @@ export class InvoicesController {
 
   @Get()
   @UseGuards(TenantAuthGuard)
+  @ApiBearerAuth('ApiKey')
+  @ApiOperation(LIST_OPERATION)
+  @ApiQuery(LIST_LIMIT_QUERY)
+  @ApiQuery(LIST_CURSOR_QUERY)
+  @ApiQuery(LIST_ROUTING_STATUS_QUERY)
+  @ApiResponse(LIST_RESPONSE)
+  @ApiResponse(UNAUTHORIZED_RESPONSE)
   list(
     @CurrentTenant() tenantId: string,
     @Query('limit') limit?: string,
@@ -93,6 +144,12 @@ export class InvoicesController {
 
   @Get(':id')
   @UseGuards(TenantAuthGuard)
+  @ApiBearerAuth('ApiKey')
+  @ApiOperation(GET_OPERATION)
+  @ApiParam(ID_PARAM)
+  @ApiResponse(GET_RESPONSE)
+  @ApiResponse(UNAUTHORIZED_RESPONSE)
+  @ApiResponse(INVOICE_NOT_FOUND_RESPONSE)
   get(@CurrentTenant() tenantId: string, @Param('id') id: string) {
     return this.invoices.get(tenantId, id)
   }
@@ -103,6 +160,13 @@ export class InvoicesController {
   // sans conflit avec :id (segment supplémentaire).
   @Get(':id/formats/:format')
   @UseGuards(TenantAuthGuard)
+  @ApiBearerAuth('ApiKey')
+  @ApiOperation(GET_FORMAT_OPERATION)
+  @ApiParam(ID_PARAM)
+  @ApiParam(FORMAT_PARAM)
+  @ApiResponse(GET_FORMAT_RESPONSE)
+  @ApiResponse(UNAUTHORIZED_RESPONSE)
+  @ApiResponse(INVOICE_NOT_FOUND_RESPONSE)
   async getFormat(
     @CurrentTenant() tenantId: string,
     @Param('id') id: string,
@@ -127,6 +191,7 @@ export class InvoicesController {
   @HttpCode(201)
   @UseGuards(SessionGuard, RolesGuard, CsrfGuard)
   @Roles('owner', 'admin', 'accountant')
+  @ApiExcludeEndpoint()
   recordStatus(
     @CurrentTenant() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -145,6 +210,12 @@ export class InvoicesController {
 
   @Get(':id/status')
   @UseGuards(TenantAuthGuard)
+  @ApiBearerAuth('ApiKey')
+  @ApiOperation(GET_STATUS_OPERATION)
+  @ApiParam(ID_PARAM)
+  @ApiResponse(GET_STATUS_RESPONSE)
+  @ApiResponse(UNAUTHORIZED_RESPONSE)
+  @ApiResponse(INVOICE_NOT_FOUND_RESPONSE)
   getStatus(@CurrentTenant() tenantId: string, @Param('id') id: string) {
     return this.lifecycle.history(tenantId, id)
   }
@@ -160,6 +231,7 @@ export class InvoicesController {
   @HttpCode(200)
   @UseGuards(TenantAuthGuard, RolesGuard, CsrfGuard)
   @Roles('owner', 'admin', 'accountant')
+  @ApiExcludeEndpoint()
   resolveRouting(@CurrentTenant() tenantId: string, @Param('id') id: string) {
     return this.invoices.resolveRouting(tenantId, id)
   }

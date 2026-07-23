@@ -27,6 +27,7 @@
     "@nestjs/config": "4.0.4",
     "@nestjs/core": "11.1.28",
     "@nestjs/platform-express": "11.1.28",
+    "@nestjs/swagger": "11.4.6",
     "@nestjs/throttler": "6.5.0",
     "@node-rs/argon2": "2.0.2",
     "big.js": "7.0.1",
