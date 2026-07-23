@@ -964,14 +964,60 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       syntaxe sous PHP 8.1 réel, plancher de compatibilité du module).
       **Limites v1 explicites** : PrestaShop 8.x uniquement (pas 1.6/1.7),
       pas de cron (renvoi manuel seulement), pas d'avoirs/rectificatives
-      (création manuelle dashboard), `vatCategory` simplifiée S/E (PS ne
-      modélise pas la distinction EN 16931 zéro-taux/exonéré/hors-champ),
+      (création manuelle dashboard), `vatCategory` simplifiée S/Z (PS ne
+      modélise pas la distinction EN 16931 zéro-taux/exonéré/hors-champ ;
+      *corrigé it.2 : S/E initialement, mais "E" exige un motif
+      d'exonération jamais fourni → 422 systématique sur taux 0 %*),
       `dueDate`/`businessProcessType` non mappés, `unitCode` fixe `C62`, clé
       API stockée en configuration PrestaShop native (pas de coffre dédié).
       **Différé** : WooCommerce (it.2), Shopify (it.3), publication
       marketplaces, webhooks sortants Factelec→boutique (poll uniquement
       en v1), avoirs déclenchés depuis la boutique. Détail complet :
       `connectors/prestashop/README.md`.
+- [x] **4.2 — Connecteur WooCommerce v1** (terminé) : deuxième connecteur
+      natif (phase 4), iso-fonctionnel au connecteur PrestaShop (it.1),
+      contrat de mapping partagé inchangé (`@factelec/connectors-sdk`).
+      **Plugin WordPress/WooCommerce** (`connectors/woocommerce/`, PHP
+      8.1+, zip `factelec-woocommerce-<version>.zip`) : réglages via la
+      Settings API WP sous le menu WooCommerce (URL, clé API jamais
+      réaffichée en clair, statut déclencheur, identité vendeur), client
+      HTTP `wp_remote_request` natif (TLS obligatoire hors localhost, sonde
+      authentifiée `GET /invoices?limit=1` — **zéro dépendance runtime**,
+      même discipline que PrestaShop), **compatibilité HPOS déclarée**
+      (`FeaturesUtil`, table de liaison custom indépendante du stockage de
+      commandes). Mapping WC_Order→facture conforme au contrat sdk (SIREN
+      acheteur via convention de méta `_billing_siret`, sinon B2C ; frais de
+      port en ligne dédiée si non nuls — différence assumée vs PrestaShop,
+      qui les exclut) ; émission automatique au changement de statut de
+      commande avec **idempotence stricte**, panne réseau/API →
+      `pending_retry` tracé (catch `Throwable`, pas seulement les erreurs
+      API — acquis direct de la revue PrestaShop it.1) + renvoi manuel
+      (page de réglages **et** metabox par commande), suivi de statut à la
+      demande (metabox admin commande, compatible HPOS et legacy).
+      **Correctif transverse** (déclenché par la revue de cette itération,
+      **appliqué aux deux connecteurs**) : les lignes à taux de TVA 0 %
+      étaient classées `vatCategory` "E" (exonéré), catégorie qui EXIGE un
+      motif d'exonération (BT-120/BT-121, règle BR-E-10 d'`invoice-core`)
+      jamais fourni par les mappers → rejet 422 systématique,
+      `pending_retry` inépuisable, facture jamais émise en pratique dès
+      qu'une ligne portait un taux nul. Corrigé en "Z" (taux zéro), qui
+      n'exige aucun motif — voir limite ci-dessous, commune aux deux
+      connecteurs. Qualité : phpstan niveau 8, php-cs-fixer PSR-12, PHPUnit
+      sur la logique pure rejouant les MÊMES fixtures sdk que PrestaShop
+      (glue WP/WC documentée comme non testée), CI GitHub étendue (jobs
+      `woocommerce`/`woocommerce-php-lint-81` parallèles aux jobs
+      PrestaShop, mêmes gates). **Limites v1 explicites** : WooCommerce
+      9.x/WordPress 6.5+ uniquement, pas de cron (renvoi manuel seulement),
+      pas d'avoirs/rectificatives, `vatCategory` simplifiée S/Z (même
+      simplification que PrestaShop, cf. correctif ci-dessus), un seul taux
+      de TVA par ligne, quantités entières uniquement (troncature, pas
+      d'arrondi), `buyer.vatId` non mappé (aucune convention de méta
+      WooCommerce établie, contrairement au SIRET), `dueDate`/
+      `businessProcessType` non mappés, `unitCode` fixe `C62`, clé API
+      stockée en option WordPress native (pas de coffre dédié). **Différé** :
+      Shopify (it.3), publication marketplace WordPress.org, webhooks
+      sortants Factelec→boutique (poll uniquement en v1), avoirs déclenchés
+      depuis la boutique. Détail complet : `connectors/woocommerce/README.md`.
 - [x] **5.1 — Billing Stripe (abonnement + usage, garde d'émission)**
       (terminé, itération 1) : premier axe de la **phase 5 (Commercialisation)**
       — modèle self-service, plan unique + volume métré, 100 % hébergé Stripe
