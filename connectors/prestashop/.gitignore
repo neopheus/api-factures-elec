@@ -1,0 +1,8 @@
+# Outillage dev (phpunit/phpstan/php-cs-fixer) — jamais dans le zip de
+# production, cf. build-zip.sh (le module n'a AUCUNE dépendance runtime).
+/vendor/
+.php-cs-fixer.cache
+.phpunit.cache/
+
+# Artefact de packaging (build-zip.sh) — reproductible, jamais versionné.
+/factelec-prestashop-*.zip
