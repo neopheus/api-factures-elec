@@ -109,9 +109,12 @@ justifiée à ce stade).
   sont émises ; la création d'un avoir reste manuelle depuis le dashboard
   Factelec.
 - **`vatCategory` simplifiée** : chaque ligne est classée `S` (taux
-  standard) si son taux de TVA PrestaShop est > 0, sinon `E` (exonéré
-  générique) — PrestaShop ne modélise pas nativement la distinction EN
-  16931 plus fine (zéro-taux/exonéré/hors-champ).
+  standard) si son taux de TVA PrestaShop est > 0, sinon `Z` (taux zéro) —
+  PrestaShop ne modélise pas nativement la distinction EN 16931 plus fine
+  (zéro-taux/exonéré/hors-champ). *(Corrigé phase 4 it.2 : la v1 initiale
+  utilisait `E` — exonéré générique — mais cette catégorie exige un motif
+  d'exonération, jamais fourni par ce module, provoquant un rejet API
+  systématique sur toute ligne à taux 0 %.)*
 - **`dueDate`/`businessProcessType` non mappés** — aucune règle de délai
   de paiement ni de cadre de facturation DGFiP n'est configurée côté
   module ; ces deux champs (optionnels dans le contrat) restent absents du

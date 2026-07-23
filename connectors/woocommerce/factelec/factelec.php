@@ -4,7 +4,7 @@
  * Plugin Name: Factelec — Facturation électronique
  * Description: Dépôt automatique d'une facture électronique conforme (Factur-X/UBL/CII) auprès de Factelec à la transition de statut de commande WooCommerce.
  * Version: 0.1.0
- * Requires at least: 6.4
+ * Requires at least: 6.5
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * WC requires at least: 9.0
@@ -68,6 +68,7 @@ use FactelecWoo\Emission\InvoiceLinkRepository;
 use FactelecWoo\Emission\OrderEmissionService;
 use FactelecWoo\Emission\SubmissionResult;
 use FactelecWoo\Mapping\OrderMapper;
+use FactelecWoo\Tracking\InvoiceTrackingPresenter;
 
 final class Factelec_Plugin
 {
@@ -88,6 +89,15 @@ final class Factelec_Plugin
     private const TEST_CONNECTION_NONCE = 'factelec_test_connection_nonce';
     private const RETRY_ACTION = 'factelec_retry_pending';
     private const RETRY_NONCE = 'factelec_retry_pending_nonce';
+
+    // Actions PAR COMMANDE (metabox de suivi, design §2) — distinctes de
+    // RETRY_ACTION ci-dessus (bouton de la page de réglages : renvoie
+    // TOUTES les liaisons pending_retry). REFRESH_ACTION n'écrit rien : il
+    // se contente de forcer un GET /invoices/:id au prochain rendu.
+    private const REFRESH_ACTION = 'factelec_refresh_order';
+    private const REFRESH_NONCE = 'factelec_refresh_order_nonce';
+    private const RETRY_ORDER_ACTION = 'factelec_retry_order';
+    private const RETRY_ORDER_NONCE = 'factelec_retry_order_nonce';
 
     // Source de journalisation wc_get_logger() (design §6.2) — jamais la
     // clé API, seulement statut HTTP/type de problème/erreur réseau (cf.
@@ -160,6 +170,9 @@ final class Factelec_Plugin
         add_action('admin_init', [self::class, 'registerSettings']);
         add_action('admin_post_' . self::TEST_CONNECTION_ACTION, [self::class, 'handleTestConnection']);
         add_action('admin_post_' . self::RETRY_ACTION, [self::class, 'handleRetryAll']);
+        add_action('admin_post_' . self::REFRESH_ACTION, [self::class, 'handleRefreshOrder']);
+        add_action('admin_post_' . self::RETRY_ORDER_ACTION, [self::class, 'handleRetrySingleOrder']);
+        add_action('add_meta_boxes', [self::class, 'registerTrackingMetaBox']);
         // 4 arguments acceptés (order_id, old_status, new_status, order) —
         // signature réelle du hook générique woocommerce_order_status_changed
         // (distinct des hooks spécifiques woocommerce_order_status_{statut}).
@@ -257,6 +270,12 @@ final class Factelec_Plugin
         }
 
         echo '<div class="wrap"><h1>' . esc_html__('Factelec — Facturation électronique', 'factelec') . '</h1>';
+
+        // Affiche le message natif "Réglages enregistrés" ajouté par
+        // options.php (Settings API WP) après soumission du formulaire de
+        // réglages — sans cet appel, la sauvegarde réussissait déjà, mais
+        // silencieusement (aucun retour visuel pour l'intégrateur BO).
+        settings_errors();
 
         self::renderTestConnectionNotice();
         self::renderRetryNotice();
@@ -515,6 +534,185 @@ final class Factelec_Plugin
             ],
             admin_url('admin.php'),
         );
+
+        wp_safe_redirect($redirectUrl);
+        exit;
+    }
+
+    /**
+     * Metabox de suivi (design §2) : enregistrée sur l'écran commande
+     * COMPAT HPOS ET LEGACY — `wc_get_page_screen_id('shop-order')` résout
+     * le bon écran quelle que soit la configuration de la boutique (utile
+     * officiel WooCommerce pour les metaboxes HPOS-compatibles), à défaut
+     * (WooCommerce trop ancien) repli sur le post type legacy `shop_order`.
+     */
+    public static function registerTrackingMetaBox(): void
+    {
+        $screen = function_exists('wc_get_page_screen_id') ? wc_get_page_screen_id('shop-order') : 'shop_order';
+
+        add_meta_box(
+            'factelec-tracking',
+            esc_html__('Factelec — Facturation électronique', 'factelec'),
+            [self::class, 'renderTrackingMetaBox'],
+            $screen,
+            'side',
+            'default',
+        );
+    }
+
+    /**
+     * Callback WP passe soit un `WP_Post` (écran legacy), soit directement
+     * l'objet commande selon le contexte HPOS — `wc_get_order()` normalise
+     * les deux (accepte ID/WP_Post/WC_Order déjà chargée, seul point d'aiguillage
+     * HPOS-safe recommandé par WooCommerce pour ce genre de callback).
+     *
+     * @param \WP_Post|\WC_Order|int $postOrOrder
+     */
+    public static function renderTrackingMetaBox($postOrOrder): void
+    {
+        $order = $postOrOrder instanceof \WC_Order ? $postOrOrder : wc_get_order($postOrOrder);
+        if (!$order instanceof \WC_Order) {
+            return;
+        }
+
+        $orderId = $order->get_id();
+        $settings = self::getSettings();
+        $link = (new InvoiceLinkRepository())->findByOrderId($orderId);
+
+        $remoteStatus = null;
+        if ($link !== null && $link['invoice_id'] !== null && isset($_GET['factelec_refresh'])) {
+            $client = new FactelecClient((string) $settings['api_url'], (string) $settings['api_key'], new WpHttpTransport());
+            try {
+                $remoteStatus = $client->getInvoiceStatus($link['invoice_id']);
+            } catch (\Throwable $exception) {
+                // Ne doit jamais faire échouer l'affichage de l'écran
+                // commande — journalisé, jamais avalé en silence.
+                self::logger()->error(
+                    sprintf('Rafraîchissement du statut de la commande #%d impossible : %s', $orderId, $exception->getMessage()),
+                    ['source' => self::LOG_SOURCE],
+                );
+            }
+        }
+
+        $view = (new InvoiceTrackingPresenter())->present($link, $remoteStatus, (string) $settings['api_url']);
+
+        self::renderTrackingView($order, $view);
+    }
+
+    /**
+     * @param array{hasSubmission: bool, status: string, invoiceId: ?string, lastError: ?string, lifecycleStatus: ?string, downloadLinks: list<array{format: string, url: string}>} $view
+     */
+    private static function renderTrackingView(\WC_Order $order, array $view): void
+    {
+        if (!$view['hasSubmission']) {
+            echo '<p>' . esc_html__('Aucun dépôt Factelec pour cette commande (statut déclencheur pas encore atteint).', 'factelec') . '</p>';
+
+            return;
+        }
+
+        $statusLabel = match ($view['status']) {
+            InvoiceLinkRepository::STATUS_SUBMITTED => esc_html__('déposée', 'factelec'),
+            InvoiceLinkRepository::STATUS_PENDING_RETRY => esc_html__('en attente de renvoi', 'factelec'),
+            default => esc_html($view['status']),
+        };
+
+        echo '<p><strong>' . esc_html__('Statut', 'factelec') . '</strong> : ' . $statusLabel . '</p>';
+
+        if ($view['invoiceId'] !== null) {
+            echo '<p><strong>' . esc_html__('Identifiant Factelec', 'factelec') . '</strong> : ' . esc_html($view['invoiceId']) . '</p>';
+        }
+        if ($view['lastError'] !== null) {
+            echo '<p style="color:#b32d2e;">' . esc_html($view['lastError']) . '</p>';
+        }
+        if ($view['lifecycleStatus'] !== null) {
+            echo '<p><strong>' . esc_html__('Statut cycle de vie (DGFiP)', 'factelec') . '</strong> : ' . esc_html($view['lifecycleStatus']) . '</p>';
+        }
+
+        if ($view['downloadLinks'] !== []) {
+            echo '<p><em>' . esc_html__("Nécessite l'en-tête Authorization: Bearer <clé API> — non cliquable directement depuis un navigateur.", 'factelec') . '</em></p><ul>';
+            foreach ($view['downloadLinks'] as $downloadLink) {
+                echo '<li>' . esc_html($downloadLink['format']) . ' : <code>' . esc_html($downloadLink['url']) . '</code></li>';
+            }
+            echo '</ul>';
+        }
+
+        if ($view['invoiceId'] !== null) {
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field(self::REFRESH_ACTION, self::REFRESH_NONCE);
+            echo '<input type="hidden" name="action" value="' . esc_attr(self::REFRESH_ACTION) . '">';
+            echo '<input type="hidden" name="order_id" value="' . esc_attr((string) $order->get_id()) . '">';
+            submit_button(esc_html__('Actualiser', 'factelec'), 'secondary', 'submit', false);
+            echo '</form>';
+        }
+
+        if ($view['status'] === InvoiceLinkRepository::STATUS_PENDING_RETRY) {
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field(self::RETRY_ORDER_ACTION, self::RETRY_ORDER_NONCE);
+            echo '<input type="hidden" name="action" value="' . esc_attr(self::RETRY_ORDER_ACTION) . '">';
+            echo '<input type="hidden" name="order_id" value="' . esc_attr((string) $order->get_id()) . '">';
+            submit_button(esc_html__('Renvoyer', 'factelec'), 'secondary', 'submit', false);
+            echo '</form>';
+        }
+    }
+
+    /**
+     * Bouton metabox « Actualiser » — capability PUIS nonce (même ordre que
+     * les autres handlers). N'écrit rien : interroge juste
+     * GET /invoices/:id à la prochaine visite de l'écran commande (query
+     * arg `factelec_refresh`, lu par renderTrackingMetaBox()). Redirige via
+     * `WC_Order::get_edit_order_url()` — HPOS-safe (résout la bonne URL
+     * d'édition qu'il s'agisse de l'écran HPOS ou legacy).
+     */
+    public static function handleRefreshOrder(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Action non autorisée.', 'factelec'), '', ['response' => 403]);
+        }
+
+        check_admin_referer(self::REFRESH_ACTION, self::REFRESH_NONCE);
+
+        $orderId = isset($_POST['order_id']) ? (int) $_POST['order_id'] : 0;
+        $order = $orderId > 0 && function_exists('wc_get_order') ? wc_get_order($orderId) : false;
+
+        $redirectUrl = $order instanceof \WC_Order
+            ? add_query_arg('factelec_refresh', '1', $order->get_edit_order_url())
+            : admin_url('edit.php?post_type=shop_order');
+
+        wp_safe_redirect($redirectUrl);
+        exit;
+    }
+
+    /**
+     * Bouton metabox « Renvoyer » — renvoi d'UNE SEULE commande (distinct
+     * du bouton « Renvoyer les factures en attente » de la page de
+     * réglages, qui traite TOUTES les liaisons pending_retry). Capability
+     * PUIS nonce ; retryOrder() ne lève plus jamais lui-même (Throwable
+     * capturé en interne) — ce catch ne couvre qu'un échec totalement
+     * inattendu en amont, journalisé, jamais bloquant.
+     */
+    public static function handleRetrySingleOrder(): void
+    {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('Action non autorisée.', 'factelec'), '', ['response' => 403]);
+        }
+
+        check_admin_referer(self::RETRY_ORDER_ACTION, self::RETRY_ORDER_NONCE);
+
+        $orderId = isset($_POST['order_id']) ? (int) $_POST['order_id'] : 0;
+        $order = $orderId > 0 && function_exists('wc_get_order') ? wc_get_order($orderId) : false;
+
+        if ($order instanceof \WC_Order) {
+            try {
+                self::emissionService()->retryOrder($orderId, $order, self::sellerConfigFromSettings(self::getSettings()));
+            } catch (\Throwable $exception) {
+                self::logger()->error(
+                    sprintf('Renvoi Factelec de la commande #%d impossible : %s', $orderId, $exception->getMessage()),
+                    ['source' => self::LOG_SOURCE],
+                );
+            }
+        }
+
+        $redirectUrl = $order instanceof \WC_Order ? $order->get_edit_order_url() : admin_url('edit.php?post_type=shop_order');
 
         wp_safe_redirect($redirectUrl);
         exit;
