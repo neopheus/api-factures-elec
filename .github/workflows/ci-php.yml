@@ -38,3 +38,24 @@ jobs:
       - run: vendor/bin/php-cs-fixer fix --dry-run --diff
       - run: vendor/bin/phpstan analyse
       - run: vendor/bin/phpunit
+
+  # Job dédié, PHP 8.1 RÉEL (pas seulement `phpstan.neon` phpVersion: 80100,
+  # qui ne vérifie que la compatibilité de LANGAGE sous un interpréteur plus
+  # récent) — durcissement demandé en revue tâche 3/5 : le plancher déclaré
+  # du module (composer.json "require": "php": ">=8.1") doit être vérifié
+  # par un VRAI interpréteur 8.1, pas seulement inféré. `php -l` (lint de
+  # syntaxe) suffit ici : aucune dépendance/autoload requis, juste analyser
+  # `factelec/` (le code réellement expédié dans le zip — factelec.php +
+  # src/), pas `tests/` (dev-only, jamais sous 8.1 en production).
+  php-lint-81:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: connectors/prestashop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2 (2.37.2)
+        with:
+          php-version: '8.1'
+          coverage: none
+      - run: find factelec -name '*.php' -print0 | xargs -0 -n1 -I{} php -l {}
