@@ -17,6 +17,20 @@ declare(strict_types=1);
 
 use FactelecWoo\Tests\Stubs\WpFunctionStubs;
 
+// Constantes $wpdb::get_row()/get_results() (coeur WordPress) — seule
+// ARRAY_A est réellement consommée par ce plugin (InvoiceLinkRepository),
+// les deux autres sont définies pour fidélité de signature avec le stub
+// tests/stubs/wpdb.php.
+if (!defined('OBJECT')) {
+    define('OBJECT', 'OBJECT');
+}
+if (!defined('ARRAY_A')) {
+    define('ARRAY_A', 'ARRAY_A');
+}
+if (!defined('ARRAY_N')) {
+    define('ARRAY_N', 'ARRAY_N');
+}
+
 if (!function_exists('wp_remote_request')) {
     /**
      * @param array<string, mixed> $args
