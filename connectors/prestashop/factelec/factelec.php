@@ -201,15 +201,26 @@ class Factelec extends Module
                 $currencyIsoCode,
                 $sellerConfig,
             );
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
             // Résolution des données commande impossible (commande/adresse/
             // client introuvable, devise inconnue...) : ne doit JAMAIS faire
-            // échouer le changement de statut de commande côté PS. Limite
-            // connue de cette v1 — contrairement à un échec de l'API
-            // Factelec (capturé et tracé par OrderEmissionService), ce cas
-            // précis ne laisse aucune trace en base. Un échec de l'API reste
-            // lui géré normalement (pending_retry), ce catch ne couvre que
-            // la résolution PS elle-même.
+            // échouer le changement de statut de commande côté PS — mais un
+            // module de conformité fiscale ne peut pas non plus AVALER cet
+            // échec sans trace (revue Task 4, Important). submitNewOrder()
+            // lui-même ne lève plus JAMAIS depuis le correctif critique
+            // (il capture tout Throwable en interne et journalise en
+            // pending_retry) : ce catch ne couvre donc que la résolution PS
+            // elle-même — journalisée séparément ici, jamais la clé API
+            // (absente de cette exception, qui vient de la résolution PS,
+            // pas de l'appel réseau).
+            PrestaShopLogger::addLog(
+                sprintf(
+                    'Factelec : résolution de la commande #%d impossible, dépôt non tenté : %s',
+                    $idOrder,
+                    $exception->getMessage(),
+                ),
+                3,
+            );
         }
     }
 
@@ -327,7 +338,18 @@ class Factelec extends Module
                 } else {
                     ++$failed;
                 }
-            } catch (Throwable) {
+            } catch (Throwable $exception) {
+                // Même motif que hookActionOrderStatusPostUpdate() : ne
+                // couvre que la résolution PS (retryOrder() ne lève plus
+                // jamais lui-même) — journalisé, jamais avalé en silence.
+                PrestaShopLogger::addLog(
+                    sprintf(
+                        'Factelec : résolution de la commande #%d impossible, renvoi non tenté : %s',
+                        $idOrder,
+                        $exception->getMessage(),
+                    ),
+                    3,
+                );
                 ++$failed;
             }
         }

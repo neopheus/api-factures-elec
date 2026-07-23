@@ -119,6 +119,51 @@ final class OrderMapperTest extends TestCase
         self::assertArrayNotHasKey('siren', $payload['buyer']);
     }
 
+    public function testPreservesFullDecimalPrecisionBeyondTwoDecimals(): void
+    {
+        // Régression fiscale (revue Task 4, Minor inclus au fix CRITICAL) :
+        // PS stocke unit_price_tax_excl/tax_rate en DECIMAL(20,6) — tronquer
+        // systématiquement à 2 décimales (l'ancien comportement) perdait de
+        // la précision sur un document fiscal. Le schéma accepte jusqu'à 4
+        // décimales (`^\d+(\.\d{1,4})?$`) : la précision réelle doit être
+        // préservée jusqu'à cette limite, PAS arrondie à 2 par défaut.
+        $fixture = $this->loadFixture('b2c-sans-siren.json');
+        [$order, $customer, $address, , $sellerConfig] = $this->buildStubsFromFixture($fixture);
+        $orderDetails = [[
+            'id_order_detail' => 1,
+            'product_name' => 'Article à précision non ronde',
+            'product_quantity' => 1,
+            'unit_price_tax_excl' => 19.995,
+            'tax_rate' => 8.855,
+        ]];
+
+        $payload = (new OrderMapper())->map($order, $customer, $address, $orderDetails, $fixture['currency'], $sellerConfig);
+
+        // Avec l'ancien number_format(...,2) : "19.995" devenait "20.00" et
+        // "8.855" devenait "8.86" — perte de précision fiscale.
+        self::assertSame('19.995', $payload['lines'][0]['unitPrice']);
+        self::assertSame('8.855', $payload['lines'][0]['vatRate']);
+        self::assertMatchesRegularExpression('/^\d+(\.\d{1,4})?$/', $payload['lines'][0]['unitPrice']);
+        self::assertMatchesRegularExpression('/^\d+(\.\d{1,4})?$/', $payload['lines'][0]['vatRate']);
+
+        // Une précision exactement à 4 décimales est intégralement préservée.
+        $orderDetails[0]['unit_price_tax_excl'] = 12.3456;
+        $orderDetails[0]['tax_rate'] = 7.1234;
+        $payload = (new OrderMapper())->map($order, $customer, $address, $orderDetails, $fixture['currency'], $sellerConfig);
+        self::assertSame('12.3456', $payload['lines'][0]['unitPrice']);
+        self::assertSame('7.1234', $payload['lines'][0]['vatRate']);
+
+        // Une valeur "ronde" (2 décimales significatives, ex. 20.000000 en
+        // base) reste formatée en 2 décimales — compatibilité ascendante
+        // avec les fixtures du sdk (toutes en 2 décimales), pas de zéros de
+        // fin inutiles au-delà.
+        $orderDetails[0]['unit_price_tax_excl'] = 20.0;
+        $orderDetails[0]['tax_rate'] = 20.0;
+        $payload = (new OrderMapper())->map($order, $customer, $address, $orderDetails, $fixture['currency'], $sellerConfig);
+        self::assertSame('20.00', $payload['lines'][0]['unitPrice']);
+        self::assertSame('20.00', $payload['lines'][0]['vatRate']);
+    }
+
     /**
      * @param array<string, mixed> $fixture
      * @return array<string, mixed>

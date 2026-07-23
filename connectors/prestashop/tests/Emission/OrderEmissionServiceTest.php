@@ -14,6 +14,7 @@ use Factelec\Emission\OrderEmissionService;
 use Factelec\Emission\SubmissionResult;
 use Factelec\Mapping\OrderMapper;
 use Factelec\Tests\Api\FakeHttpTransport;
+use Factelec\Tests\Api\ThrowingHttpTransport;
 use Order;
 use PHPUnit\Framework\TestCase;
 
@@ -123,7 +124,44 @@ final class OrderEmissionServiceTest extends TestCase
         self::assertNotSame('premier échec', $row['last_error']);
     }
 
-    private function service(FakeHttpTransport $transport): OrderEmissionService
+    public function testSubmitNewOrderRecordsPendingRetryWhenTransportThrows(): void
+    {
+        // Régression CRITIQUE (revue Task 4) : CurlTransport lève une
+        // RuntimeException (timeout/DNS/TLS...), PAS une FactelecApiException
+        // — c'est même le mode d'échec le plus courant. Avant ce fix, cette
+        // exception traversait submitNewOrder puis le catch muet du hook :
+        // AUCUNE ligne écrite, facture perdue en silence, "Renvoyer" ne
+        // pouvait jamais la retrouver.
+        $service = $this->service(new ThrowingHttpTransport());
+
+        $result = $service->submitNewOrder(201, ...$this->orderContext());
+
+        self::assertSame(SubmissionResult::STATUS_PENDING_RETRY, $result->status);
+        $row = $this->repository->findByOrderId(201);
+        self::assertNotNull($row, 'une ligne pending_retry DOIT exister — sinon la facture est perdue sans trace ni renvoi possible');
+        self::assertSame(InvoiceLinkRepository::STATUS_PENDING_RETRY, $row['status']);
+        self::assertNull($row['invoice_id']);
+        self::assertNotNull($row['last_error']);
+    }
+
+    public function testRetryOrderRecordsPendingRetryWhenTransportThrows(): void
+    {
+        // Symétrique côté renvoi manuel : une panne réseau pendant retryOrder()
+        // ne doit jamais faire disparaître la liaison ni propager — elle
+        // reste `pending_retry`, retentable plus tard.
+        $this->repository->recordPendingRetry(202, 'premier échec');
+        $service = $this->service(new ThrowingHttpTransport());
+
+        $result = $service->retryOrder(202, ...$this->orderContext());
+
+        self::assertSame(SubmissionResult::STATUS_PENDING_RETRY, $result->status);
+        $row = $this->repository->findByOrderId(202);
+        self::assertSame(InvoiceLinkRepository::STATUS_PENDING_RETRY, $row['status']);
+        self::assertNull($row['invoice_id']);
+        self::assertNotNull($row['last_error']);
+    }
+
+    private function service(FakeHttpTransport|ThrowingHttpTransport $transport): OrderEmissionService
     {
         $client = new FactelecClient('https://api.factelec.example.com', self::API_KEY, $transport);
 

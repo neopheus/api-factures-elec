@@ -186,13 +186,39 @@ final class OrderMapper
                 'name' => (string) $detail['product_name'],
                 'quantity' => (string) (int) $detail['product_quantity'],
                 'unitCode' => self::UNIT_CODE,
-                'unitPrice' => number_format((float) $detail['unit_price_tax_excl'], 2, '.', ''),
+                'unitPrice' => $this->formatDecimal4((float) $detail['unit_price_tax_excl']),
                 // Cf. limitation v1 documentée en tête de classe.
                 'vatCategory' => $rate > 0.0 ? 'S' : 'E',
-                'vatRate' => number_format($rate, 2, '.', ''),
+                'vatRate' => $this->formatDecimal4($rate),
             ];
         }
 
         return $lines;
+    }
+
+    /**
+     * Formate un montant/taux au format decimal4 du schéma
+     * (`^\d+(\.\d{1,4})?$`) en préservant la précision réelle de PS —
+     * `unit_price_tax_excl`/`tax_rate` sont stockés en DECIMAL(20,6) côté
+     * PrestaShop. Un simple `number_format(..., 2)` (v1 initiale) tronquait
+     * systématiquement à 2 décimales : un montant comme 19.995 devenait
+     * "20.00", perdant de la précision sur un document FISCAL (revue
+     * Task 4, Minor). Ici : arrondi à 4 décimales (limite du schéma), PUIS
+     * les zéros de fin non significatifs sont retirés SANS jamais descendre
+     * sous 2 décimales (convention monétaire usuelle ET compatibilité
+     * ascendante avec les fixtures du sdk, qui utilisent toutes exactement
+     * 2 décimales pour des montants "ronds").
+     */
+    private function formatDecimal4(float $value): string
+    {
+        $formatted = number_format($value, 4, '.', '');
+        if (!str_contains($formatted, '.')) {
+            return $formatted;
+        }
+
+        $formatted = rtrim(rtrim($formatted, '0'), '.');
+        [$integerPart, $decimalPart] = array_pad(explode('.', $formatted, 2), 2, '');
+
+        return $integerPart . '.' . str_pad($decimalPart, 2, '0');
     }
 }
