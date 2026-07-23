@@ -60,6 +60,21 @@ final class OrderEmissionService
         string $currencyIsoCode,
         array $sellerConfig,
     ): SubmissionResult {
+        // Course SELECT-puis-INSERT (connue, hors mandat du fix Task 4,
+        // triage final) : findByOrderId() puis recordSubmitted/
+        // recordPendingRetry ne sont PAS atomiques — une exécution
+        // concurrente de ce hook pour le MÊME id_order (deux processus PHP
+        // simultanés sur le même changement de statut, scénario improbable
+        // en pratique côté PS — le hook est déclenché une fois par
+        // transition, pas en parallèle sur la même commande — mais non
+        // exclu par la seule logique applicative) pourrait laisser passer
+        // 2 appels `submitInvoice`. La contrainte UNIQUE `id_order` en base
+        // (factelec.php::createInvoiceLinkTable) protège l'INTÉGRITÉ DES
+        // DONNÉES dans tous les cas (un seul INSERT réussirait, l'autre
+        // échouerait) ; seul un doublon d'APPEL API resterait possible dans
+        // cette fenêtre étroite. Un verrou (SELECT ... FOR UPDATE ou
+        // contrainte UNIQUE posée AVANT l'appel API) fermerait complètement
+        // cette fenêtre si nécessaire.
         if ($this->repository->findByOrderId($idOrder) !== null) {
             return SubmissionResult::alreadyLinked();
         }
