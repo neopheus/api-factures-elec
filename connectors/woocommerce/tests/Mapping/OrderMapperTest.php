@@ -203,8 +203,14 @@ final class OrderMapperTest extends TestCase
         self::assertSame('4', $payload['lines'][0]['quantity']);
     }
 
-    public function testZeroRateLineMapsToExemptVatCategory(): void
+    public function testZeroRateLineMapsToZeroRatedVatCategory(): void
     {
+        // CORRECTIF TRANSVERSE (revue phase 4 it.2, cf. docblock OrderMapper)
+        // : une ligne à taux 0 % doit être "Z" (taux zéro), PAS "E"
+        // (exonéré) — invoice-core (rules.ts, BR-E-10) exige un motif
+        // d'exonération pour "E", jamais fourni par ce mapper, ce qui
+        // provoquait un 422 systématique (pending_retry inépuisable,
+        // facture jamais émise). "Z" n'exige aucun motif.
         $fixture = $this->loadFixture('b2c-sans-siren.json');
         [$firstName, $lastName] = explode(' ', $fixture['buyer']['name'], 2);
         $order = $this->buildOrderFromFixture(
@@ -215,12 +221,47 @@ final class OrderMapperTest extends TestCase
             billingLastName: $lastName,
             lines: [],
         );
-        $this->addProductLine($order, id: 1, name: 'Produit exonéré', quantity: 1, unitPrice: 10.0, rate: 0.0);
+        $this->addProductLine($order, id: 1, name: 'Produit à taux zéro', quantity: 1, unitPrice: 10.0, rate: 0.0);
 
         $payload = (new OrderMapper())->map($order, $this->sellerConfigFromFixture($fixture));
 
-        self::assertSame('E', $payload['lines'][0]['vatCategory']);
+        self::assertSame('Z', $payload['lines'][0]['vatCategory']);
         self::assertSame('0.00', $payload['lines'][0]['vatRate']);
+    }
+
+    public function testZeroRateLinePayloadIsAcceptedByTheSdkSchema(): void
+    {
+        // Vérifie contre le VRAI schéma sdk (pas une copie locale) : "Z"
+        // appartient à l'énumération vatCategory ET aucun champ de motif
+        // d'exonération (exemptionReasonCode/exemptionReason, absents ici)
+        // n'est requis pour cette catégorie — contrairement à "E".
+        $fixture = $this->loadFixture('b2c-sans-siren.json');
+        [$firstName, $lastName] = explode(' ', $fixture['buyer']['name'], 2);
+        $order = $this->buildOrderFromFixture(
+            $fixture,
+            billingCompany: '',
+            siret: '',
+            billingFirstName: $firstName,
+            billingLastName: $lastName,
+            lines: [],
+        );
+        $this->addProductLine($order, id: 1, name: 'Produit à taux zéro', quantity: 1, unitPrice: 10.0, rate: 0.0);
+
+        $payload = (new OrderMapper())->map($order, $this->sellerConfigFromFixture($fixture));
+        $line = $payload['lines'][0];
+
+        $lineSchema = $this->loadInvoiceLineSchemaFromSdk();
+        self::assertContains(
+            $line['vatCategory'],
+            $lineSchema['properties']['vatCategory']['enum'],
+            "vatCategory '{$line['vatCategory']}' doit appartenir à l'énumération réelle du schéma sdk",
+        );
+        self::assertMatchesRegularExpression(
+            '/' . $lineSchema['properties']['vatRate']['pattern'] . '/',
+            $line['vatRate'],
+        );
+        self::assertArrayNotHasKey('exemptionReasonCode', $line);
+        self::assertArrayNotHasKey('exemptionReason', $line);
     }
 
     public function testMapsNonZeroShippingFeeAsDedicatedLine(): void
@@ -400,5 +441,26 @@ final class OrderMapperTest extends TestCase
         $decoded = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
 
         return $decoded;
+    }
+
+    /**
+     * Charge la définition `invoiceLine` du VRAI schéma sdk (pas une copie
+     * locale) — toute dérive du schéma (énumération vatCategory, pattern
+     * vatRate) casse ce test immédiatement.
+     *
+     * @return array<string, mixed>
+     */
+    private function loadInvoiceLineSchemaFromSdk(): array
+    {
+        $path = dirname(__DIR__, 4) . '/packages/connectors-sdk/schema/order-mapping.schema.json';
+        self::assertFileExists($path, "Schéma sdk introuvable : {$path}");
+
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+
+        /** @var array<string, mixed> $lineSchema */
+        $lineSchema = $decoded['$defs']['invoiceLine'];
+
+        return $lineSchema;
     }
 }

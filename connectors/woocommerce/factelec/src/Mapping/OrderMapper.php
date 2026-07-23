@@ -17,8 +17,22 @@ use WC_Tax;
  * fichier PORTE les acquis : `formatDecimal4()` identique (précision
  * fiscale préservée jusqu'à 4 décimales, cf. sa docblock), mêmes
  * limitations v1 assumées et documentées — `dueDate`/`businessProcessType`
- * non mappés, `unitCode` fixé à "C62", `vatCategory` "S"/"E" selon que le
- * taux de la ligne est > 0, `typeCode` toujours "380" (jamais d'avoir, v1).
+ * non mappés, `unitCode` fixé à "C62", `typeCode` toujours "380" (jamais
+ * d'avoir, v1).
+ *
+ * `vatCategory` par ligne : "S" (standard) si le taux est > 0, sinon "Z"
+ * (taux zéro, BT-151) — CORRECTIF TRANSVERSE (revue phase 4 it.2, porté
+ * identiquement côté connectors/prestashop) : "E" (exonéré) était utilisé
+ * initialement pour tout taux à 0 %, mais `invoice-core`
+ * (packages/invoice-core/src/model/rules.ts,
+ * `exemptionReasonRuleByCategory`) EXIGE un motif d'exonération
+ * (BT-120/BT-121, règle BR-E-10) pour la catégorie "E" — jamais fourni par
+ * ce mapper → 422 systématique sur toute ligne à taux 0 %, `pending_retry`
+ * inépuisable, facture jamais émise. "Z" n'appartient PAS à
+ * `EXEMPT_VAT_CATEGORIES` (schema.ts) : aucun motif requis, et BR-Z-10
+ * l'interdit même — cohérent avec ce mapper, qui n'en fournit jamais.
+ * WooCommerce ne modélise pas nativement zéro-taux/exonéré/hors-champ ; un
+ * taux à 0 % est donc traité comme "taux zéro", jamais une exonération.
  *
  * Différences avec le mapper PrestaShop, dues au modèle de données
  * WooCommerce (pas une divergence de CONTRAT — le payload produit reste
@@ -212,8 +226,8 @@ final class OrderMapper
                 'quantity' => (string) $quantity,
                 'unitCode' => self::UNIT_CODE,
                 'unitPrice' => $this->formatDecimal4($unitPrice),
-                // Cf. limitation v1 documentée en tête de classe.
-                'vatCategory' => $rate > 0.0 ? 'S' : 'E',
+                // Cf. limitation v1 / correctif documentés en tête de classe.
+                'vatCategory' => $rate > 0.0 ? 'S' : 'Z',
                 'vatRate' => $this->formatDecimal4($rate),
             ];
         }
@@ -234,7 +248,8 @@ final class OrderMapper
                 'quantity' => '1',
                 'unitCode' => self::UNIT_CODE,
                 'unitPrice' => $this->formatDecimal4($shippingTotal),
-                'vatCategory' => $rate > 0.0 ? 'S' : 'E',
+                // Cf. limitation v1 / correctif documentés en tête de classe.
+                'vatCategory' => $rate > 0.0 ? 'S' : 'Z',
                 'vatRate' => $this->formatDecimal4($rate),
             ];
         }

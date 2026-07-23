@@ -26,9 +26,17 @@ use Order;
  *   - `unitCode` est fixé à "C62" (pièce/unité, UN/ECE reco 20) : PS ne
  *     modélise pas nativement les codes d'unité EN 16931 par produit.
  *   - `vatCategory` par ligne : "S" (standard) si le taux de TVA PS de la
- *     ligne est > 0, sinon "E" (exonéré) — PS ne modélise pas nativement
- *     la distinction EN 16931 zéro-taux/exonéré/hors-champ ; un taux à 0 %
- *     est donc toujours traité comme une exonération générique.
+ *     ligne est > 0, sinon "Z" (taux zéro, BT-151) — CORRECTIF (revue
+ *     transverse phase 4 it.2) : "E" (exonéré) était utilisé initialement,
+ *     mais `invoice-core` (packages/invoice-core/src/model/rules.ts,
+ *     `exemptionReasonRuleByCategory`) EXIGE un motif d'exonération
+ *     (BT-120/BT-121) pour "E" — règle BR-E-10 — jamais fourni par ce
+ *     mapper → 422 systématique sur toute ligne à taux 0 %, `pending_retry`
+ *     inépuisable, facture jamais émise. "Z" n'est PAS dans
+ *     `EXEMPT_VAT_CATEGORIES` (schema.ts) : aucun motif requis, et BR-Z-10
+ *     l'interdit même — cohérent avec ce mapper, qui n'en fournit jamais.
+ *     PS ne modélise pas nativement zéro-taux/exonéré/hors-champ ; un taux
+ *     à 0 % est donc traité comme "taux zéro", jamais une exonération.
  *   - `typeCode` toujours "380" (facture) : v1 n'émet jamais d'avoir
  *     (design §1, exclu de cette itération — création manuelle dashboard).
  */
@@ -187,8 +195,8 @@ final class OrderMapper
                 'quantity' => (string) (int) $detail['product_quantity'],
                 'unitCode' => self::UNIT_CODE,
                 'unitPrice' => $this->formatDecimal4((float) $detail['unit_price_tax_excl']),
-                // Cf. limitation v1 documentée en tête de classe.
-                'vatCategory' => $rate > 0.0 ? 'S' : 'E',
+                // Cf. limitation v1 / correctif documentés en tête de classe.
+                'vatCategory' => $rate > 0.0 ? 'S' : 'Z',
                 'vatRate' => $this->formatDecimal4($rate),
             ];
         }
