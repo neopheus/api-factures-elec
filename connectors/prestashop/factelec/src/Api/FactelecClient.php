@@ -13,7 +13,9 @@ use Throwable;
  * contrat amont autoritaire) :
  *   - authentification : en-tête `Authorization: Bearer <clé API>`
  *     (apps/api/src/auth/api-key.guard.ts, ApiKeyGuard) ;
- *   - `testConnection()` : GET /health, 200 attendu ;
+ *   - `testConnection()` : GET /invoices?limit=1 — endpoint AUTHENTIFIÉ
+ *     (revue tâche 3 : un simple /health ne prouve pas que la clé API est
+ *     valide, seulement que l'URL répond) ;
  *   - `submitInvoice()` : POST /invoices, payload conforme à
  *     packages/connectors-sdk/schema/order-mapping.schema.json, 201 → id ;
  *   - `getInvoiceStatus()` : GET /invoices/:id (statut de génération,
@@ -32,20 +34,32 @@ final class FactelecClient
     }
 
     /**
-     * GET /health — utilisé par le bouton « Tester la connexion » du BO.
-     * Ne lève JAMAIS : un échec réseau ou un statut différent de 200
-     * renvoie simplement false (l'appelant affiche un message d'erreur
-     * générique, jamais de détail technique brut).
+     * GET /invoices?limit=1 — utilisé par le bouton « Tester la connexion »
+     * du BO. Endpoint AUTHENTIFIÉ (TenantAuthGuard côté API) : 200 prouve
+     * à la fois que l'URL est joignable ET que la clé API est valide ; 401
+     * signale spécifiquement une clé invalide/révoquée (message BO dédié) ;
+     * toute autre issue (panne réseau, timeout, statut inattendu) reste un
+     * échec générique. Ne lève JAMAIS — c'est l'appelant qui décide du
+     * message affiché à partir du résultat typé.
      */
-    public function testConnection(): bool
+    public function testConnection(): ConnectionTestResult
     {
         try {
-            $response = $this->transport->request('GET', $this->url('/health'), $this->headers(), null);
+            $response = $this->transport->request(
+                'GET',
+                $this->url('/invoices?limit=1'),
+                $this->headers(),
+                null,
+            );
         } catch (Throwable) {
-            return false;
+            return ConnectionTestResult::networkError();
         }
 
-        return $response['status'] === 200;
+        return match ($response['status']) {
+            200 => ConnectionTestResult::ok(),
+            401 => ConnectionTestResult::unauthorized(),
+            default => ConnectionTestResult::unexpectedStatus(),
+        };
     }
 
     /**

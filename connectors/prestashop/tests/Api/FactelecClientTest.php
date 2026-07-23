@@ -4,14 +4,16 @@ declare(strict_types=1);
 
 namespace Factelec\Tests\Api;
 
+use Factelec\Api\ConnectionTestResult;
 use Factelec\Api\FactelecClient;
 use Factelec\Exception\FactelecApiException;
 use PHPUnit\Framework\TestCase;
 
 /**
  * FactelecClient — logique pure, transport HTTP mocké (FakeHttpTransport),
- * AUCUN appel réseau réel. Couvre le contrat autoritaire amont (brief
- * tâche 3) : testConnection 200/500, submitInvoice 201→invoiceId et
+ * AUCUN appel réseau réel. Couvre le contrat autoritaire amont : testConnection
+ * (endpoint AUTHENTIFIÉ GET /invoices?limit=1, revue tâche 3 : 200/401/statut
+ * inattendu/panne réseau), submitInvoice 201→invoiceId et
  * 422/402/403→exception typée, getInvoiceStatus, et la non-fuite de la clé
  * API dans les messages d'exception.
  */
@@ -22,32 +24,56 @@ final class FactelecClientTest extends TestCase
 
     public function testConnectionSucceedsOn200(): void
     {
-        $transport = new FakeHttpTransport(['status' => 200, 'body' => '{"status":"ok"}']);
+        $transport = new FakeHttpTransport(['status' => 200, 'body' => '{"items":[],"nextCursor":null}']);
         $client = new FactelecClient(self::BASE_URL, self::API_KEY, $transport);
 
-        self::assertTrue($client->testConnection());
+        $result = $client->testConnection();
+
+        self::assertTrue($result->ok);
+        self::assertSame(ConnectionTestResult::REASON_OK, $result->reason);
         self::assertNotNull($transport->lastRequest);
         self::assertSame('GET', $transport->lastRequest['method']);
-        self::assertSame(self::BASE_URL . '/health', $transport->lastRequest['url']);
+        self::assertSame(self::BASE_URL . '/invoices?limit=1', $transport->lastRequest['url']);
         self::assertSame('Bearer ' . self::API_KEY, $transport->lastRequest['headers']['Authorization']);
     }
 
-    public function testConnectionReturnsFalseWhenTransportThrows(): void
+    public function testConnectionReturnsUnauthorizedOn401(): void
     {
-        // Panne réseau (DNS/timeout/TLS...) : testConnection() ne doit
-        // JAMAIS propager, seulement renvoyer false (contrat "ne lève
-        // jamais", utilisé tel quel par le bouton BO « Tester la connexion »).
-        $client = new FactelecClient(self::BASE_URL, self::API_KEY, new ThrowingHttpTransport());
+        // Endpoint authentifié (revue tâche 3) : un 401 signale spécifiquement
+        // une clé API invalide/révoquée — jamais confondu avec une panne
+        // réseau, le BO doit pouvoir afficher un message dédié.
+        $transport = new FakeHttpTransport(['status' => 401, 'body' => '{"type":"urn:factelec:problem:unauthorized"}']);
+        $client = new FactelecClient(self::BASE_URL, self::API_KEY, $transport);
 
-        self::assertFalse($client->testConnection());
+        $result = $client->testConnection();
+
+        self::assertFalse($result->ok);
+        self::assertSame(ConnectionTestResult::REASON_UNAUTHORIZED, $result->reason);
     }
 
-    public function testConnectionFailsOn500(): void
+    public function testConnectionReturnsNetworkErrorWhenTransportThrows(): void
+    {
+        // Panne réseau (DNS/timeout/TLS...) : testConnection() ne doit
+        // JAMAIS propager, seulement renvoyer un résultat "échec réseau"
+        // (contrat "ne lève jamais", utilisé tel quel par le bouton BO
+        // « Tester la connexion »).
+        $client = new FactelecClient(self::BASE_URL, self::API_KEY, new ThrowingHttpTransport());
+
+        $result = $client->testConnection();
+
+        self::assertFalse($result->ok);
+        self::assertSame(ConnectionTestResult::REASON_NETWORK_ERROR, $result->reason);
+    }
+
+    public function testConnectionReturnsUnexpectedStatusOn500(): void
     {
         $transport = new FakeHttpTransport(['status' => 500, 'body' => '']);
         $client = new FactelecClient(self::BASE_URL, self::API_KEY, $transport);
 
-        self::assertFalse($client->testConnection());
+        $result = $client->testConnection();
+
+        self::assertFalse($result->ok);
+        self::assertSame(ConnectionTestResult::REASON_UNEXPECTED_STATUS, $result->reason);
     }
 
     public function testSubmitInvoiceReturnsInvoiceIdOn201(): void

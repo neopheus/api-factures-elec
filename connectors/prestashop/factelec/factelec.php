@@ -44,9 +44,9 @@ spl_autoload_register(static function (string $class): void {
     }
 });
 
+use Factelec\Api\ConnectionTestResult;
 use Factelec\Api\CurlTransport;
 use Factelec\Api\FactelecClient;
-use Factelec\Exception\FactelecApiException;
 
 class Factelec extends Module
 {
@@ -176,15 +176,20 @@ class Factelec extends Module
             new CurlTransport(),
         );
 
-        try {
-            $ok = $client->testConnection();
-        } catch (FactelecApiException) {
-            $ok = false;
-        }
+        // GET /invoices?limit=1 (endpoint AUTHENTIFIÉ, revue tâche 3) : un
+        // simple /health ne prouvait pas que la clé API était valide, seulement
+        // que l'URL répondait. testConnection() ne lève jamais — le message
+        // affiché dépend du motif d'échec typé (clé invalide ≠ panne réseau).
+        $result = $client->testConnection();
 
-        return $ok
-            ? '<div class="alert alert-success">' . $this->l('Connexion réussie.') . '</div>'
-            : '<div class="alert alert-danger">' . $this->l('Connexion impossible — vérifiez URL et clé API.') . '</div>';
+        return match (true) {
+            $result->ok => '<div class="alert alert-success">' . $this->l('Connexion réussie.') . '</div>',
+            $result->reason === ConnectionTestResult::REASON_UNAUTHORIZED =>
+                '<div class="alert alert-danger">' . $this->l('Clé API invalide ou révoquée.') . '</div>',
+            default => '<div class="alert alert-danger">'
+                . $this->l("Connexion impossible — vérifiez l'URL de l'API et votre connectivité réseau.")
+                . '</div>',
+        };
     }
 
     private function renderForm(): string
