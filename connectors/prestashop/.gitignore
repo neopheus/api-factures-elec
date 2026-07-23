@@ -3,6 +3,7 @@
 /vendor/
 .php-cs-fixer.cache
 .phpunit.cache/
+.phpunit.result.cache
 
 # Artefact de packaging (build-zip.sh) — reproductible, jamais versionné.
 /factelec-prestashop-*.zip
