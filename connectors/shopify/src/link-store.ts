@@ -2,8 +2,18 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import Database from 'better-sqlite3'
 
-/** Machine d'états — motif PHP it.1/it.2 (submitted / pending_retry). */
-export type InvoiceLinkStatus = 'submitted' | 'pending_retry'
+/**
+ * Machine d'états — motif PHP it.1/it.2 (submitted / pending_retry) + un
+ * 3e état TERMINAL propre à ce connecteur (Task 2, design §6.2) :
+ * `abandoned` — la reprise automatique a atteint son plafond de tentatives
+ * (`RETRY_EVERY_MS`/retry-scheduler.ts) ; contrairement aux plugins PHP
+ * (bouton BO « Renvoyer » manuel, jamais de plafond), un service headless
+ * long-vivant retente automatiquement pour toujours SAUF plafond explicite
+ * — au-delà, la commande reste tracée (jamais supprimée) mais n'est plus
+ * retentée sans intervention (v1 : pas d'action manuelle de déblocage,
+ * limite documentée — cf. rapport Task 2).
+ */
+export type InvoiceLinkStatus = 'submitted' | 'pending_retry' | 'abandoned'
 
 export interface InvoiceLink {
   orderId: string
@@ -14,6 +24,16 @@ export interface InvoiceLink {
   status: InvoiceLinkStatus
   lastError: string | null
   attempts: number
+  /**
+   * Commande Shopify brute (JSON du webhook), capturée au premier échec —
+   * SEULE source permettant de reconstituer le payload de facture au
+   * moment d'une reprise (retry-scheduler.ts), SANS dépendre d'un second
+   * appel à l'API Shopify (Admin API potentiellement indisponible/
+   * commande depuis supprimée — décision Task 2, cf. rapport). `null` tant
+   * qu'aucun échec n'a eu lieu (une liaison `submitted` du premier coup n'a
+   * jamais besoin d'être reconstituée).
+   */
+  orderPayload: unknown | null
   createdAt: string
   updatedAt: string
 }
@@ -25,6 +45,7 @@ interface InvoiceLinkRow {
   status: InvoiceLinkStatus
   last_error: string | null
   attempts: number
+  order_payload: string | null
   created_at: string
   updated_at: string
 }
@@ -39,6 +60,15 @@ function rowToLink(row: InvoiceLinkRow): InvoiceLink {
     // faire planter la lecture, seulement dégrader la liste à vide.
     webhookIds = []
   }
+  let orderPayload: unknown | null = null
+  if (row.order_payload !== null) {
+    try {
+      orderPayload = JSON.parse(row.order_payload)
+    } catch {
+      // Même discipline défensive que webhook_ids ci-dessus.
+      orderPayload = null
+    }
+  }
   return {
     orderId: row.order_id,
     webhookIds,
@@ -46,6 +76,7 @@ function rowToLink(row: InvoiceLinkRow): InvoiceLink {
     status: row.status,
     lastError: row.last_error,
     attempts: row.attempts,
+    orderPayload,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -69,14 +100,15 @@ export class LinkStore {
     this.db.pragma('journal_mode = WAL')
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS invoice_link (
-        order_id    TEXT PRIMARY KEY,
-        webhook_ids TEXT NOT NULL DEFAULT '[]',
-        invoice_id  TEXT,
-        status      TEXT NOT NULL,
-        last_error  TEXT,
-        attempts    INTEGER NOT NULL DEFAULT 0,
-        created_at  TEXT NOT NULL,
-        updated_at  TEXT NOT NULL
+        order_id      TEXT PRIMARY KEY,
+        webhook_ids   TEXT NOT NULL DEFAULT '[]',
+        invoice_id    TEXT,
+        status        TEXT NOT NULL,
+        last_error    TEXT,
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        order_payload TEXT,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
       )
     `)
   }
@@ -115,17 +147,28 @@ export class LinkStore {
     return rows.map(rowToLink)
   }
 
+  /** Liaisons `pending_retry` — celles que le retry-scheduler (Task 2) balaie. */
+  listPendingRetries(): InvoiceLink[] {
+    const rows = this.db
+      .prepare("SELECT * FROM invoice_link WHERE status = 'pending_retry'")
+      .all() as InvoiceLinkRow[]
+    return rows.map(rowToLink)
+  }
+
   /**
    * Émission réussie : upsert en `submitted`, remet `last_error` à null.
-   * `webhookId` optionnel (Task 2 branchera le handler réel ; Task 1 ne
-   * l'exerce que via les tests directs du store).
+   * `webhookId` optionnel (Task 1 ne l'exerçait que via les tests directs
+   * du store ; le handler webhook réel — Task 2 — le fournit toujours).
+   * `orderPayload` optionnel : PRÉSERVE la valeur déjà stockée si omis (le
+   * chemin de succès n'a normalement jamais besoin de la (re)fournir).
    */
   recordSubmitted(
     orderId: string,
     invoiceId: string,
     webhookId?: string,
+    orderPayload?: unknown,
   ): InvoiceLink {
-    return this.upsert(orderId, webhookId, (existing) => ({
+    return this.upsert(orderId, webhookId, orderPayload, (existing) => ({
       invoiceId,
       status: 'submitted',
       lastError: null,
@@ -133,17 +176,47 @@ export class LinkStore {
     }))
   }
 
-  /** Échec (Throwable/réseau/validation) : upsert en `pending_retry`. */
+  /**
+   * Échec (Throwable/réseau/validation) : upsert en `pending_retry`.
+   * `orderPayload` : à fournir au PREMIER échec (le handler webhook, qui
+   * dispose du JSON brut reçu) — le retry-scheduler (Task 2), qui rejoue un
+   * échec déjà tracé, l'omet et la valeur déjà stockée est préservée (seule
+   * source disponible pour reconstruire le payload de facture à ce
+   * moment-là, cf. docblock `InvoiceLink.orderPayload`).
+   */
   recordPendingRetry(
     orderId: string,
     errorMessage: string,
     webhookId?: string,
+    orderPayload?: unknown,
   ): InvoiceLink {
-    return this.upsert(orderId, webhookId, (existing) => ({
+    return this.upsert(orderId, webhookId, orderPayload, (existing) => ({
       invoiceId: existing?.invoiceId ?? null,
       status: 'pending_retry',
       lastError: errorMessage,
       attempts: (existing?.attempts ?? 0) + 1,
+    }))
+  }
+
+  /**
+   * Plafond de reprises atteint (retry-scheduler.ts, décision Task 2) :
+   * transition TERMINALE vers `abandoned` — la liaison reste tracée
+   * (jamais supprimée) mais le scheduler ne la retente plus JAMAIS après
+   * ça (aucune action manuelle de déblocage en v1, limite documentée).
+   * N'incrémente PAS `attempts` (ce n'est pas une tentative de plus, c'est
+   * la CONSTATATION que le plafond des tentatives précédentes est atteint).
+   */
+  markAbandoned(orderId: string, reason: string): InvoiceLink {
+    const existing = this.findByOrderId(orderId)
+    if (!existing)
+      throw new Error(
+        `LinkStore.markAbandoned: liaison inconnue pour order_id=${orderId}`,
+      )
+    return this.upsert(orderId, undefined, undefined, () => ({
+      invoiceId: existing.invoiceId,
+      status: 'abandoned',
+      lastError: reason,
+      attempts: existing.attempts,
     }))
   }
 
@@ -169,6 +242,7 @@ export class LinkStore {
   private upsert(
     orderId: string,
     webhookId: string | undefined,
+    orderPayload: unknown | undefined,
     change: (existing: InvoiceLink | undefined) => {
       invoiceId: string | null
       status: InvoiceLinkStatus
@@ -179,19 +253,26 @@ export class LinkStore {
     const existing = this.findByOrderId(orderId)
     const now = new Date().toISOString()
     const webhookIds = mergeWebhookId(existing?.webhookIds ?? [], webhookId)
+    // `orderPayload` omis → préserve la valeur déjà stockée (docblock des
+    // méthodes publiques ci-dessus) — jamais écrasée par `null` par défaut.
+    const resolvedPayload =
+      orderPayload !== undefined
+        ? orderPayload
+        : (existing?.orderPayload ?? null)
     const patch = change(existing)
     this.db
       .prepare(`
         INSERT INTO invoice_link
-          (order_id, webhook_ids, invoice_id, status, last_error, attempts, created_at, updated_at)
-        VALUES (@orderId, @webhookIds, @invoiceId, @status, @lastError, @attempts, @createdAt, @updatedAt)
+          (order_id, webhook_ids, invoice_id, status, last_error, attempts, order_payload, created_at, updated_at)
+        VALUES (@orderId, @webhookIds, @invoiceId, @status, @lastError, @attempts, @orderPayload, @createdAt, @updatedAt)
         ON CONFLICT(order_id) DO UPDATE SET
-          webhook_ids = excluded.webhook_ids,
-          invoice_id  = excluded.invoice_id,
-          status      = excluded.status,
-          last_error  = excluded.last_error,
-          attempts    = excluded.attempts,
-          updated_at  = excluded.updated_at
+          webhook_ids   = excluded.webhook_ids,
+          invoice_id    = excluded.invoice_id,
+          status        = excluded.status,
+          last_error    = excluded.last_error,
+          attempts      = excluded.attempts,
+          order_payload = excluded.order_payload,
+          updated_at    = excluded.updated_at
       `)
       .run({
         orderId,
@@ -200,6 +281,8 @@ export class LinkStore {
         status: patch.status,
         lastError: patch.lastError,
         attempts: patch.attempts,
+        orderPayload:
+          resolvedPayload === null ? null : JSON.stringify(resolvedPayload),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       })
