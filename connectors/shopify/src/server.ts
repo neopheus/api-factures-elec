@@ -1,5 +1,5 @@
-import { createServer as createHttpServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
+import { createServer as createHttpServer } from 'node:http'
 import type { ShopifyConnectorConfig } from './config.js'
 import type { LinkStore } from './link-store.js'
 import { verifyShopifyWebhookHmac } from './webhook-hmac.js'
@@ -94,7 +94,9 @@ async function handleWebhook(
   // HMAC vérifié AVANT tout traitement (design §5) — 401 nu si invalide,
   // aucune autre information.
   const signature = firstHeader(req.headers['x-shopify-hmac-sha256'])
-  if (!verifyShopifyWebhookHmac(rawBody, config.shopify.webhookSecret, signature)) {
+  if (
+    !verifyShopifyWebhookHmac(rawBody, config.shopify.webhookSecret, signature)
+  ) {
     respondBare(res, 401)
     return
   }
@@ -142,7 +144,9 @@ async function handleWebhook(
 // de cette tâche, prévue Task 3) — exposer cet endpoint au-delà de
 // localhost sans cette restriction fuiterait le contenu du store (ids de
 // commande, dernières erreurs) à quiconque atteint le service.
-function handleLinks(
+/** Exportée pour test unitaire direct (la garde 403 non-loopback n'est pas
+ * facilement exerçable via une vraie connexion TCP dans ce sandbox de test). */
+export function handleLinks(
   req: IncomingMessage,
   res: ServerResponse,
   store: LinkStore,
@@ -156,13 +160,18 @@ function handleLinks(
   res.end(body)
 }
 
-function isLoopback(address: string | undefined): boolean {
+/** Exportée pour test unitaire direct (la restriction /links n'est pas
+ * facilement exerçable via une vraie connexion TCP non-loopback en test). */
+export function isLoopback(address: string | undefined): boolean {
   return (
-    address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+    address === '127.0.0.1' ||
+    address === '::1' ||
+    address === '::ffff:127.0.0.1'
   )
 }
 
-function readRawBody(req: IncomingMessage): Promise<Buffer> {
+/** Exportée pour test unitaire direct (garde MAX_BODY_BYTES, motif isLoopback ci-dessus). */
+export function readRawBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let total = 0

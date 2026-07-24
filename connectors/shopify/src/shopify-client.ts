@@ -50,19 +50,24 @@ export class ShopifyAdminClient {
       headers: this.headers(),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
-    if (!response.ok) throw new ShopifyAdminApiError(response.status, await safeText(response))
+    if (!response.ok)
+      throw new ShopifyAdminApiError(response.status, await safeText(response))
     const body = (await response.json()) as { webhooks?: RawWebhook[] }
     return (body.webhooks ?? []).map(toSubscription)
   }
 
-  async createWebhook(topic: string, address: string): Promise<ShopifyWebhookSubscription> {
+  async createWebhook(
+    topic: string,
+    address: string,
+  ): Promise<ShopifyWebhookSubscription> {
     const response = await fetch(this.url('/webhooks.json'), {
       method: 'POST',
       headers: { ...this.headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ webhook: { topic, address, format: 'json' } }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
-    if (!response.ok) throw new ShopifyAdminApiError(response.status, await safeText(response))
+    if (!response.ok)
+      throw new ShopifyAdminApiError(response.status, await safeText(response))
     const body = (await response.json()) as { webhook: RawWebhook }
     return toSubscription(body.webhook)
   }

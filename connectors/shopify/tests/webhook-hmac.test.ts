@@ -10,7 +10,9 @@ function sign(rawBody: Buffer, secret = SECRET): string {
 
 describe('verifyShopifyWebhookHmac', () => {
   it('accepte une signature valide (vecteur calculé au vrai crypto)', () => {
-    const rawBody = Buffer.from(JSON.stringify({ id: 12345, total_price: '42.00' }))
+    const rawBody = Buffer.from(
+      JSON.stringify({ id: 12345, total_price: '42.00' }),
+    )
     const signature = sign(rawBody)
     expect(verifyShopifyWebhookHmac(rawBody, SECRET, signature)).toBe(true)
   })
@@ -37,7 +39,9 @@ describe('verifyShopifyWebhookHmac', () => {
     const original = Buffer.from('{"id":1,"total_price":"10.00"}')
     const tamperedBody = Buffer.from('{"id":1,"total_price":"1000.00"}')
     const signature = sign(original)
-    expect(verifyShopifyWebhookHmac(tamperedBody, SECRET, signature)).toBe(false)
+    expect(verifyShopifyWebhookHmac(tamperedBody, SECRET, signature)).toBe(
+      false,
+    )
   })
 
   it('rejette quand le secret ne correspond pas', () => {

@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+**/dist
+**/coverage
+**/.next
+.git
+docs
+normes-afnor
+infra
+var
+**/var
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example

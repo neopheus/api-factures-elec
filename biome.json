@@ -3,12 +3,6 @@
     "includes": [
       "**",
       "!**/docs",
-      // Connecteurs PHP (PrestaShop/WooCommerce) exclus nommément — PAS de
-      // blanket "!**/connectors" : connectors/shopify est un paquet TS
-      // workspace (@factelec/connector-shopify) que biome DOIT couvrir. Un
-      // "!**/connectors" suivi d'un ré-include ne fonctionne pas ici (motif
-      // gitignore : un dossier exclu n'est plus descendu, un pattern positif
-      // plus spécifique ne le fait pas réapparaître — vérifié empiriquement).
       "!connectors/prestashop",
       "!connectors/woocommerce",
       "!**/dist",

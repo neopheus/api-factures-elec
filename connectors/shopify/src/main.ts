@@ -3,7 +3,10 @@ import { loadConfig } from './config.js'
 import { FactelecClient } from './factelec-client.js'
 import { LinkStore } from './link-store.js'
 import { createServer } from './server.js'
-import { ShopifyAdminClient, ensureWebhookSubscription } from './shopify-client.js'
+import {
+  ensureWebhookSubscription,
+  ShopifyAdminClient,
+} from './shopify-client.js'
 
 // Bootstrap pur (câblage) — exclu de la couverture (vitest.config.ts), motif
 // apps/api/vitest.config.ts (src/main.ts). Séquence design §2/6.1 : config →
@@ -59,7 +62,9 @@ async function main(): Promise<void> {
   })
 
   const shutdown = (): void => {
-    console.log('[shopify-connector] arrêt (SIGTERM) — fermeture serveur + store')
+    console.log(
+      '[shopify-connector] arrêt (SIGTERM) — fermeture serveur + store',
+    )
     server.close(() => {
       store.close()
       process.exit(0)

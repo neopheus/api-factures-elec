@@ -107,11 +107,14 @@ export class FactelecClient {
 
   /** `GET /invoices/:id` — statut de génération, cycle de vie DGFiP courant. */
   async getInvoiceStatus(invoiceId: string): Promise<Record<string, unknown>> {
-    const response = await fetch(this.url(`/invoices/${encodeURIComponent(invoiceId)}`), {
-      method: 'GET',
-      headers: this.headers(),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
+    const response = await fetch(
+      this.url(`/invoices/${encodeURIComponent(invoiceId)}`),
+      {
+        method: 'GET',
+        headers: this.headers(),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      },
+    )
     if (response.status === 200) return tryDecode(response)
     throw await toApiError(response)
   }

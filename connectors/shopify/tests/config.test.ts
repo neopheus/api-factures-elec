@@ -25,61 +25,101 @@ describe('loadConfig', () => {
   })
 
   it('accepte SHOPIFY_TOPIC=orders/fulfilled explicite', () => {
-    const config = loadConfig({ ...VALID_ENV, SHOPIFY_TOPIC: 'orders/fulfilled' })
+    const config = loadConfig({
+      ...VALID_ENV,
+      SHOPIFY_TOPIC: 'orders/fulfilled',
+    })
     expect(config.shopify.topic).toBe('orders/fulfilled')
   })
 
   it('rejette un SHOPIFY_TOPIC hors énumération', () => {
-    expect(() => loadConfig({ ...VALID_ENV, SHOPIFY_TOPIC: 'orders/cancelled' })).toThrow()
+    expect(() =>
+      loadConfig({ ...VALID_ENV, SHOPIFY_TOPIC: 'orders/cancelled' }),
+    ).toThrow()
   })
 
-  it('rejette un SHOPIFY_SHOP qui n\'est pas un domaine *.myshopify.com', () => {
-    expect(() => loadConfig({ ...VALID_ENV, SHOPIFY_SHOP: 'ma-boutique.example.com' })).toThrow()
+  it("rejette un SHOPIFY_SHOP qui n'est pas un domaine *.myshopify.com", () => {
+    expect(() =>
+      loadConfig({ ...VALID_ENV, SHOPIFY_SHOP: 'ma-boutique.example.com' }),
+    ).toThrow()
   })
 
   it('rejette un SHOPIFY_ACCESS_TOKEN trop court (< 20)', () => {
-    expect(() => loadConfig({ ...VALID_ENV, SHOPIFY_ACCESS_TOKEN: 'short' })).toThrow()
+    expect(() =>
+      loadConfig({ ...VALID_ENV, SHOPIFY_ACCESS_TOKEN: 'short' }),
+    ).toThrow()
   })
 
   it('accepte un SHOPIFY_ACCESS_TOKEN exactement à la borne (20)', () => {
-    const config = loadConfig({ ...VALID_ENV, SHOPIFY_ACCESS_TOKEN: 'a'.repeat(20) })
+    const config = loadConfig({
+      ...VALID_ENV,
+      SHOPIFY_ACCESS_TOKEN: 'a'.repeat(20),
+    })
     expect(config.shopify.accessToken).toHaveLength(20)
   })
 
   it('rejette un SHOPIFY_WEBHOOK_SECRET trop court (< 16)', () => {
-    expect(() => loadConfig({ ...VALID_ENV, SHOPIFY_WEBHOOK_SECRET: 'a'.repeat(15) })).toThrow()
+    expect(() =>
+      loadConfig({ ...VALID_ENV, SHOPIFY_WEBHOOK_SECRET: 'a'.repeat(15) }),
+    ).toThrow()
   })
 
   it('rejette FACTELEC_API_URL en http hors localhost', () => {
-    expect(() => loadConfig({ ...VALID_ENV, FACTELEC_API_URL: 'http://api.factelec.example.com' })).toThrow()
+    expect(() =>
+      loadConfig({
+        ...VALID_ENV,
+        FACTELEC_API_URL: 'http://api.factelec.example.com',
+      }),
+    ).toThrow()
   })
 
   it('accepte FACTELEC_API_URL en http pour localhost', () => {
-    const config = loadConfig({ ...VALID_ENV, FACTELEC_API_URL: 'http://localhost:3000' })
+    const config = loadConfig({
+      ...VALID_ENV,
+      FACTELEC_API_URL: 'http://localhost:3000',
+    })
     expect(config.factelec.apiUrl).toBe('http://localhost:3000')
   })
 
   it('accepte FACTELEC_API_URL en http pour 127.0.0.1', () => {
-    const config = loadConfig({ ...VALID_ENV, FACTELEC_API_URL: 'http://127.0.0.1:3000' })
+    const config = loadConfig({
+      ...VALID_ENV,
+      FACTELEC_API_URL: 'http://127.0.0.1:3000',
+    })
     expect(config.factelec.apiUrl).toBe('http://127.0.0.1:3000')
   })
 
   it('rejette FACTELEC_API_URL absente/malformée', () => {
-    expect(() => loadConfig({ ...VALID_ENV, FACTELEC_API_URL: 'not-a-url' })).toThrow()
+    expect(() =>
+      loadConfig({ ...VALID_ENV, FACTELEC_API_URL: 'not-a-url' }),
+    ).toThrow()
   })
 
   it('rejette FACTELEC_API_KEY trop courte (< 16)', () => {
-    expect(() => loadConfig({ ...VALID_ENV, FACTELEC_API_KEY: 'a'.repeat(15) })).toThrow()
+    expect(() =>
+      loadConfig({ ...VALID_ENV, FACTELEC_API_KEY: 'a'.repeat(15) }),
+    ).toThrow()
   })
 
   it('rejette PUBLIC_WEBHOOK_URL en http', () => {
-    expect(() => loadConfig({ ...VALID_ENV, PUBLIC_WEBHOOK_URL: 'http://connector.example.com' })).toThrow()
+    expect(() =>
+      loadConfig({
+        ...VALID_ENV,
+        PUBLIC_WEBHOOK_URL: 'http://connector.example.com',
+      }),
+    ).toThrow()
   })
 
-  it('rejette SELLER_SIREN qui n\'est pas 9 chiffres', () => {
-    expect(() => loadConfig({ ...VALID_ENV, SELLER_SIREN: '12345678' })).toThrow()
-    expect(() => loadConfig({ ...VALID_ENV, SELLER_SIREN: '1234567890' })).toThrow()
-    expect(() => loadConfig({ ...VALID_ENV, SELLER_SIREN: 'abcdefghi' })).toThrow()
+  it("rejette SELLER_SIREN qui n'est pas 9 chiffres", () => {
+    expect(() =>
+      loadConfig({ ...VALID_ENV, SELLER_SIREN: '12345678' }),
+    ).toThrow()
+    expect(() =>
+      loadConfig({ ...VALID_ENV, SELLER_SIREN: '1234567890' }),
+    ).toThrow()
+    expect(() =>
+      loadConfig({ ...VALID_ENV, SELLER_SIREN: 'abcdefghi' }),
+    ).toThrow()
   })
 
   it('rejette SELLER_NAME vide', () => {
@@ -124,7 +164,7 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...VALID_ENV, RETRY_EVERY_MS: '0' })).toThrow()
   })
 
-  it('ne fuite aucune valeur de secret dans le message d\'erreur, seulement les clés', () => {
+  it("ne fuite aucune valeur de secret dans le message d'erreur, seulement les clés", () => {
     const secretToken = 'shpat_SUPER_SECRET_TOKEN_VALUE'
     const secretWebhook = 'WEBHOOK_SECRET_VALUE_XYZ'
     const secretApiKey = 'FACTELEC_API_KEY_VALUE_XYZ'

@@ -46,7 +46,10 @@ const envSchema = z.object({
   // CLOUD SHOPIFY — jamais localhost, contrairement à FACTELEC_API_URL.
   PUBLIC_WEBHOOK_URL: z
     .url()
-    .refine((v) => new URL(v).protocol === 'https:', 'PUBLIC_WEBHOOK_URL doit être en https (adresse joignable par Shopify)'),
+    .refine(
+      (v) => new URL(v).protocol === 'https:',
+      'PUBLIC_WEBHOOK_URL doit être en https (adresse joignable par Shopify)',
+    ),
 
   // ── API Factelec (contrat client, motif FactelecClient PHP it.1/it.2) ────
   FACTELEC_API_URL: z
@@ -124,9 +127,10 @@ export function loadConfig(
 ): ShopifyConnectorConfig {
   const parsed = envSchema.safeParse(raw)
   if (!parsed.success) {
-    const keys = [
-      ...new Set(parsed.error.issues.map((i) => i.path.join('.') || '(root)')),
-    ]
+    // `envSchema` est un `z.object` SANS `.refine()` global : chaque issue
+    // porte donc TOUJOURS un `path` non vide (un champ précis) — pas de
+    // fallback "(root)" mort à couvrir.
+    const keys = [...new Set(parsed.error.issues.map((i) => i.path.join('.')))]
     throw new Error(
       `Invalid Shopify connector environment configuration: ${keys.join(', ')}`,
     )
