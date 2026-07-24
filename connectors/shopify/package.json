@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "dev": "node --import tsx --watch src/main.ts",
+    "status": "node dist/cli-status.js",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
