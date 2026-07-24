@@ -77,6 +77,16 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3100),
   LINK_DB_PATH: z.string().default('./var/links.sqlite'),
   RETRY_EVERY_MS: z.coerce.number().int().positive().default(300_000),
+  // GET /links reste restreint à loopback PAR DÉFAUT (design §4, décision
+  // Task 1). Optionnel : si défini, un appelant NON-loopback peut aussi
+  // s'authentifier via `Authorization: Bearer <LINKS_ACCESS_TOKEN>` (Task 3,
+  // design §4 « auth par token local optionnel ») — utile pour la CLI
+  // `pnpm status`/un reverse-proxy exécutés hors du conteneur. Absent =
+  // comportement Task 1 inchangé (loopback seul).
+  LINKS_ACCESS_TOKEN: z
+    .string()
+    .min(16, 'LINKS_ACCESS_TOKEN trop court (attendu ≥ 16 caractères)')
+    .optional(),
 })
 
 export type ShopifyTopic = (typeof SHOPIFY_TOPICS)[number]
@@ -113,6 +123,7 @@ export interface ShopifyConnectorConfig {
   port: number
   linkDbPath: string
   retryEveryMs: number
+  linksAccessToken?: string
 }
 
 /**
@@ -162,5 +173,6 @@ export function loadConfig(
     port: env.PORT,
     linkDbPath: env.LINK_DB_PATH,
     retryEveryMs: env.RETRY_EVERY_MS,
+    linksAccessToken: env.LINKS_ACCESS_TOKEN,
   }
 }

@@ -9,6 +9,7 @@ import { LinkStore } from '../src/link-store.js'
 import {
   createServer,
   handleLinks,
+  isLinksAuthorized,
   isLoopback,
   readRawBody,
   type ShopifyWebhookHandler,
@@ -46,6 +47,62 @@ describe('isLoopback', () => {
   })
 })
 
+describe('isLinksAuthorized (Task 3 — jeton local optionnel)', () => {
+  function req(
+    remoteAddress: string | undefined,
+    authorization?: string,
+  ): IncomingMessage {
+    return {
+      socket: { remoteAddress },
+      headers: authorization ? { authorization } : {},
+    } as unknown as IncomingMessage
+  }
+
+  it('loopback toujours autorisé, MÊME quand un jeton est configuré', () => {
+    expect(isLinksAuthorized(req('127.0.0.1'), undefined)).toBe(true)
+    expect(isLinksAuthorized(req('127.0.0.1'), 'x'.repeat(20))).toBe(true)
+  })
+
+  it('non-loopback sans jeton configuré -> refusé', () => {
+    expect(isLinksAuthorized(req('203.0.113.10'), undefined)).toBe(false)
+  })
+
+  it('non-loopback avec jeton configuré mais en-tête absent -> refusé', () => {
+    expect(isLinksAuthorized(req('203.0.113.10'), 'x'.repeat(20))).toBe(false)
+  })
+
+  it('non-loopback avec en-tête sans préfixe "Bearer " -> refusé', () => {
+    expect(
+      isLinksAuthorized(req('203.0.113.10', 'x'.repeat(20)), 'x'.repeat(20)),
+    ).toBe(false)
+  })
+
+  it('non-loopback avec un jeton de longueur différente -> refusé (garde AVANT timingSafeEqual)', () => {
+    expect(
+      isLinksAuthorized(
+        req('203.0.113.10', 'Bearer trop-court'),
+        'x'.repeat(20),
+      ),
+    ).toBe(false)
+  })
+
+  it('non-loopback avec le jeton EXACT -> autorisé', () => {
+    const token = 'x'.repeat(20)
+    expect(
+      isLinksAuthorized(req('203.0.113.10', `Bearer ${token}`), token),
+    ).toBe(true)
+  })
+
+  it('non-loopback avec un jeton incorrect de même longueur -> refusé', () => {
+    expect(
+      isLinksAuthorized(
+        req('203.0.113.10', `Bearer ${'y'.repeat(20)}`),
+        'x'.repeat(20),
+      ),
+    ).toBe(false)
+  })
+})
+
 describe('handleLinks (unitaire, sans TCP réel)', () => {
   function fakeRes() {
     return {
@@ -54,13 +111,14 @@ describe('handleLinks (unitaire, sans TCP réel)', () => {
     } as unknown as import('node:http').ServerResponse
   }
 
-  it('403 nu quand la connexion ne vient pas de loopback', () => {
+  it('403 nu quand la connexion ne vient pas de loopback (aucun jeton configuré)', () => {
     const store = new LinkStore(':memory:')
     const req = {
       socket: { remoteAddress: '203.0.113.10' },
+      headers: {},
     } as unknown as IncomingMessage
     const res = fakeRes()
-    handleLinks(req, res, store)
+    handleLinks(req, res, store, loadConfig(BASE_ENV))
     expect(res.writeHead).toHaveBeenCalledWith(403)
     expect(res.end).toHaveBeenCalledWith()
     store.close()
@@ -71,13 +129,48 @@ describe('handleLinks (unitaire, sans TCP réel)', () => {
     store.recordSubmitted('order-x', 'inv-x')
     const req = {
       socket: { remoteAddress: '127.0.0.1' },
+      headers: {},
     } as unknown as IncomingMessage
     const res = fakeRes()
-    handleLinks(req, res, store)
+    handleLinks(req, res, store, loadConfig(BASE_ENV))
     expect(res.writeHead).toHaveBeenCalledWith(200, {
       'Content-Type': 'application/json',
     })
     expect(res.end).toHaveBeenCalledWith(expect.stringContaining('order-x'))
+    store.close()
+  })
+
+  it('200 pour un appelant non-loopback muni du bon jeton (LINKS_ACCESS_TOKEN, Task 3)', () => {
+    const store = new LinkStore(':memory:')
+    const config = loadConfig({
+      ...BASE_ENV,
+      LINKS_ACCESS_TOKEN: 'x'.repeat(20),
+    })
+    const req = {
+      socket: { remoteAddress: '203.0.113.10' },
+      headers: { authorization: `Bearer ${'x'.repeat(20)}` },
+    } as unknown as IncomingMessage
+    const res = fakeRes()
+    handleLinks(req, res, store, config)
+    expect(res.writeHead).toHaveBeenCalledWith(200, {
+      'Content-Type': 'application/json',
+    })
+    store.close()
+  })
+
+  it('403 pour un appelant non-loopback avec un jeton INCORRECT', () => {
+    const store = new LinkStore(':memory:')
+    const config = loadConfig({
+      ...BASE_ENV,
+      LINKS_ACCESS_TOKEN: 'x'.repeat(20),
+    })
+    const req = {
+      socket: { remoteAddress: '203.0.113.10' },
+      headers: { authorization: `Bearer ${'y'.repeat(20)}` },
+    } as unknown as IncomingMessage
+    const res = fakeRes()
+    handleLinks(req, res, store, config)
+    expect(res.writeHead).toHaveBeenCalledWith(403)
     store.close()
   })
 })

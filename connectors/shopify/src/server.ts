@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer as createHttpServer } from 'node:http'
 import type { ShopifyConnectorConfig } from './config.js'
@@ -67,7 +68,7 @@ async function handleRequest(
       return
     }
     if (req.method === 'GET' && url.pathname === '/links') {
-      handleLinks(req, res, store)
+      handleLinks(req, res, store, config)
       return
     }
     respondBare(res, 404)
@@ -147,19 +148,23 @@ async function handleWebhook(
 }
 
 // GET /links — diagnostic local (design §4 : pas d'UI marchande en v1).
-// Restreint à loopback PAR DÉFAUT : aucune authentification par jeton en
-// Task 1 (le jeton local optionnel du design §4 est une limite documentée
-// de cette tâche, prévue Task 3) — exposer cet endpoint au-delà de
-// localhost sans cette restriction fuiterait le contenu du store (ids de
-// commande, dernières erreurs) à quiconque atteint le service.
-/** Exportée pour test unitaire direct (la garde 403 non-loopback n'est pas
+// Restreint à loopback PAR DÉFAUT (Task 1) — exposer cet endpoint au-delà
+// de localhost sans restriction fuiterait le contenu du store (ids de
+// commande, dernières erreurs) à quiconque atteint le service. Task 3 :
+// authentification par jeton local OPTIONNELLE (`LINKS_ACCESS_TOKEN`,
+// config.ts) — ÉLARGIT l'accès (un appelant non-loopback muni du bon
+// jeton passe aussi), ne le RESTREINT jamais : loopback reste toujours
+// autorisé même si un jeton est configuré (motif : la CLI `pnpm status`/un
+// process interne au conteneur ne doit jamais avoir besoin du jeton).
+/** Exportée pour test unitaire direct (la garde 403 non-autorisée n'est pas
  * facilement exerçable via une vraie connexion TCP dans ce sandbox de test). */
 export function handleLinks(
   req: IncomingMessage,
   res: ServerResponse,
   store: LinkStore,
+  config: ShopifyConnectorConfig,
 ): void {
-  if (!isLoopback(req.socket.remoteAddress)) {
+  if (!isLinksAuthorized(req, config.linksAccessToken)) {
     respondBare(res, 403)
     return
   }
@@ -176,6 +181,24 @@ export function isLoopback(address: string | undefined): boolean {
     address === '::1' ||
     address === '::ffff:127.0.0.1'
   )
+}
+
+/** Exportée pour test unitaire direct — motif isLoopback ci-dessus. */
+export function isLinksAuthorized(
+  req: IncomingMessage,
+  configuredToken: string | undefined,
+): boolean {
+  if (isLoopback(req.socket.remoteAddress)) return true
+  if (!configuredToken) return false
+
+  const header = firstHeader(req.headers.authorization)
+  if (!header?.startsWith('Bearer ')) return false
+  const provided = Buffer.from(header.slice('Bearer '.length))
+  const expected = Buffer.from(configuredToken)
+  // timingSafeEqual exige des longueurs égales — garde AVANT l'appel (motif
+  // webhook-hmac.ts / fake-billing.driver.ts).
+  if (provided.length !== expected.length) return false
+  return timingSafeEqual(provided, expected)
 }
 
 /** Exportée pour test unitaire direct (garde MAX_BODY_BYTES, motif isLoopback ci-dessus). */

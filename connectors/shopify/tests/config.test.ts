@@ -164,6 +164,25 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...VALID_ENV, RETRY_EVERY_MS: '0' })).toThrow()
   })
 
+  it('LINKS_ACCESS_TOKEN absent par défaut (undefined) — comportement Task 1 loopback-only inchangé', () => {
+    const config = loadConfig(VALID_ENV)
+    expect(config.linksAccessToken).toBeUndefined()
+  })
+
+  it('accepte LINKS_ACCESS_TOKEN quand fourni (>= 16 caractères)', () => {
+    const config = loadConfig({
+      ...VALID_ENV,
+      LINKS_ACCESS_TOKEN: 'x'.repeat(16),
+    })
+    expect(config.linksAccessToken).toBe('x'.repeat(16))
+  })
+
+  it('rejette LINKS_ACCESS_TOKEN trop court (< 16)', () => {
+    expect(() =>
+      loadConfig({ ...VALID_ENV, LINKS_ACCESS_TOKEN: 'x'.repeat(15) }),
+    ).toThrow()
+  })
+
   it("ne fuite aucune valeur de secret dans le message d'erreur, seulement les clés", () => {
     const secretToken = 'shpat_SUPER_SECRET_TOKEN_VALUE'
     const secretWebhook = 'WEBHOOK_SECRET_VALUE_XYZ'
