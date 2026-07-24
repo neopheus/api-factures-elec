@@ -3,16 +3,24 @@ on:
   push:
     branches: [main]
     paths:
-      - 'connectors/**'
+      - 'connectors/prestashop/**'
+      - 'connectors/woocommerce/**'
   pull_request:
     paths:
-      - 'connectors/**'
+      - 'connectors/prestashop/**'
+      - 'connectors/woocommerce/**'
 jobs:
   # Job séparé (brief) : n'affecte pas la CI TS existante (ci.yml). Paths
-  # élargis à connectors/** (phase 4 it.2) : chaque job garde son propre
-  # working-directory, donc un changement dans un seul connecteur déclenche
-  # bien les DEUX paires de jobs (GitHub Actions n'a pas de filtrage par job
-  # à partir des paths du workflow), mais chaque job reste rapide et isolé.
+  # resserrés à connectors/prestashop/** + connectors/woocommerce/** (phase 4
+  # it.3) — PAS connectors/** : connectors/shopify/ est un paquet TypeScript
+  # workspace (@factelec/connector-shopify), déjà couvert par les gates TS du
+  # monorepo (ci.yml : pnpm build/typecheck/test à la racine) ; un blanket
+  # connectors/** aurait aussi déclenché ce workflow PHP sur un changement
+  # Shopify pur, pour rien (aucun fichier PHP concerné). Chaque job garde son
+  # propre working-directory, donc un changement dans un seul connecteur PHP
+  # déclenche bien les DEUX paires de jobs (GitHub Actions n'a pas de
+  # filtrage par job à partir des paths du workflow), mais chaque job reste
+  # rapide et isolé.
   php:
     runs-on: ubuntu-latest
     defaults:

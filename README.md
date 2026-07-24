@@ -1018,6 +1018,65 @@ l'annuaire y font foi — ne pas en télécharger d'autres versions.
       Shopify (it.3), publication marketplace WordPress.org, webhooks
       sortants Factelec→boutique (poll uniquement en v1), avoirs déclenchés
       depuis la boutique. Détail complet : `connectors/woocommerce/README.md`.
+- [x] **4.3 — Connecteur Shopify v1** (terminé) : troisième connecteur
+      natif (phase 4), mais **premier écrit en TypeScript** — Shopify
+      n'exécute aucun code marchand, contrairement à WordPress/PrestaShop
+      qui hébergent le plugin dans le processus de la boutique. **Service
+      Node/TS autonome** (`connectors/shopify/`, `@factelec/
+      connector-shopify`, Docker + archive tar.gz déployables), appairé à
+      une **custom app** Shopify (Admin API access token, scope
+      `read_orders` seul requis — pas d'app App Store/OAuth publique en
+      v1). **Premier connecteur consommant `@factelec/connectors-sdk` en
+      TypeScript direct** (types + schéma, pas de réimplémentation
+      manuelle). Env validé fail-fast (zod), serveur `node:http` nu
+      (zéro dépendance — HMAC-SHA256 vérifié sur le RAW body **avant tout**
+      traitement, motif direct du webhook Stripe phase 5, `401` nu si
+      invalide), enregistrement d'abonnement webhook idempotent au
+      démarrage (list→create via Admin API), sonde Factelec authentifiée
+      (même motif PrestaShop/WooCommerce it.1/it.2). Mapping conforme au
+      contrat sdk : prix ligne DÉJÀ unitaire (pas de division comme
+      WooCommerce), **un seul taux de TVA par ligne** (`tax_lines`
+      multiples ou taux non exprimable en pourcentage → rejet clair,
+      **jamais** de somme de taux inventée — décision explicite, absente
+      des connecteurs PHP), 0 %→`Z` (acquis it.2), SIREN acheteur via
+      `note_attribute factelec_siret` (14→9 chiffres — PAS un metafield,
+      décision documentée : zéro appel Admin API supplémentaire par
+      webhook traité), frais de port en ligne dédiée si non nuls.
+      Idempotence **double** (`order_id` **et** `X-Shopify-Webhook-Id`,
+      re-livraisons Shopify), panne réseau/mapping/API → `pending_retry`
+      avec commande brute persistée (`order_payload` — acquis direct de la
+      revue PrestaShop it.1, capture TOUT `Throwable`, pas seulement les
+      erreurs API typées). **Retry AUTOMATIQUE périodique** (différence
+      majeure vs PHP, où le renvoi est toujours manuel : ce service
+      long-vivant peut balayer lui-même les `pending_retry`) — backoff
+      `2^(tentatives-1)` plafonné 16×, statut terminal `abandoned` au-delà
+      de 10 tentatives (jamais supprimé, jamais re-tenté après ce point).
+      Retry **sans re-fetch Shopify** : re-mappe depuis `order_payload`
+      stocké localement — ce service headless n'a, contrairement aux
+      plugins PHP, aucun accès permanent à "la commande" (décision
+      architecturale documentée). Suivi : `GET /links` (loopback par
+      défaut, jeton local optionnel `LINKS_ACCESS_TOKEN` pour un accès
+      distant) + CLI `pnpm status` (statut de cycle de vie DGFiP Factelec
+      à la demande, `GET /invoices/:id`). **Correctif revue** (Important) :
+      réponse `500` (pas `200`) si la persistance SQLite elle-même échoue
+      (base verrouillée/disque plein) — laisse Shopify re-livrer plutôt que
+      perdre une commande jamais tracée. Qualité : ~160 tests vitest sur la
+      logique pure (mapping rejouant LES MÊMES fixtures sdk que
+      PrestaShop/WooCommerce + validation ajv réelle contre le schéma
+      sdk), couverture >90 % (statements/branches/functions/lines), biome,
+      **Dockerfile + build effectivement exécutés en conditions réelles**
+      (pas seulement lus — 2 bugs Docker réels trouvés et corrigés :
+      `tsconfig.base.json` manquant au contexte de build, permissions du
+      volume `/app/var`). **Limites v1 explicites** : pas d'UI marchande
+      (headless, suivi `GET /links`/`pnpm status` uniquement), custom app
+      uniquement (pas d'app publique App Store), un seul taux de TVA par
+      ligne (juridictions composées → `pending_retry` puis `abandoned`,
+      réconciliable via `GET /links`), SIREN acheteur via `note_attribute`
+      uniquement (pas de repli metafield), `buyer.vatId`/`dueDate`/
+      `businessProcessType` non mappés, `unitCode` fixe `C62`, `typeCode`
+      toujours `380` (pas d'avoirs). **Différé** : publication App Store/
+      OAuth public, webhooks sortants Factelec→boutique, avoirs déclenchés
+      depuis la boutique. Détail complet : `connectors/shopify/README.md`.
 - [x] **5.1 — Billing Stripe (abonnement + usage, garde d'émission)**
       (terminé, itération 1) : premier axe de la **phase 5 (Commercialisation)**
       — modèle self-service, plan unique + volume métré, 100 % hébergé Stripe

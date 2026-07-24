@@ -3,7 +3,8 @@
     "includes": [
       "**",
       "!**/docs",
-      "!**/connectors",
+      "!connectors/prestashop",
+      "!connectors/woocommerce",
       "!**/dist",
       "!**/.next",
       "!**/coverage",

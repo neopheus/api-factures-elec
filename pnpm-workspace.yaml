@@ -1,3 +1,6 @@
 packages:
   - "packages/*"
   - "apps/*"
+  # Explicitement le paquet TS (PAS "connectors/*" — connectors/prestashop et
+  # connectors/woocommerce sont des paquets PHP/Composer, hors pnpm).
+  - "connectors/shopify"
