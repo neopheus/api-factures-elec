@@ -165,6 +165,22 @@ describe('runRetrySweep', () => {
     expect(store.findByOrderId('order-10')?.status).toBe('submitted')
     expect(store.findByOrderId('order-11')?.status).toBe('submitted')
   })
+
+  it('ne tente aucun appel réseau si order_payload est absent (filet défensif — ne devrait jamais arriver)', async () => {
+    pendingSince('order-12', INTERVAL_MS + 1, 1)
+    // Simule la corruption/absence d'order_payload malgré le contrat
+    // (recordPendingRetry le persiste toujours normalement).
+    // biome-ignore lint/suspicious/noExplicitAny: accès direct à la table pour simuler ce cas en principe impossible.
+    const db = (store as any).db
+    db.prepare(
+      "UPDATE invoice_link SET order_payload = NULL WHERE order_id = 'order-12'",
+    ).run()
+
+    await runRetrySweep(deps, Date.now())
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(store.findByOrderId('order-12')?.status).toBe('pending_retry')
+  })
 })
 
 describe('startRetryScheduler', () => {

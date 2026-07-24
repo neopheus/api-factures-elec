@@ -205,4 +205,36 @@ describe('createWebhookHandler', () => {
 
     expect(store.findByOrderId('777')?.status).toBe('submitted')
   })
+
+  it('accepte un id déjà en chaîne (order_id Shopify GraphQL gid://...)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ id: 'inv-gid' }), { status: 201 }),
+    )
+    const handler = createWebhookHandler({ store, client, seller: SELLER })
+
+    await handler(order({ id: 'gid://shopify/Order/555' }), {
+      topic: 'orders/paid',
+      shopDomain: 'x.myshopify.com',
+      webhookId: 'wh-11',
+    })
+
+    expect(store.findByOrderId('gid://shopify/Order/555')?.status).toBe(
+      'submitted',
+    )
+  })
+
+  it("enregistre pending_retry même quand la valeur levée n'est pas une Error (défensif)", async () => {
+    fetchMock.mockRejectedValue('panne réseau brute')
+    const handler = createWebhookHandler({ store, client, seller: SELLER })
+
+    await handler(order(), {
+      topic: 'orders/paid',
+      shopDomain: 'x.myshopify.com',
+      webhookId: 'wh-12',
+    })
+
+    const link = store.findByOrderId('555')
+    expect(link?.status).toBe('pending_retry')
+    expect(link?.lastError).toBe('panne réseau brute')
+  })
 })

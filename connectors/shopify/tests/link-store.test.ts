@@ -139,6 +139,85 @@ describe('LinkStore', () => {
   })
 })
 
+describe('LinkStore — order_payload / statut abandoned (Task 2)', () => {
+  let store: LinkStore
+
+  beforeEach(() => {
+    store = new LinkStore(':memory:')
+  })
+
+  afterEach(() => {
+    store.close()
+  })
+
+  it('recordPendingRetry persiste order_payload, préservé par les upserts suivants sans le refournir', () => {
+    const rawOrder = { id: 555, line_items: [] }
+    const first = store.recordPendingRetry(
+      'order-p1',
+      'échec 1',
+      'wh-1',
+      rawOrder,
+    )
+    expect(first.orderPayload).toEqual(rawOrder)
+
+    const second = store.recordPendingRetry('order-p1', 'échec 2', 'wh-2')
+    expect(second.orderPayload).toEqual(rawOrder)
+  })
+
+  it('recordSubmitted préserve order_payload déjà stocké sans le refournir', () => {
+    store.recordPendingRetry('order-p2', 'échec', undefined, { id: 1 })
+    const submitted = store.recordSubmitted('order-p2', 'inv-p2')
+    expect(submitted.orderPayload).toEqual({ id: 1 })
+  })
+
+  it('résiste à un order_payload corrompu en lecture (dégrade à null)', () => {
+    // biome-ignore lint/suspicious/noExplicitAny: accès à l'implémentation interne pour le test de résilience.
+    const raw = (store as any).db as import('better-sqlite3').Database
+    raw
+      .prepare(
+        `INSERT INTO invoice_link (order_id, webhook_ids, invoice_id, status, last_error, attempts, order_payload, created_at, updated_at)
+         VALUES ('order-corrupt-payload', '[]', NULL, 'pending_retry', 'x', 1, 'not-json', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run()
+    expect(
+      store.findByOrderId('order-corrupt-payload')?.orderPayload,
+    ).toBeNull()
+  })
+
+  it('listPendingRetries ne renvoie QUE les liaisons pending_retry', () => {
+    store.recordSubmitted('order-s', 'inv-s')
+    store.recordPendingRetry('order-r', 'échec', undefined, { id: 1 })
+    store.recordPendingRetry('order-a', 'échec', undefined, { id: 2 })
+    store.markAbandoned('order-a', 'plafond atteint')
+
+    const pending = store.listPendingRetries()
+    expect(pending.map((l) => l.orderId)).toEqual(['order-r'])
+  })
+
+  it('markAbandoned transitionne vers abandoned SANS incrémenter attempts', () => {
+    store.recordPendingRetry('order-ab', 'échec 1', undefined, { id: 1 })
+    store.recordPendingRetry('order-ab', 'échec 2')
+    const before = store.findByOrderId('order-ab')
+    expect(before?.attempts).toBe(2)
+
+    const abandoned = store.markAbandoned(
+      'order-ab',
+      'plafond de tentatives atteint',
+    )
+    expect(abandoned.status).toBe('abandoned')
+    expect(abandoned.lastError).toBe('plafond de tentatives atteint')
+    expect(abandoned.attempts).toBe(2)
+    expect(abandoned.orderPayload).toEqual({ id: 1 })
+  })
+
+  it('markAbandoned lève pour une commande inconnue (ne crée jamais de liaison)', () => {
+    expect(() => store.markAbandoned('inconnue', 'x')).toThrow(
+      /liaison inconnue/,
+    )
+    expect(store.findByOrderId('inconnue')).toBeUndefined()
+  })
+})
+
 describe('LinkStore — fichier réel sur disque', () => {
   it('crée le répertoire parent de LINK_DB_PATH si absent (dbPath != :memory:)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'factelec-shopify-link-store-'))
