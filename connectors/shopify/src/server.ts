@@ -72,13 +72,21 @@ async function handleRequest(
     }
     respondBare(res, 404)
   } catch (error) {
-    // Aucun détail d'erreur dans la réponse (design §5). 200 nu même ici :
-    // le contrat Shopify pénalise un non-2xx par des re-livraisons
-    // indéfinies ; en Task 1 (handler no-op, ne lève jamais) cette branche
-    // n'est qu'un filet défensif — Task 2 est responsable de persister
-    // `pending_retry` AVANT de laisser cette réponse partir en 200.
+    // 500 nu (aucun détail — design §5), PAS 200 : correctif revue Task 2
+    // (I1). `onWebhook` (webhook-handler.ts) capture DÉJÀ tout échec
+    // mapping/réseau/API et le persiste en `pending_retry` SANS jamais
+    // lever — cette branche n'est donc atteinte QUE si la persistance
+    // SQLite elle-même défaille (`findByOrderId`/`recordPendingRetry`
+    // lèvent : base verrouillée, disque plein, corruption). Dans ce cas
+    // précis, RIEN n'a pu être tracé : répondre 200 dirait à Shopify
+    // « reçu et traité » alors que la commande n'a laissé AUCUNE trace —
+    // perte silencieuse, exactement la classe d'erreur « Critical it.1 »
+    // déplacée sur le chemin de persistance. 500 fait re-livrer Shopify
+    // (contrat webhook : non-2xx = nouvelle tentative), ce qui laisse une
+    // chance à la persistance de réussir au prochain essai — plus sûr
+    // qu'un 200 définitif sur une commande jamais tracée.
     console.error('[shopify-connector] erreur interne non gérée', error)
-    if (!res.headersSent) respondBare(res, 200)
+    if (!res.headersSent) respondBare(res, 500)
   }
 }
 

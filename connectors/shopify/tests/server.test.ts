@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../src/config.js'
+import { FactelecClient } from '../src/factelec-client.js'
 import { LinkStore } from '../src/link-store.js'
 import {
   createServer,
@@ -12,6 +13,7 @@ import {
   readRawBody,
   type ShopifyWebhookHandler,
 } from '../src/server.js'
+import { createWebhookHandler } from '../src/webhook-handler.js'
 
 const SECRET = 'un-secret-partage-de-test-1234'
 
@@ -227,14 +229,18 @@ describe('server HTTP (POST /webhooks/shopify, GET /links)', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
-  it('200 nu même si le handler injecté lève (aucun détail exposé, contrat Shopify)', async () => {
+  it('500 nu (pas 200) si le handler injecté lève sans avoir rien persisté — correctif I1 (revue Task 2)', async () => {
+    // Le VRAI handler (webhook-handler.ts) capture déjà mapping/réseau/API
+    // et ne lève JAMAIS en fonctionnement nominal — cette branche ne
+    // s'exerce que si la persistance échoue. Un mock qui lève simule
+    // exactement ce cas ici, au niveau serveur.
     handler.mockRejectedValue(new Error('mapping cassé'))
     const res = await fetch(`${baseUrl}/webhooks/shopify`, {
       method: 'POST',
       headers: validHeaders(),
       body: orderBody,
     })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(500)
     expect(await res.text()).toBe('')
   })
 
@@ -284,5 +290,112 @@ describe('server HTTP (POST /webhooks/shopify, GET /links)', () => {
     } finally {
       await new Promise<void>((resolve) => defaultServer.close(() => resolve()))
     }
+  })
+})
+
+describe('correctif I1 (revue Task 2) — 500 nu quand la persistance SQLite échoue', () => {
+  // Bout-en-bout avec le VRAI createWebhookHandler (pas un mock du
+  // handler) : seule la couche `LinkStore` est cassée, pour reproduire
+  // exactement le scénario de la revue (base verrouillée/disque plein/
+  // corruption) — findByOrderId ET recordPendingRetry sont HORS de portée
+  // du try/catch large de webhook-handler.ts, donc une défaillance ici
+  // remonte jusqu'à server.ts.
+  let baseUrl: string
+  let server: ReturnType<typeof createServer>
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  async function startServerWithHandler(
+    onWebhook: ShopifyWebhookHandler,
+  ): Promise<void> {
+    const config = loadConfig(BASE_ENV)
+    const store = new LinkStore(':memory:')
+    server = createServer(config, store, { onWebhook })
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', () => resolve()),
+    )
+    const address = server.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${address.port}`
+  }
+
+  it("findByOrderId qui lève (pré-check, hors try/catch) -> 500 nu, rien d'autre ne fuit", async () => {
+    const brokenStore = {
+      findByOrderId: vi.fn(() => {
+        throw new Error('SQLITE_BUSY: database is locked')
+      }),
+    } as unknown as LinkStore
+    const client = new FactelecClient(
+      'https://api.factelec.example.com',
+      'a'.repeat(20),
+    )
+    const handler = createWebhookHandler({
+      store: brokenStore,
+      client,
+      seller: { name: 'V', siren: '552100554', address: { countryCode: 'FR' } },
+    })
+    await startServerWithHandler(handler)
+
+    const body = JSON.stringify({ id: 1 })
+    const res = await fetch(`${baseUrl}/webhooks/shopify`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Hmac-Sha256': sign(body),
+        'X-Shopify-Topic': 'orders/paid',
+        'X-Shopify-Shop-Domain': 'ma-boutique.myshopify.com',
+      },
+      body,
+    })
+
+    expect(res.status).toBe(500)
+    const text = await res.text()
+    expect(text).toBe('')
+    expect(text).not.toContain('SQLITE_BUSY')
+    expect(text).not.toContain('database is locked')
+  })
+
+  it("recordPendingRetry qui lève (persistance de l'échec elle-même en échec) -> 500 nu", async () => {
+    // Provoque un échec DANS le bloc try (erreur de mapping — billing_address
+    // absent, cf. order-mapper.ts) SANS toucher au réseau (pas de fetch réel
+    // ni de stub global, qui interférerait avec l'appel HTTP du test
+    // lui-même vers le serveur local) : recordPendingRetry(), appelé dans le
+    // catch, est le point qui lève ici.
+    const brokenStore = {
+      findByOrderId: vi.fn(() => undefined),
+      recordPendingRetry: vi.fn(() => {
+        throw new Error('SQLITE_FULL: database or disk is full')
+      }),
+    } as unknown as LinkStore
+    const client = new FactelecClient(
+      'https://api.factelec.example.com',
+      'a'.repeat(20),
+    )
+    const handler = createWebhookHandler({
+      store: brokenStore,
+      client,
+      seller: { name: 'V', siren: '552100554', address: { countryCode: 'FR' } },
+    })
+    await startServerWithHandler(handler)
+
+    // billing_address absent -> OrderMappingError avant tout appel réseau.
+    const orderPayload = JSON.stringify({
+      id: 2,
+      created_at: '2026-07-24T10:00:00+02:00',
+    })
+    const res = await fetch(`${baseUrl}/webhooks/shopify`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Hmac-Sha256': sign(orderPayload),
+        'X-Shopify-Topic': 'orders/paid',
+        'X-Shopify-Shop-Domain': 'ma-boutique.myshopify.com',
+      },
+      body: orderPayload,
+    })
+    expect(res.status).toBe(500)
+    const text = await res.text()
+    expect(text).toBe('')
+    expect(text).not.toContain('SQLITE_FULL')
+    expect(text).not.toContain('adresse de facturation')
   })
 })
